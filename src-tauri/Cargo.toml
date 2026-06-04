@@ -30,5 +30,12 @@ dirs = "5"
 ureq = { version = "2", features = ["json"] }
 zeroize = "1"
 
+# On Windows, libssh2 defaults to the WinCNG backend, which lacks
+# `userauth_pubkey_memory` (in-memory key auth). Build it against a vendored
+# OpenSSL there so we never have to write private keys to disk. Linux/macOS keep
+# using the system OpenSSL backend, which already provides it.
+[target.'cfg(windows)'.dependencies]
+ssh2 = { version = "0.9", features = ["vendored-openssl"] }
+
 [dev-dependencies]
 tempfile = "3"

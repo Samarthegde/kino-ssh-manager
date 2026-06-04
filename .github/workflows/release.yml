@@ -34,6 +34,11 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # Building vendored OpenSSL (Windows) needs NASM; Perl ships on the runner.
+      - name: Install NASM (Windows)
+        if: matrix.platform == 'windows-latest'
+        uses: ilammy/setup-nasm@v1
+
       - name: Cache Rust build
         uses: swatinem/rust-cache@v2
         with:
