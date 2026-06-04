@@ -61,8 +61,17 @@ pub fn connect(
                 .private_key
                 .as_deref()
                 .ok_or("No SSH key stored for this host")?;
+            // Pass the public key explicitly when we can — libssh2 may fail to
+            // derive it from an in-memory OpenSSH key (e.g. ed25519) on some
+            // backends, which is what breaks key auth on the Windows build.
+            let public_key = crate::vault::resolve_public_key(&host);
             session
-                .userauth_pubkey_memory(&host.username, None, key, host.passphrase.as_deref())
+                .userauth_pubkey_memory(
+                    &host.username,
+                    public_key.as_deref(),
+                    key,
+                    host.passphrase.as_deref(),
+                )
                 .map_err(|e| format!("Key authentication failed: {}", e))?;
         }
         other => return Err(format!("Unknown auth method: {}", other)),

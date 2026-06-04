@@ -26,9 +26,17 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 ### Fixed
 - The auto-lock dropdown now follows the selected theme instead of using the OS
   default colors.
+- **SSH key authentication on Windows** — ed25519/OpenSSH keys failed to
+  authenticate on the Windows build because libssh2 could not derive the public
+  key from the in-memory private key. The public key is now supplied (stored, or
+  derived in Rust) so key-based auth works across platforms.
+- The Windows build now compiles `libssh2` against a vendored OpenSSL so
+  in-memory key auth is available there (keys are never written to disk).
 
 ### Compatibility
 - The `notes` field is additive; existing vaults continue to load unchanged.
+- The Windows key-auth fix is read-only at connect time and changes no vault
+  data or format.
 
 ## [0.1.0]
 
