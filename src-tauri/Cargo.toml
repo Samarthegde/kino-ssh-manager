@@ -1,6 +1,6 @@
 [package]
 name = "ssh-manager"
-version = "0.1.0"
+version = "0.2.0"
 description = "Kino SSH Manager - Secure SSH credential manager"
 authors = ["Kino SSH Manager contributors"]
 license = "MIT"

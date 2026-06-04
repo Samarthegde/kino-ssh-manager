@@ -25,6 +25,7 @@ export interface Host {
   port_forwards?: PortForward[];
   on_connect_snippets?: string[];
   color?: string | null;
+  notes?: string | null;
 }
 
 export interface Snippet {

@@ -45,6 +45,9 @@ pub struct Host {
     /// Optional accent color (CSS hex) used to tag the host/tab, e.g. "#f38ba8" for prod.
     #[serde(default)]
     pub color: Option<String>,
+    /// Free-form notes for this connection.
+    #[serde(default)]
+    pub notes: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -192,6 +195,7 @@ mod tests {
             port_forwards: vec![],
             on_connect_snippets: vec![],
             color: None,
+            notes: None,
         }]
     }
 
@@ -261,5 +265,7 @@ mod tests {
         assert!(h.port_forwards.is_empty());
         assert!(h.on_connect_snippets.is_empty());
         assert!(h.color.is_none());
+        // Fields added later must default cleanly so existing vaults keep loading.
+        assert!(h.notes.is_none());
     }
 }

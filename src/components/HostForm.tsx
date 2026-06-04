@@ -25,6 +25,7 @@ export function HostForm({ host, onClose }: Props) {
   const [portForwards, setPortForwards] = useState<PortForward[]>(host?.port_forwards ?? []);
   const [onConnectSnippets, setOnConnectSnippets] = useState<string[]>(host?.on_connect_snippets ?? []);
   const [color, setColor] = useState<string>(host?.color ?? "");
+  const [notes, setNotes] = useState(host?.notes ?? "");
 
   const TAG_COLORS = ["#f38ba8", "#fab387", "#f9e2af", "#a6e3a1", "#89b4fa", "#cba6f7"];
 
@@ -129,6 +130,7 @@ export function HostForm({ host, onClose }: Props) {
         port_forwards: portForwards,
         on_connect_snippets: onConnectSnippets,
         color: color || null,
+        notes: notes.trim() || null,
       });
       onClose();
     } catch (e: any) {
@@ -203,6 +205,17 @@ export function HostForm({ host, onClose }: Props) {
                 />
               ))}
             </div>
+          </div>
+
+          <div className="form-row">
+            <label>Notes <span className="hint-inline">(optional)</span></label>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Anything worth remembering about this host…"
+              rows={2}
+              style={{ width: "100%", resize: "vertical" }}
+            />
           </div>
 
           {/* Default auth selector */}

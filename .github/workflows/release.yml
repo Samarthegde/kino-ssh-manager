@@ -1,8 +1,8 @@
 name: release
 
-# Builds Linux installers (.deb, .rpm, .AppImage) and attaches them to a draft
-# GitHub Release. Trigger by pushing a version tag (e.g. v0.1.0), or run manually
-# from the Actions tab.
+# Builds installers for Linux (.deb, .rpm, .AppImage) and Windows (.msi, .exe)
+# and attaches them to a draft GitHub Release. Trigger by pushing a version tag
+# (e.g. v0.2.0), or run manually from the Actions tab.
 on:
   push:
     tags:
@@ -11,10 +11,18 @@ on:
 
 jobs:
   build:
-    name: Build Linux bundles
-    runs-on: ubuntu-22.04
+    name: Build ${{ matrix.platform }}
     permissions:
       contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            args: "--bundles deb,rpm,appimage"
+          - platform: windows-latest
+            args: ""
+    runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
 
@@ -32,6 +40,7 @@ jobs:
           workspaces: "./src-tauri -> target"
 
       - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -52,4 +61,4 @@ jobs:
           releaseName: "Kino SSH Manager ${{ github.ref_name }}"
           releaseDraft: true
           prerelease: false
-          args: --bundles deb,rpm,appimage
+          args: ${{ matrix.args }}

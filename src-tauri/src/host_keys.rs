@@ -151,6 +151,7 @@ mod tests {
             port_forwards: vec![],
             on_connect_snippets: vec![],
             color: None,
+            notes: None,
         }
     }
 

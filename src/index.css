@@ -175,6 +175,13 @@ html, body, #root {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.host-note-icon {
+  flex-shrink: 0;
+  color: var(--subtle);
 }
 
 .host-meta {
@@ -484,6 +491,30 @@ html, body, #root {
 .unlock-input:focus { border-color: var(--blue); }
 
 .unlock-btn { width: 100%; padding: 10px; }
+
+.unlock-pw-wrap { position: relative; width: 100%; }
+.unlock-pw-wrap .unlock-input { padding-right: 42px; }
+.unlock-pw-toggle {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--subtle);
+  cursor: pointer;
+  padding: 6px;
+  display: flex;
+  border-radius: 6px;
+}
+.unlock-pw-toggle:hover { color: var(--text); }
+
+.unlock-hint {
+  color: var(--subtle);
+  font-size: 12px;
+  text-align: center;
+  line-height: 1.4;
+}
 
 .unlock-link {
   margin-top: 14px;
