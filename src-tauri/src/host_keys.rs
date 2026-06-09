@@ -152,6 +152,7 @@ mod tests {
             on_connect_snippets: vec![],
             color: None,
             notes: None,
+            group: None,
         }
     }
 
