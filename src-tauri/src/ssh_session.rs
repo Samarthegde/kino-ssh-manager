@@ -65,7 +65,8 @@ pub fn connect(
             // Pass the public key explicitly when we can — libssh2 may fail to
             // derive it from an in-memory OpenSSH key (e.g. ed25519) on some
             // backends, which is what breaks key auth on the Windows build.
-            let public_key = crate::vault::resolve_public_key(&host).map(|pk| pk.replace("\r\n", "\n"));
+            let public_key =
+                crate::vault::resolve_public_key(&host).map(|pk| pk.replace("\r\n", "\n"));
             session
                 .userauth_pubkey_memory(
                     &host.username,

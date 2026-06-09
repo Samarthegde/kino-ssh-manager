@@ -32,7 +32,8 @@ pub(crate) fn connect_and_auth(host: &Host) -> Result<Session, String> {
         "SshKey" => {
             let key = host.private_key.as_deref().ok_or("No SSH key stored")?;
             let normalized_key = key.replace("\r\n", "\n");
-            let public_key = crate::vault::resolve_public_key(host).map(|pk| pk.replace("\r\n", "\n"));
+            let public_key =
+                crate::vault::resolve_public_key(host).map(|pk| pk.replace("\r\n", "\n"));
             session
                 .userauth_pubkey_memory(
                     &host.username,

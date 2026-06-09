@@ -364,7 +364,7 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
 
   markTabDisconnected: (sessionId) => {
     const tab = get().tabs.find((t) => t.sessionId === sessionId);
-    if (tab && tab.connected) {
+    if (tab && tab.connected && tab.host) {
       invoke("log_history", {
         event: {
           id: crypto.randomUUID(),

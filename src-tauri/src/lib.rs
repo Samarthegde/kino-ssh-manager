@@ -769,16 +769,16 @@ fn local_connect(
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let session_id = Uuid::new_v4().to_string();
-    local_session::connect(
-        app_handle,
-        state.local_sessions.clone(),
-        session_id.clone(),
-    )?;
+    local_session::connect(app_handle, state.local_sessions.clone(), session_id.clone())?;
     Ok(session_id)
 }
 
 #[tauri::command]
-fn local_write(state: State<'_, AppState>, session_id: String, data: Vec<u8>) -> Result<(), String> {
+fn local_write(
+    state: State<'_, AppState>,
+    session_id: String,
+    data: Vec<u8>,
+) -> Result<(), String> {
     let sessions = state.local_sessions.lock().unwrap();
     let session = sessions.get(&session_id).ok_or("Local session not found")?;
     session

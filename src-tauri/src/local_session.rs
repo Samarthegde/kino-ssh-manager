@@ -1,9 +1,9 @@
-use portable_pty::{CommandBuilder, native_pty_system, PtySize};
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter};
 use std::thread;
+use tauri::{AppHandle, Emitter};
 
 pub enum TermCommand {
     Data(Vec<u8>),
@@ -23,7 +23,7 @@ pub fn connect(
     session_id: String,
 ) -> Result<(), String> {
     let pty_system = native_pty_system();
-    
+
     let pair = pty_system
         .openpty(PtySize {
             rows: 24,
@@ -35,7 +35,7 @@ pub fn connect(
 
     #[cfg(target_os = "windows")]
     let cmd = CommandBuilder::new("powershell.exe");
-    
+
     #[cfg(not(target_os = "windows"))]
     let cmd = CommandBuilder::new(std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string()));
 
@@ -45,7 +45,7 @@ pub fn connect(
     let mut writer = pair.master.take_writer().map_err(|e| e.to_string())?;
 
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<TermCommand>();
-    
+
     sessions
         .lock()
         .unwrap()
@@ -71,7 +71,9 @@ pub fn connect(
             }
         }
         sessions_read.lock().unwrap().remove(&sid_read);
-        app_handle_read.emit(&format!("local-closed-{}", sid_read), ()).ok();
+        app_handle_read
+            .emit(&format!("local-closed-{}", sid_read), ())
+            .ok();
     });
 
     let app_handle_write = app_handle.clone();
@@ -97,7 +99,9 @@ pub fn connect(
                 TermCommand::Close => {
                     child.kill().ok();
                     sessions_write.lock().unwrap().remove(&sid);
-                    app_handle_write.emit(&format!("local-closed-{}", sid), ()).ok();
+                    app_handle_write
+                        .emit(&format!("local-closed-{}", sid), ())
+                        .ok();
                     return;
                 }
             }
