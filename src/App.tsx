@@ -90,13 +90,13 @@ function App() {
                       key={tab.id}
                       className={`tab ${tab.id === activeTabId ? "active" : ""} ${!tab.connected ? "disconnected" : ""}`}
                       onClick={() => setActiveTab(tab.id)}
-                      style={tab.host.color ? { borderTop: `2px solid ${tab.host.color}` } : undefined}
+                      style={tab.host?.color ? { borderTop: `2px solid ${tab.host.color}` } : undefined}
                     >
                       <span
                         className={`tab-dot ${tab.connected ? "online" : "offline"}`}
-                        style={tab.host.color ? { background: tab.host.color } : undefined}
+                        style={tab.host?.color ? { background: tab.host.color } : undefined}
                       />
-                      <span className="tab-label">{tab.host.name}</span>
+                      <span className="tab-label">{tab.kind === "local" ? "Local Shell" : tab.host?.name}</span>
                       <button
                         className="tab-close"
                         title="Close tab"
@@ -112,7 +112,7 @@ function App() {
                 </div>
                 {activeTab && (
                   <div className="tab-bar-tools">
-                    {activeTab.connected && (
+                    {activeTab.connected && activeTab.kind === "ssh" && (
                       <button
                         className="fwd-trigger"
                         onClick={() => setSftpTabId(activeTab.id)}
@@ -124,7 +124,9 @@ function App() {
                         Files
                       </button>
                     )}
-                    <ForwardingPanel sessionId={activeTab.sessionId} host={activeTab.host} />
+                    {activeTab.kind === "ssh" && activeTab.host && (
+                      <ForwardingPanel sessionId={activeTab.sessionId} host={activeTab.host} />
+                    )}
                   </div>
                 )}
               </div>
@@ -134,6 +136,7 @@ function App() {
                   <Terminal
                     key={tab.id}
                     sessionId={tab.sessionId}
+                    kind={tab.kind}
                     active={tab.id === activeTabId}
                   />
                 ))}
@@ -143,7 +146,7 @@ function App() {
         </main>
       </div>
 
-      {sftpTab && (
+      {sftpTab && sftpTab.host && (
         <SftpModal
           key={sftpTab.id}
           sessionId={sftpTab.sessionId}

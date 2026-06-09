@@ -48,6 +48,9 @@ pub struct Host {
     /// Free-form notes for this connection.
     #[serde(default)]
     pub notes: Option<String>,
+    /// Group or folder tag for organization.
+    #[serde(default)]
+    pub group: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]

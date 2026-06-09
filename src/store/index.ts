@@ -26,6 +26,7 @@ export interface Host {
   on_connect_snippets?: string[];
   color?: string | null;
   notes?: string | null;
+  group?: string | null;
 }
 
 export interface Snippet {
@@ -47,10 +48,13 @@ export type HostKeyVerdict =
   | { status: "new"; fingerprint: string }
   | { status: "changed"; fingerprint: string; known: string };
 
+export type TabKind = "ssh" | "local";
+
 export interface Tab {
   id: string;
   sessionId: string;
-  host: Host;
+  kind: TabKind;
+  host?: Host;
   connected: boolean;
 }
 
@@ -115,6 +119,7 @@ interface VaultStore {
   saveHost: (host: Host) => Promise<Host>;
   deleteHost: (id: string) => Promise<void>;
   connectToHost: (host: Host) => Promise<string>;
+  openLocalShell: () => Promise<void>;
   closeTab: (tabId: string) => void;
   setActiveTab: (tabId: string) => void;
   markTabDisconnected: (sessionId: string) => void;
@@ -304,26 +309,40 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
     }).catch(console.error);
 
     set((state) => ({
-      tabs: [...state.tabs, { id: tabId, sessionId, host, connected: true }],
+      tabs: [...state.tabs, { id: tabId, sessionId, kind: "ssh", host, connected: true }],
       activeTabId: tabId,
     }));
     return sessionId;
   },
 
+  openLocalShell: async () => {
+    const sessionId = await invoke<string>("local_connect");
+    const tabId = crypto.randomUUID();
+    
+    set((state) => ({
+      tabs: [...state.tabs, { id: tabId, sessionId, kind: "local", connected: true }],
+      activeTabId: tabId,
+    }));
+  },
+
   closeTab: (tabId) => {
     const tab = get().tabs.find((t) => t.id === tabId);
     if (tab) {
-      invoke("ssh_disconnect", { sessionId: tab.sessionId }).catch(() => {});
-      if (tab.connected) {
-        invoke("log_history", {
-          event: {
-            id: crypto.randomUUID(),
-            timestamp: Date.now(),
-            event_type: "connection",
-            message: `Disconnected from ${tab.host.name}`,
-            host_id: tab.host.id,
-          }
-        }).catch(console.error);
+      if (tab.kind === "local") {
+        invoke("local_disconnect", { sessionId: tab.sessionId }).catch(() => {});
+      } else {
+        invoke("ssh_disconnect", { sessionId: tab.sessionId }).catch(() => {});
+        if (tab.connected && tab.host) {
+          invoke("log_history", {
+            event: {
+              id: crypto.randomUUID(),
+              timestamp: Date.now(),
+              event_type: "connection",
+              message: `Disconnected from ${tab.host.name}`,
+              host_id: tab.host.id,
+            }
+          }).catch(console.error);
+        }
       }
     }
     set((state) => {

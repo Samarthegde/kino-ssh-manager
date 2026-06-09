@@ -1,6 +1,6 @@
 [package]
 name = "ssh-manager"
-version = "0.2.0"
+version = "0.3.0"
 description = "Kino SSH Manager - Secure SSH credential manager"
 authors = ["Kino SSH Manager contributors"]
 license = "MIT"
@@ -29,6 +29,7 @@ base64 = "0.22"
 dirs = "5"
 ureq = { version = "2", features = ["json"] }
 zeroize = "1"
+portable-pty = "0.8.1"
 
 # On Windows, libssh2 defaults to the WinCNG backend, which lacks
 # `userauth_pubkey_memory` (in-memory key auth). Build it against a vendored

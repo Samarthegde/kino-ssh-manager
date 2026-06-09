@@ -2,6 +2,7 @@ mod forwarding;
 mod history;
 mod host_keys;
 mod keygen;
+mod local_session;
 mod sftp_session;
 mod snippets;
 mod ssh_session;
@@ -21,6 +22,7 @@ pub struct AppState {
     pub history: Arc<Mutex<Vec<history::HistoryEvent>>>,
     pub snippets: Arc<Mutex<Vec<snippets::Snippet>>>,
     pub sessions: ssh_session::Sessions,
+    pub local_sessions: local_session::LocalSessions,
     pub active_forwards: Arc<Mutex<HashMap<String, forwarding::ForwardHandle>>>,
     pub sftp_sessions: Arc<Mutex<HashMap<String, sftp_session::SftpHandle>>>,
 }
@@ -759,6 +761,56 @@ fn ssh_disconnect(state: State<'_, AppState>, session_id: String) -> Result<(), 
     Ok(())
 }
 
+// ── Local Shell commands ──────────────────────────────────────────────────────
+
+#[tauri::command]
+fn local_connect(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let session_id = Uuid::new_v4().to_string();
+    local_session::connect(
+        app_handle,
+        state.local_sessions.clone(),
+        session_id.clone(),
+    )?;
+    Ok(session_id)
+}
+
+#[tauri::command]
+fn local_write(state: State<'_, AppState>, session_id: String, data: Vec<u8>) -> Result<(), String> {
+    let sessions = state.local_sessions.lock().unwrap();
+    let session = sessions.get(&session_id).ok_or("Local session not found")?;
+    session
+        .cmd_tx
+        .send(local_session::TermCommand::Data(data))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn local_resize(
+    state: State<'_, AppState>,
+    session_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    let sessions = state.local_sessions.lock().unwrap();
+    let session = sessions.get(&session_id).ok_or("Local session not found")?;
+    session
+        .cmd_tx
+        .send(local_session::TermCommand::Resize(cols, rows))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn local_disconnect(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    let sessions = state.local_sessions.lock().unwrap();
+    if let Some(session) = sessions.get(&session_id) {
+        session.cmd_tx.send(local_session::TermCommand::Close).ok();
+    }
+    Ok(())
+}
+
 // ── SFTP commands ─────────────────────────────────────────────────────────────
 
 /// Clone the request channel for a session's SFTP worker, releasing the map lock
@@ -962,6 +1014,7 @@ pub fn run() {
         history: Arc::new(Mutex::new(vec![])),
         snippets: Arc::new(Mutex::new(vec![])),
         sessions: Arc::new(Mutex::new(HashMap::new())),
+        local_sessions: Arc::new(Mutex::new(HashMap::new())),
         active_forwards: Arc::new(Mutex::new(HashMap::new())),
         sftp_sessions: Arc::new(Mutex::new(HashMap::new())),
     };
@@ -991,6 +1044,10 @@ pub fn run() {
             ssh_write,
             ssh_resize,
             ssh_disconnect,
+            local_connect,
+            local_write,
+            local_resize,
+            local_disconnect,
             get_history,
             log_history,
             get_snippets,

@@ -4,6 +4,19 @@ All notable changes to Kino SSH Manager are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-06-09
+
+### Added
+- **Folders / Groups** — dynamically organize hosts in the sidebar using tag-based groups.
+- **Quick Connect Bar** — instantly connect to any transient host directly from the sidebar by typing `user@host:port` without cluttering the vault.
+- **Local Shell Tabs** — open a local PowerShell (Windows) or Bash/Zsh (Unix) terminal right inside the app, alongside your remote SSH tabs.
+
+### Fixed
+- **Windows SSH authentication (Error 19)** — libssh2 could fail to parse keys with `\r\n` line endings on Windows. Private and public keys are now normalized to use `\n` line endings internally before being sent to the authentication backend.
+
+### Compatibility
+- The `group` field for Folders is fully backward compatible; existing vaults will load seamlessly without it.
+
 ## [0.2.0] - 2026-06-04
 
 ### Added

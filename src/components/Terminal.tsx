@@ -13,10 +13,11 @@ import { THEMES } from "../themes";
 
 interface Props {
   sessionId: string;
+  kind: "ssh" | "local";
   active: boolean;
 }
 
-export function Terminal({ sessionId, active }: Props) {
+export function Terminal({ sessionId, kind, active }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -61,13 +62,18 @@ export function Terminal({ sessionId, active }: Props) {
     fitRef.current = fitAddon;
     searchRef.current = searchAddon;
 
+    const resizeCommand = kind === "local" ? "local_resize" : "ssh_resize";
+    const writeCommand = kind === "local" ? "local_write" : "ssh_write";
+    const dataEvent = kind === "local" ? `local-data-${sessionId}` : `ssh-data-${sessionId}`;
+    const closeEvent = kind === "local" ? `local-closed-${sessionId}` : `ssh-closed-${sessionId}`;
+
     // Ctrl+F search, Ctrl +/-/0 font size — intercepted before the shell sees them.
     const applyFont = (size: number) => {
       const s = Math.min(28, Math.max(8, size));
       term.options.fontSize = s;
       localStorage.setItem("ssh-mgr:term-fontsize", String(s));
       fitAddon.fit();
-      invoke("ssh_resize", { sessionId, cols: term.cols, rows: term.rows }).catch(() => {});
+      invoke(resizeCommand, { sessionId, cols: term.cols, rows: term.rows }).catch(() => {});
     };
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown" || !e.ctrlKey) return true;
@@ -80,11 +86,11 @@ export function Terminal({ sessionId, active }: Props) {
 
     term.onData((data) => {
       const bytes = Array.from(new TextEncoder().encode(data));
-      invoke("ssh_write", { sessionId, data: bytes }).catch(() => {});
+      invoke(writeCommand, { sessionId, data: bytes }).catch(() => {});
     });
 
     const decoder = new TextDecoder();
-    const unlistenData = listen<number[]>(`ssh-data-${sessionId}`, (event) => {
+    const unlistenData = listen<number[]>(dataEvent, (event) => {
       const bytes = new Uint8Array(event.payload);
       term.write(bytes);
       // Buffer output for "Save log" (cap ~4 MB to bound memory).
@@ -94,14 +100,14 @@ export function Terminal({ sessionId, active }: Props) {
       }
     });
 
-    const unlistenClose = listen(`ssh-closed-${sessionId}`, () => {
+    const unlistenClose = listen(closeEvent, () => {
       term.writeln("\r\n\x1b[33m[Connection closed]\x1b[0m");
       markTabDisconnected(sessionId);
     });
 
     const resizeObserver = new ResizeObserver(() => {
       fitAddon.fit();
-      invoke("ssh_resize", { sessionId, cols: term.cols, rows: term.rows }).catch(() => {});
+      invoke(resizeCommand, { sessionId, cols: term.cols, rows: term.rows }).catch(() => {});
     });
     resizeObserver.observe(containerRef.current);
 
@@ -111,7 +117,7 @@ export function Terminal({ sessionId, active }: Props) {
       unlistenClose.then((fn) => fn());
       term.dispose();
     };
-  }, [sessionId]);
+  }, [sessionId, kind]);
 
   // Update terminal theme without recreating the terminal instance
   useEffect(() => {

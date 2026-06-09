@@ -26,8 +26,9 @@ export function HostForm({ host, onClose }: Props) {
   const [onConnectSnippets, setOnConnectSnippets] = useState<string[]>(host?.on_connect_snippets ?? []);
   const [color, setColor] = useState<string>(host?.color ?? "");
   const [notes, setNotes] = useState(host?.notes ?? "");
+  const [group, setGroup] = useState(host?.group ?? "");
 
-  const TAG_COLORS = ["#f38ba8", "#fab387", "#f9e2af", "#a6e3a1", "#89b4fa", "#cba6f7"];
+  const TAG_COLORS = ["#f38ba8", "#fab387", "#f9e2af", "#a6e3a1", "#89b4fa", "#cba6f7", "#4c7ebf"];
 
   const [copiedPub, setCopiedPub] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -131,6 +132,7 @@ export function HostForm({ host, onClose }: Props) {
         on_connect_snippets: onConnectSnippets,
         color: color || null,
         notes: notes.trim() || null,
+        group: group.trim() || null,
       });
       onClose();
     } catch (e: any) {
@@ -204,6 +206,29 @@ export function HostForm({ host, onClose }: Props) {
                   onClick={() => setColor(c)}
                 />
               ))}
+              <label
+                className={`color-swatch ${color && !TAG_COLORS.includes(color) ? "active" : ""}`}
+                style={{
+                  background: color && !TAG_COLORS.includes(color) ? color : "var(--overlay)",
+                  position: "relative",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  overflow: "hidden",
+                  cursor: "pointer"
+                }}
+                title="Custom color"
+              >
+                {(!color || TAG_COLORS.includes(color)) && (
+                  <span style={{ color: "var(--subtle)", fontSize: "16px", lineHeight: 1, marginTop: "-2px" }}>+</span>
+                )}
+                <input
+                  type="color"
+                  value={color && !TAG_COLORS.includes(color) ? color : "#ffffff"}
+                  onChange={(e) => setColor(e.target.value)}
+                  style={{ opacity: 0, position: "absolute", inset: 0, cursor: "pointer" }}
+                />
+              </label>
             </div>
           </div>
 
@@ -215,6 +240,15 @@ export function HostForm({ host, onClose }: Props) {
               placeholder="Anything worth remembering about this host…"
               rows={2}
               style={{ width: "100%", resize: "vertical" }}
+            />
+          </div>
+
+          <div className="form-row">
+            <label>Folder / Group <span className="hint-inline">(optional)</span></label>
+            <input
+              value={group}
+              onChange={(e) => setGroup(e.target.value)}
+              placeholder="e.g. Production, Homelab"
             />
           </div>
 
@@ -328,8 +362,8 @@ export function HostForm({ host, onClose }: Props) {
           <div className="form-section">
             <div className="form-section-title">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
               </svg>
               <span>Port Forwards</span>
               <button
@@ -384,7 +418,7 @@ export function HostForm({ host, onClose }: Props) {
                   onClick={() => removeForward(fwd.id)}
                 >
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                    <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
                   </svg>
                 </button>
               </div>
