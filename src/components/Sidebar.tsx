@@ -4,10 +4,11 @@ import { ConnectDialog, getSavedAuthPref } from "./ConnectDialog";
 import { ExportMenu, promptImportHost } from "./ExportMenu";
 import { HostForm } from "./HostForm";
 import { HostKeyDialog } from "./HostKeyDialog";
+import { OsIcon } from "./OsIcon";
 
 type HostKeyPrompt = { host: Host; verdict: Extract<HostKeyVerdict, { status: "new" | "changed" }> };
 
-export function Sidebar() {
+export function Sidebar({ width }: { width: number }) {
   const { hosts, connectToHost, deleteHost, importHostFromFile, verifyHostKey, trustHostKey, getHistory, openLocalShell } =
     useVaultStore();
   const [showForm, setShowForm] = useState(false);
@@ -201,7 +202,7 @@ export function Sidebar() {
 
   return (
     <>
-      <aside className="sidebar">
+      <aside className="sidebar" style={{ width, minWidth: width, maxWidth: width }}>
         <div className="sidebar-header">
           <span className="sidebar-title">Hosts</span>
         </div>
@@ -224,22 +225,15 @@ export function Sidebar() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "11px", color: "var(--subtle)" }}>
+            <div className="settings-row">
               <span>Sort by:</span>
               <select
+                className="settings-select"
                 value={sortOption}
                 onChange={(e) => {
                   const val = e.target.value as "name" | "recent";
                   setSortOption(val);
                   localStorage.setItem("ssh-mgr:sort", val);
-                }}
-                style={{
-                  background: "transparent",
-                  color: "var(--text)",
-                  border: "none",
-                  outline: "none",
-                  cursor: "pointer",
-                  fontSize: "11px"
                 }}
               >
                 <option value="recent">Recently used</option>
@@ -277,8 +271,21 @@ export function Sidebar() {
                   <div
                     key={host.id}
                     className="host-item"
-                    style={host.color ? { border: `1px solid ${host.color}` } : undefined}
+                    style={host.color ? { borderTopColor: host.color } : undefined}
                   >
+                    <span
+                      className="host-avatar"
+                      style={
+                        host.color
+                          ? {
+                              background: `color-mix(in srgb, ${host.color} 22%, transparent)`,
+                              color: host.color,
+                            }
+                          : undefined
+                      }
+                    >
+                      <OsIcon os={host.os} />
+                    </span>
                     <div className="host-info" onClick={() => handleConnect(host)} title={host.notes || undefined}>
                       <span className="host-name">
                         {host.name}

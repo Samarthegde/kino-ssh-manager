@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { DefaultAuth, Host, PortForward, useVaultStore } from "../store";
+import { OS_OPTIONS, OsIcon } from "./OsIcon";
 
 interface Props {
   host?: Host;
@@ -27,6 +28,7 @@ export function HostForm({ host, onClose }: Props) {
   const [color, setColor] = useState<string>(host?.color ?? "");
   const [notes, setNotes] = useState(host?.notes ?? "");
   const [group, setGroup] = useState(host?.group ?? "");
+  const [os, setOs] = useState(host?.os ?? "");
 
   const TAG_COLORS = ["#f38ba8", "#fab387", "#f9e2af", "#a6e3a1", "#89b4fa", "#cba6f7", "#4c7ebf"];
 
@@ -133,6 +135,7 @@ export function HostForm({ host, onClose }: Props) {
         color: color || null,
         notes: notes.trim() || null,
         group: group.trim() || null,
+        os: os || null,
       });
       onClose();
     } catch (e: any) {
@@ -250,6 +253,23 @@ export function HostForm({ host, onClose }: Props) {
               onChange={(e) => setGroup(e.target.value)}
               placeholder="e.g. Production, Homelab"
             />
+          </div>
+
+          <div className="form-row">
+            <label>Operating system <span className="hint-inline">(optional — sets the host icon)</span></label>
+            <div className="os-field">
+              <span className="os-field-preview">
+                <OsIcon os={os || undefined} />
+              </span>
+              <select className="settings-select" value={os} onChange={(e) => setOs(e.target.value)}>
+                <option value="">Unset</option>
+                {OS_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           {/* Default auth selector */}
@@ -386,31 +406,95 @@ export function HostForm({ host, onClose }: Props) {
                   onChange={(e) => updateForward(fwd.id, "label", e.target.value)}
                   className="fwd-label-input"
                 />
-                <input
-                  type="number"
-                  title="Local port"
-                  value={fwd.local_port}
-                  onChange={(e) => updateForward(fwd.id, "local_port", Number(e.target.value))}
-                  min={1}
-                  max={65535}
-                  className="fwd-port-input"
-                />
-                <span className="fwd-arrow">→</span>
-                <input
-                  placeholder="Remote host"
-                  value={fwd.remote_host}
-                  onChange={(e) => updateForward(fwd.id, "remote_host", e.target.value)}
-                  className="fwd-rhost-input"
-                />
-                <input
-                  type="number"
-                  title="Remote port"
-                  value={fwd.remote_port}
-                  onChange={(e) => updateForward(fwd.id, "remote_port", Number(e.target.value))}
-                  min={1}
-                  max={65535}
-                  className="fwd-port-input"
-                />
+                <select
+                  className="settings-select fwd-kind"
+                  title="Forward type"
+                  value={fwd.kind ?? "local"}
+                  onChange={(e) => updateForward(fwd.id, "kind", e.target.value)}
+                >
+                  <option value="local">Local</option>
+                  <option value="socks">SOCKS</option>
+                  <option value="remote">Remote</option>
+                </select>
+                {(fwd.kind ?? "local") === "socks" ? (
+                  <>
+                    <input
+                      type="number"
+                      title="Local SOCKS port"
+                      value={fwd.local_port}
+                      onChange={(e) => updateForward(fwd.id, "local_port", Number(e.target.value))}
+                      min={1}
+                      max={65535}
+                      className="fwd-port-input"
+                    />
+                    <span className="fwd-arrow" style={{ color: "var(--subtle)" }}>SOCKS5 proxy</span>
+                  </>
+                ) : (fwd.kind ?? "local") === "remote" ? (
+                  <>
+                    <input
+                      placeholder="127.0.0.1"
+                      title="Server bind host"
+                      value={fwd.bind_host ?? ""}
+                      onChange={(e) => updateForward(fwd.id, "bind_host", e.target.value)}
+                      className="fwd-rhost-input"
+                    />
+                    <input
+                      type="number"
+                      title="Server bind port"
+                      value={fwd.remote_port}
+                      onChange={(e) => updateForward(fwd.id, "remote_port", Number(e.target.value))}
+                      min={1}
+                      max={65535}
+                      className="fwd-port-input"
+                    />
+                    <span className="fwd-arrow">→</span>
+                    <input
+                      placeholder="target host"
+                      title="Local target host"
+                      value={fwd.remote_host}
+                      onChange={(e) => updateForward(fwd.id, "remote_host", e.target.value)}
+                      className="fwd-rhost-input"
+                    />
+                    <input
+                      type="number"
+                      title="Local target port"
+                      value={fwd.local_port}
+                      onChange={(e) => updateForward(fwd.id, "local_port", Number(e.target.value))}
+                      min={1}
+                      max={65535}
+                      className="fwd-port-input"
+                    />
+                  </>
+                ) : (
+                  <>
+                    <input
+                      type="number"
+                      title="Local port"
+                      value={fwd.local_port}
+                      onChange={(e) => updateForward(fwd.id, "local_port", Number(e.target.value))}
+                      min={1}
+                      max={65535}
+                      className="fwd-port-input"
+                    />
+                    <span className="fwd-arrow">→</span>
+                    <input
+                      placeholder="Remote host"
+                      title="Remote host"
+                      value={fwd.remote_host}
+                      onChange={(e) => updateForward(fwd.id, "remote_host", e.target.value)}
+                      className="fwd-rhost-input"
+                    />
+                    <input
+                      type="number"
+                      title="Remote port"
+                      value={fwd.remote_port}
+                      onChange={(e) => updateForward(fwd.id, "remote_port", Number(e.target.value))}
+                      min={1}
+                      max={65535}
+                      className="fwd-port-input"
+                    />
+                  </>
+                )}
                 <button
                   type="button"
                   className="icon-btn delete-btn"

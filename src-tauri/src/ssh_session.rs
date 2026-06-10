@@ -1,10 +1,16 @@
-use ssh2::Session;
+use russh::{
+    client,
+    keys::{
+        ssh_key::{HashAlg, PublicKey},
+        PrivateKeyWithHashAlg,
+    },
+    Channel, ChannelMsg,
+};
 use std::collections::HashMap;
-use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
+use tokio::sync::mpsc;
 
 use crate::vault::Host;
 
@@ -15,94 +21,217 @@ pub enum TermCommand {
 }
 
 pub struct SshSession {
-    pub cmd_tx: std::sync::mpsc::Sender<TermCommand>,
+    pub cmd_tx: mpsc::Sender<TermCommand>,
+    pub handle: Arc<client::Handle<ClientHandler>>,
+    /// Remote-forward route table for this connection (see `forwarding`).
+    pub remote_routes: RemoteRoutes,
 }
 
 pub type Sessions = Arc<Mutex<HashMap<String, SshSession>>>;
 
-pub fn connect(
+/// `(bind_host, remote_port)` → `(local_target_host, local_target_port)`.
+/// Populated by remote forwards; consulted in `server_channel_open_forwarded_tcpip`.
+pub type RemoteRoutes = Arc<Mutex<HashMap<(String, u16), (String, u16)>>>;
+
+pub struct ClientHandler {
+    pub host: Host,
+    pub remote_routes: RemoteRoutes,
+}
+
+impl client::Handler for ClientHandler {
+    type Error = russh::Error;
+
+    async fn check_server_key(
+        &mut self,
+        server_public_key: &PublicKey,
+    ) -> Result<bool, Self::Error> {
+        let fp = server_public_key.fingerprint(HashAlg::Sha256).to_string();
+        if let Err(e) = crate::host_keys::enforce(&self.host, &fp) {
+            log::error!("Host key enforcement failed: {}", e);
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    /// The server opened a connection on a port we requested via `tcpip_forward`
+    /// (a remote/reverse forward). Bridge it to the registered local target.
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: Channel<client::Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        let target = self
+            .remote_routes
+            .lock()
+            .unwrap()
+            .get(&(connected_address.to_string(), connected_port as u16))
+            .cloned();
+        match target {
+            Some((host, port)) => {
+                tokio::spawn(crate::forwarding::bridge_remote(channel, host, port));
+            }
+            None => {
+                let _ = channel.close().await;
+            }
+        }
+        Ok(())
+    }
+}
+
+pub async fn connect(
     app_handle: AppHandle,
     sessions: Sessions,
     session_id: String,
     host: Host,
     on_connect: Vec<String>,
 ) -> Result<(), String> {
-    let addr = format!("{}:{}", host.hostname, host.port);
-    let socket_addr = addr
-        .to_socket_addrs()
-        .map_err(|e| format!("Cannot resolve {}: {}", addr, e))?
-        .next()
-        .ok_or_else(|| format!("No address found for {}", addr))?;
+    let config = Arc::new(client::Config {
+        // Send keepalives so dropped connections surface promptly instead of
+        // hanging multiplexed channels (terminal, SFTP, docker, forwards).
+        keepalive_interval: Some(Duration::from_secs(15)),
+        keepalive_max: 3,
+        ..Default::default()
+    });
 
-    let tcp = TcpStream::connect_timeout(&socket_addr, Duration::from_secs(15))
-        .map_err(|e| format!("Connection failed: {}", e))?;
+    let remote_routes: RemoteRoutes = Arc::new(Mutex::new(HashMap::new()));
+    let handler = ClientHandler {
+        host: host.clone(),
+        remote_routes: Arc::clone(&remote_routes),
+    };
 
-    let mut session = Session::new().map_err(|e| e.to_string())?;
-    session.set_tcp_stream(tcp);
-    session
-        .handshake()
-        .map_err(|e| format!("SSH handshake failed: {}", e))?;
+    let mut handle = tokio::time::timeout(
+        Duration::from_secs(15),
+        client::connect(config, (host.hostname.as_str(), host.port), handler),
+    )
+    .await
+    .map_err(|_| "Connection timed out".to_string())?
+    .map_err(|e| format!("Connection failed: {}", e))?;
 
-    // Verify the server's host key before sending any credentials.
-    crate::host_keys::enforce(&session, &host)?;
-
-    match host.default_auth.as_str() {
+    // Authentication
+    let auth_res = match host.default_auth.as_str() {
         "Password" => {
             let pw = host
                 .password
                 .as_deref()
                 .ok_or("No password stored for this host")?;
-            session
-                .userauth_password(&host.username, pw)
-                .map_err(|e| format!("Password authentication failed: {}", e))?;
+            handle.authenticate_password(&host.username, pw).await
         }
         "SshKey" => {
-            let key = host
+            let key_str = host
                 .private_key
                 .as_deref()
                 .ok_or("No SSH key stored for this host")?;
-            let normalized_key = key.replace("\r\n", "\n");
-            // Pass the public key explicitly when we can — libssh2 may fail to
-            // derive it from an in-memory OpenSSH key (e.g. ed25519) on some
-            // backends, which is what breaks key auth on the Windows build.
-            let public_key =
-                crate::vault::resolve_public_key(&host).map(|pk| pk.replace("\r\n", "\n"));
-            session
-                .userauth_pubkey_memory(
-                    &host.username,
-                    public_key.as_deref(),
-                    &normalized_key,
-                    host.passphrase.as_deref(),
-                )
-                .map_err(|e| format!("Key authentication failed: {}", e))?;
+            let key_pair = russh::keys::decode_secret_key(key_str, host.passphrase.as_deref())
+                .map_err(|e| format!("Invalid private key: {}", e))?;
+            let key = PrivateKeyWithHashAlg::new(Arc::new(key_pair), Some(HashAlg::Sha256));
+            handle.authenticate_publickey(&host.username, key).await
         }
         other => return Err(format!("Unknown auth method: {}", other)),
-    }
+    };
 
-    if !session.authenticated() {
+    let authenticated = auth_res.map_err(|e| format!("Auth error: {}", e))?;
+    if !authenticated.success() {
         return Err("Authentication failed".to_string());
     }
 
-    let mut channel = session.channel_session().map_err(|e| e.to_string())?;
+    let channel = handle
+        .channel_open_session()
+        .await
+        .map_err(|e| format!("Failed to open channel: {}", e))?;
+
     channel
-        .request_pty("xterm-256color", None, Some((220, 50, 0, 0)))
-        .map_err(|e| e.to_string())?;
-    channel.shell().map_err(|e| e.to_string())?;
+        .request_pty(false, "xterm-256color", 220, 50, 0, 0, &[])
+        .await
+        .map_err(|e| format!("PTY request failed: {}", e))?;
 
-    let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<TermCommand>();
-    sessions
-        .lock()
-        .unwrap()
-        .insert(session_id.clone(), SshSession { cmd_tx });
+    channel
+        .request_shell(false)
+        .await
+        .map_err(|e| format!("Shell request failed: {}", e))?;
 
-    let sid = session_id.clone();
-    let sessions_ref = sessions.clone();
+    let (cmd_tx, cmd_rx) = mpsc::channel::<TermCommand>(256);
 
-    std::thread::spawn(move || {
-        // Auto-run on-connect snippets: give the login shell a moment to settle,
-        // then type each snippet into the PTY (newline-terminated so it runs).
+    sessions.lock().unwrap().insert(
+        session_id.clone(),
+        SshSession {
+            cmd_tx,
+            handle: Arc::new(handle),
+            remote_routes,
+        },
+    );
+
+    spawn_relay(
+        app_handle, sessions, session_id, channel, cmd_rx, on_connect,
+    );
+
+    Ok(())
+}
+
+/// Open an interactive shell *inside a container* by exec'ing a command over a
+/// fresh channel on the existing connection. Stored in the same `sessions` map
+/// so ssh_write/ssh_resize/ssh_disconnect drive it like a normal terminal tab.
+pub async fn open_container_shell(
+    app_handle: AppHandle,
+    sessions: Sessions,
+    session_id: String,
+    handle: Arc<client::Handle<ClientHandler>>,
+    exec_command: String,
+) -> Result<(), String> {
+    let channel = handle
+        .channel_open_session()
+        .await
+        .map_err(|e| format!("Failed to open channel: {}", e))?;
+
+    channel
+        .request_pty(false, "xterm-256color", 220, 50, 0, 0, &[])
+        .await
+        .map_err(|e| format!("PTY request failed: {}", e))?;
+
+    channel
+        .exec(false, exec_command.as_str())
+        .await
+        .map_err(|e| format!("Container exec failed: {}", e))?;
+
+    let (cmd_tx, cmd_rx) = mpsc::channel::<TermCommand>(256);
+    sessions.lock().unwrap().insert(
+        session_id.clone(),
+        SshSession {
+            cmd_tx,
+            handle: Arc::clone(&handle),
+            // Container shells don't host remote forwards.
+            remote_routes: Arc::new(Mutex::new(HashMap::new())),
+        },
+    );
+
+    spawn_relay(
+        app_handle,
+        sessions,
+        session_id,
+        channel,
+        cmd_rx,
+        Vec::new(),
+    );
+    Ok(())
+}
+
+/// Drive an interactive PTY channel: pump terminal input from `cmd_rx` into the
+/// channel and emit channel output as `ssh-data-<id>` events until it closes.
+fn spawn_relay(
+    app_handle: AppHandle,
+    sessions: Sessions,
+    session_id: String,
+    mut channel: Channel<client::Msg>,
+    mut cmd_rx: mpsc::Receiver<TermCommand>,
+    on_connect: Vec<String>,
+) {
+    tokio::spawn(async move {
+        // Auto-run on-connect snippets (empty for container shells).
         if !on_connect.is_empty() {
-            std::thread::sleep(Duration::from_millis(400));
+            tokio::time::sleep(Duration::from_millis(400)).await;
             for snippet in &on_connect {
                 let text = snippet.replace("\r\n", "\n");
                 let payload = if text.ends_with('\n') {
@@ -110,63 +239,42 @@ pub fn connect(
                 } else {
                     format!("{}\n", text)
                 };
-                if channel.write_all(payload.as_bytes()).is_err() {
-                    break;
-                }
+                let _ = channel.data(payload.as_bytes()).await;
             }
-            channel.flush().ok();
         }
 
-        session.set_blocking(false);
-        let mut buf = [0u8; 65536];
-
         loop {
-            while let Ok(cmd) = cmd_rx.try_recv() {
-                session.set_blocking(true);
-                match cmd {
-                    TermCommand::Data(data) => {
-                        channel.write_all(&data).ok();
-                    }
-                    TermCommand::Resize(cols, rows) => {
-                        channel.request_pty_size(cols, rows, None, None).ok();
-                    }
-                    TermCommand::Close => {
-                        channel.close().ok();
-                        sessions_ref.lock().unwrap().remove(&sid);
-                        app_handle.emit(&format!("ssh-closed-{}", sid), ()).ok();
-                        return;
+            tokio::select! {
+                cmd = cmd_rx.recv() => {
+                    match cmd {
+                        Some(TermCommand::Data(data)) => {
+                            let _ = channel.data(&data[..]).await;
+                        }
+                        Some(TermCommand::Resize(cols, rows)) => {
+                            let _ = channel.window_change(cols, rows, 0, 0).await;
+                        }
+                        Some(TermCommand::Close) | None => {
+                            let _ = channel.close().await;
+                            sessions.lock().unwrap().remove(&session_id);
+                            app_handle.emit(&format!("ssh-closed-{}", session_id), ()).ok();
+                            return;
+                        }
                     }
                 }
-                session.set_blocking(false);
-            }
-
-            match channel.read(&mut buf) {
-                Ok(0) => {
-                    sessions_ref.lock().unwrap().remove(&sid);
-                    app_handle.emit(&format!("ssh-closed-{}", sid), ()).ok();
-                    return;
-                }
-                Ok(n) => {
-                    app_handle
-                        .emit(&format!("ssh-data-{}", sid), buf[..n].to_vec())
-                        .ok();
-                }
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    if channel.eof() {
-                        sessions_ref.lock().unwrap().remove(&sid);
-                        app_handle.emit(&format!("ssh-closed-{}", sid), ()).ok();
-                        return;
+                msg = channel.wait() => {
+                    match msg {
+                        Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
+                            app_handle.emit(&format!("ssh-data-{}", session_id), data.as_ref()).ok();
+                        }
+                        Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => {
+                            sessions.lock().unwrap().remove(&session_id);
+                            app_handle.emit(&format!("ssh-closed-{}", session_id), ()).ok();
+                            return;
+                        }
+                        _ => {}
                     }
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                Err(_) => {
-                    sessions_ref.lock().unwrap().remove(&sid);
-                    app_handle.emit(&format!("ssh-closed-{}", sid), ()).ok();
-                    return;
                 }
             }
         }
     });
-
-    Ok(())
 }

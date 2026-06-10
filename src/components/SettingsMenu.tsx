@@ -1,22 +1,25 @@
 import { useEffect, useRef, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { THEMES } from "../themes";
 import { useVaultStore } from "../store";
 import { HistoryModal } from "./HistoryModal";
 import { SyncModal } from "./SyncModal";
 import { SnippetsModal } from "./SnippetsModal";
 import { ChangePasswordModal } from "./ChangePasswordModal";
+import { AboutModal } from "./AboutModal";
 
 interface Props {
   onLock: () => void;
 }
 
 export function SettingsMenu({ onLock }: Props) {
-  const { theme: themeId, setTheme, idleLockMinutes, setIdleLockMinutes } = useVaultStore();
+  const { theme: themeId, setTheme, idleLockMinutes, setIdleLockMinutes, updateInfo } = useVaultStore();
   const [open, setOpen] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showSync, setShowSync] = useState(false);
   const [showSnippets, setShowSnippets] = useState(false);
   const [showChangePw, setShowChangePw] = useState(false);
+  const [showAbout, setShowAbout] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -43,10 +46,27 @@ export function SettingsMenu({ onLock }: Props) {
           <circle cx="12" cy="12" r="3" />
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
         </svg>
+        {updateInfo?.available && <span className="update-badge" title="Update available" />}
       </button>
 
       {open && (
         <div className="settings-dropdown">
+          {updateInfo?.available && (
+            <>
+              <button
+                className="settings-action settings-update"
+                onClick={() => { setOpen(false); openUrl(updateInfo.url).catch(() => {}); }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 3v12" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <path d="M5 21h14" />
+                </svg>
+                Update available — v{updateInfo.latest}
+              </button>
+              <div className="settings-divider" />
+            </>
+          )}
           <p className="settings-section-label">Theme</p>
           {THEMES.map((t) => (
             <button
@@ -124,6 +144,17 @@ export function SettingsMenu({ onLock }: Props) {
             Change Master Password
           </button>
 
+          <div className="settings-divider" />
+
+          <button className="settings-action" onClick={() => { setOpen(false); setShowAbout(true); }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="16" x2="12" y2="12" />
+              <line x1="12" y1="8" x2="12.01" y2="8" />
+            </svg>
+            About
+          </button>
+
           <button className="settings-action settings-action-danger" onClick={handleLock}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <rect x="5" y="11" width="14" height="10" rx="2" />
@@ -138,6 +169,7 @@ export function SettingsMenu({ onLock }: Props) {
       {showSync && <SyncModal onClose={() => setShowSync(false)} />}
       {showSnippets && <SnippetsModal onClose={() => setShowSnippets(false)} />}
       {showChangePw && <ChangePasswordModal onClose={() => setShowChangePw(false)} />}
+      {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
     </div>
   );
 }

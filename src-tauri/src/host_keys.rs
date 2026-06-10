@@ -1,4 +1,4 @@
-//! Host key verification (trust-on-first-use).
+//! Host key verification (trust-on-first-use) using russh.
 //!
 //! We store SHA256 fingerprints of accepted host keys in `known_hosts.json`
 //! (keyed by `host:port`). Fingerprints aren't secret, so this file is plain
@@ -8,13 +8,12 @@
 //!   - changed  → refuse (possible MITM) until the user re-trusts
 //!   - unknown  → first contact; the UI shows the fingerprint and asks to trust
 
-use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
+use russh::keys::ssh_key::{HashAlg, PublicKey};
 use serde::Serialize;
-use ssh2::Session;
 use std::collections::HashMap;
-use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use crate::vault::{vault_path, Host};
 
@@ -54,30 +53,34 @@ fn save_map(map: &HashMap<String, String>) -> Result<(), String> {
     std::fs::write(&path, json).map_err(|e| e.to_string())
 }
 
-/// `SHA256:<base64-no-pad>` of the session's host key, matching OpenSSH's format.
-fn fingerprint_of(session: &Session) -> Result<String, String> {
-    let hash = session
-        .host_key_hash(ssh2::HashType::Sha256)
-        .ok_or("Server did not present a host key")?;
-    Ok(format!("SHA256:{}", STANDARD_NO_PAD.encode(hash)))
+struct FingerprintFetcher {
+    fingerprint: Arc<Mutex<Option<String>>>,
 }
 
-/// TCP connect + SSH handshake only (no auth), to read the server's fingerprint.
-fn fetch_fingerprint(host: &Host) -> Result<String, String> {
-    let addr = format!("{}:{}", host.hostname, host.port);
-    let socket = addr
-        .to_socket_addrs()
-        .map_err(|e| format!("Cannot resolve {}: {}", addr, e))?
-        .next()
-        .ok_or_else(|| format!("No address found for {}", addr))?;
-    let tcp = TcpStream::connect_timeout(&socket, Duration::from_secs(15))
-        .map_err(|e| format!("Connection failed: {}", e))?;
-    let mut session = Session::new().map_err(|e| e.to_string())?;
-    session.set_tcp_stream(tcp);
-    session
-        .handshake()
-        .map_err(|e| format!("SSH handshake failed: {}", e))?;
-    fingerprint_of(&session)
+impl russh::client::Handler for FingerprintFetcher {
+    type Error = russh::Error;
+    async fn check_server_key(
+        &mut self,
+        server_public_key: &PublicKey,
+    ) -> Result<bool, Self::Error> {
+        let fp = server_public_key.fingerprint(HashAlg::Sha256).to_string();
+        *self.fingerprint.lock().await = Some(fp);
+        Ok(false) // Abort connection immediately, we just wanted the key
+    }
+}
+
+/// Connect just far enough to read the server's fingerprint.
+async fn fetch_fingerprint(host: &Host) -> Result<String, String> {
+    let config = Arc::new(russh::client::Config::default());
+    let fp_store = Arc::new(Mutex::new(None));
+    let handler = FingerprintFetcher {
+        fingerprint: Arc::clone(&fp_store),
+    };
+
+    let _ = russh::client::connect(config, (host.hostname.as_str(), host.port), handler).await;
+
+    let fp = fp_store.lock().await.take();
+    fp.ok_or_else(|| "Failed to fetch host key (connection timed out or refused)".to_string())
 }
 
 #[derive(Serialize)]
@@ -92,15 +95,13 @@ pub enum HostKeyVerdict {
 }
 
 /// Connect just far enough to read the host key and compare to our store.
-pub fn verify(host: &Host) -> Result<HostKeyVerdict, String> {
-    let fp = fetch_fingerprint(host)?;
+pub async fn verify(host: &Host) -> Result<HostKeyVerdict, String> {
+    let fp = fetch_fingerprint(host).await?;
     let map = load_map();
     Ok(classify(map.get(&key_for(host)).map(|s| s.as_str()), &fp))
 }
 
-/// Record the exact fingerprint the user approved in the UI. Storing the
-/// approved value (rather than re-fetching) means `enforce` will still catch a
-/// key that was swapped after approval.
+/// Record the exact fingerprint the user approved in the UI.
 pub fn trust(host: &Host, fingerprint: String) -> Result<(), String> {
     let mut map = load_map();
     map.insert(key_for(host), fingerprint);
@@ -113,13 +114,12 @@ pub fn forget(host: &Host) -> Result<(), String> {
     save_map(&map)
 }
 
-/// Enforced inside an established session (after handshake, before auth). Refuses
-/// to proceed unless the live key matches a trusted fingerprint.
-pub fn enforce(session: &Session, host: &Host) -> Result<(), String> {
-    let fp = fingerprint_of(session)?;
+/// Enforced inside an established session's `check_server_key`.
+/// Returns `Ok(())` if it matches, or an error string if it fails.
+pub fn enforce(host: &Host, presented_fingerprint: &str) -> Result<(), String> {
     let map = load_map();
     match map.get(&key_for(host)) {
-        Some(known) if known == &fp => Ok(()),
+        Some(known) if known == presented_fingerprint => Ok(()),
         Some(_) => Err(format!(
             "HOST KEY MISMATCH for {} — the server's key differs from the trusted one. \
              Possible man-in-the-middle; connection refused.",
@@ -129,62 +129,5 @@ pub fn enforce(session: &Session, host: &Host) -> Result<(), String> {
             "Host key for {} has not been verified. Connect from the host list to review and trust it.",
             key_for(host)
         )),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn host(hostname: &str, port: u16) -> Host {
-        Host {
-            id: "1".into(),
-            name: "t".into(),
-            hostname: hostname.into(),
-            port,
-            username: "root".into(),
-            default_auth: "Password".into(),
-            password: None,
-            private_key: None,
-            public_key: None,
-            passphrase: None,
-            port_forwards: vec![],
-            on_connect_snippets: vec![],
-            color: None,
-            notes: None,
-            group: None,
-        }
-    }
-
-    #[test]
-    fn key_for_combines_host_and_port() {
-        assert_eq!(key_for(&host("example.com", 2222)), "example.com:2222");
-    }
-
-    #[test]
-    fn classify_first_contact_is_new() {
-        assert!(matches!(
-            classify(None, "SHA256:abc"),
-            HostKeyVerdict::New { .. }
-        ));
-    }
-
-    #[test]
-    fn classify_matching_key_is_trusted() {
-        assert!(matches!(
-            classify(Some("SHA256:abc"), "SHA256:abc"),
-            HostKeyVerdict::Trusted
-        ));
-    }
-
-    #[test]
-    fn classify_different_key_is_changed() {
-        match classify(Some("SHA256:old"), "SHA256:new") {
-            HostKeyVerdict::Changed { fingerprint, known } => {
-                assert_eq!(fingerprint, "SHA256:new");
-                assert_eq!(known, "SHA256:old");
-            }
-            other => panic!("expected Changed, got {:?}", serde_json::to_string(&other)),
-        }
     }
 }

@@ -4,6 +4,47 @@ All notable changes to Kino SSH Manager are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-06-10
+
+### Added
+- **Docker management** — a per-session panel to manage Docker over the existing
+  SSH connection (or the local daemon from a local-shell tab):
+  - Containers: start / stop / restart / pause / remove, with live status.
+  - **Shell access** — drop into an interactive shell inside any running
+    container (`docker exec`, prefers `bash`, falls back to `sh`) as a new
+    terminal tab.
+  - **Live log streaming** — follow a container's logs in real time.
+  - **Images / Volumes / Networks** tabs for browsing the daemon.
+- **Live system metrics** — a streaming dashboard (CPU, memory, disk, load
+  average, uptime, network throughput) sampled once a second, for remote hosts
+  and the local machine.
+- **Remote (reverse) port forwarding** (`ssh -R`) and a **dynamic SOCKS5 proxy**
+  (`ssh -D`), alongside the existing local forwards. Pick the tunnel type per
+  rule in the host editor.
+- **Operating-system tags** — choose a host's OS in the editor; the sidebar
+  shows a matching OS icon (Linux, Ubuntu, Debian, Fedora, Arch, Alpine,
+  Windows, macOS) tinted with the host color.
+- **Collapsible, resizable sidebar** — hide it from the header toggle or drag
+  its edge to resize; the width and collapsed state persist.
+
+### Changed
+- **Async networking backend** — the SSH/SFTP/forwarding stack was rewritten
+  from the synchronous `ssh2` (libssh2) to the asynchronous `russh` (Tokio).
+  A single connection is now multiplexed, so Docker queries, metrics, SFTP, and
+  port forwards run in the background without lagging or dropping the terminal.
+- Host color is now shown as a top accent line plus an OS/initial tile, instead
+  of a full border.
+- The sidebar "Sort by" dropdown now follows the active theme.
+
+### Fixed
+- App could abort on connect (`ptr::copy_nonoverlapping` UB-check) due to
+  pre-release RustCrypto crates pulled in by `russh`; debug-assertions are now
+  disabled for dependencies so the benign check no longer crashes dev builds.
+
+### Compatibility
+- The new `os` host field is additive; existing vaults load unchanged.
+- Port-forward rules without an explicit type default to local forwards.
+
 ## [0.3.0] - 2026-06-09
 
 ### Added

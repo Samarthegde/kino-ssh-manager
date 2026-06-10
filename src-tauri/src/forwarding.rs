@@ -1,190 +1,281 @@
-use ssh2::Session;
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream, ToSocketAddrs};
-use std::sync::mpsc;
-use std::time::Duration;
+//! Port forwarding over the SSH connection — three flavours, all multiplexed on
+//! the existing `russh` handle:
+//!   - **local**  (`ssh -L`): bind a local port, tunnel each connection to a
+//!     remote `host:port` via `channel_open_direct_tcpip`.
+//!   - **dynamic** (`ssh -D`): a local SOCKS5 proxy; each CONNECT opens a
+//!     direct-tcpip channel to the negotiated target.
+//!   - **remote** (`ssh -R`): ask the server to listen on a port and forward
+//!     incoming connections back to a local target. Routes are registered in a
+//!     map the client `Handler` consults in `server_channel_open_forwarded_tcpip`.
 
-use crate::vault::Host;
+use russh::{client, Channel, ChannelMsg};
+use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc;
 
-pub struct ForwardHandle {
-    pub stop_tx: mpsc::Sender<()>,
+use crate::ssh_session::{ClientHandler, RemoteRoutes};
+
+type SshHandle = Arc<client::Handle<ClientHandler>>;
+
+/// Handle for a running forward. Dropping/stopping releases its resources.
+pub enum ForwardHandle {
+    /// Local & SOCKS forwards: stop the accept loop.
+    Local(mpsc::Sender<()>),
+    /// Remote forward: cancel the server-side listener and drop the route.
+    Remote {
+        handle: SshHandle,
+        routes: RemoteRoutes,
+        bind_host: String,
+        remote_port: u16,
+    },
 }
 
-pub(crate) fn connect_and_auth(host: &Host) -> Result<Session, String> {
-    let addr = format!("{}:{}", host.hostname, host.port);
-    let socket_addr = addr
-        .to_socket_addrs()
-        .map_err(|e| format!("Cannot resolve {}: {}", addr, e))?
-        .next()
-        .ok_or_else(|| format!("No address found for {}", addr))?;
-
-    let tcp = TcpStream::connect_timeout(&socket_addr, Duration::from_secs(15))
-        .map_err(|e| format!("Forward connection failed: {}", e))?;
-
-    let mut session = Session::new().map_err(|e| e.to_string())?;
-    session.set_tcp_stream(tcp);
-    session.handshake().map_err(|e| e.to_string())?;
-
-    // Verify the server's host key before sending any credentials.
-    crate::host_keys::enforce(&session, host)?;
-
-    match host.default_auth.as_str() {
-        "SshKey" => {
-            let key = host.private_key.as_deref().ok_or("No SSH key stored")?;
-            let normalized_key = key.replace("\r\n", "\n");
-            let public_key =
-                crate::vault::resolve_public_key(host).map(|pk| pk.replace("\r\n", "\n"));
-            session
-                .userauth_pubkey_memory(
-                    &host.username,
-                    public_key.as_deref(),
-                    &normalized_key,
-                    host.passphrase.as_deref(),
-                )
-                .map_err(|e| format!("Key auth failed: {}", e))?;
-        }
-        _ => {
-            let pw = host.password.as_deref().ok_or("No password stored")?;
-            session
-                .userauth_password(&host.username, pw)
-                .map_err(|e| format!("Password auth failed: {}", e))?;
+impl ForwardHandle {
+    pub async fn stop(self) {
+        match self {
+            ForwardHandle::Local(tx) => {
+                let _ = tx.send(()).await;
+            }
+            ForwardHandle::Remote {
+                handle,
+                routes,
+                bind_host,
+                remote_port,
+            } => {
+                let _ = handle
+                    .cancel_tcpip_forward(bind_host.clone(), remote_port as u32)
+                    .await;
+                routes.lock().unwrap().remove(&(bind_host, remote_port));
+            }
         }
     }
-
-    if !session.authenticated() {
-        return Err("Authentication failed".to_string());
-    }
-    Ok(session)
 }
 
-// Each accepted local TCP connection gets its own SSH session to avoid
-// cross-thread Session sharing. Uses non-blocking I/O with write buffers
-// to correctly handle partial writes.
-fn proxy_connection(mut local: TcpStream, host: Host, remote_host: String, remote_port: u16) {
-    let session = match connect_and_auth(&host) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("[fwd] auth: {}", e);
-            return;
-        }
-    };
-
-    let mut channel = match session.channel_direct_tcpip(&remote_host, remote_port, None) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("[fwd] channel: {}", e);
-            return;
-        }
-    };
-
-    // Switch to non-blocking for the bidirectional I/O loop.
-    // Both session.set_blocking() and channel_direct_tcpip() take &self,
-    // so this shared immutable borrow is valid while channel is alive.
-    session.set_blocking(false);
-    local.set_nonblocking(true).ok();
-
+/// Bidirectional pipe between an SSH channel and a local TCP socket.
+async fn pipe(mut channel: Channel<client::Msg>, mut tcp: TcpStream) {
     let mut buf = [0u8; 65536];
-    // Pending write buffers handle partial writes in non-blocking mode.
-    let mut to_channel: Vec<u8> = Vec::new();
-    let mut to_local: Vec<u8> = Vec::new();
-
     loop {
-        let mut progress = false;
-
-        // Read from local socket into buffer
-        match local.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => {
-                to_channel.extend_from_slice(&buf[..n]);
-                progress = true;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(_) => break,
-        }
-
-        // Flush buffered data to SSH channel
-        if !to_channel.is_empty() {
-            match channel.write(&to_channel) {
-                Ok(n) if n > 0 => {
-                    to_channel.drain(..n);
-                    progress = true;
-                }
-                // Ok(0) in non-blocking ssh2 means EAGAIN (would block), not closed.
-                Ok(_) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(_) => break,
-            }
-        }
-
-        // Read from SSH channel into buffer.
-        // Ok(0) in non-blocking ssh2 means no data available, not necessarily EOF.
-        match channel.read(&mut buf) {
-            Ok(0) => {
-                if channel.eof() {
-                    break;
+        tokio::select! {
+            res = tcp.read(&mut buf) => {
+                match res {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        if channel.data(&buf[..n]).await.is_err() {
+                            break;
+                        }
+                    }
                 }
             }
-            Ok(n) => {
-                to_local.extend_from_slice(&buf[..n]);
-                progress = true;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(_) => break,
-        }
-
-        // Flush buffered data to local socket
-        if !to_local.is_empty() {
-            match local.write(&to_local) {
-                Ok(0) => break,
-                Ok(n) => {
-                    to_local.drain(..n);
-                    progress = true;
+            msg = channel.wait() => {
+                match msg {
+                    Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
+                        if tcp.write_all(data.as_ref()).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => break,
+                    _ => {}
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(_) => break,
             }
-        }
-
-        if channel.eof() {
-            break;
-        }
-
-        if !progress {
-            std::thread::sleep(Duration::from_millis(2));
         }
     }
 }
 
-pub fn start_local_forward(
-    host: Host,
+// ── Local forward (ssh -L) ──────────────────────────────────────────────────
+
+pub async fn start_local_forward(
+    ssh_handle: SshHandle,
     local_port: u16,
     remote_host: String,
     remote_port: u16,
 ) -> Result<ForwardHandle, String> {
-    let (stop_tx, stop_rx) = mpsc::channel::<()>();
-
+    let (stop_tx, mut stop_rx) = mpsc::channel::<()>(1);
     let listener = TcpListener::bind(("127.0.0.1", local_port))
+        .await
         .map_err(|e| format!("Cannot bind 127.0.0.1:{}: {}", local_port, e))?;
-    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
 
-    std::thread::spawn(move || loop {
-        match stop_rx.try_recv() {
-            Ok(()) | Err(mpsc::TryRecvError::Disconnected) => break,
-            Err(mpsc::TryRecvError::Empty) => {}
-        }
-
-        match listener.accept() {
-            Ok((stream, _)) => {
-                let host = host.clone();
-                let rh = remote_host.clone();
-                std::thread::spawn(move || proxy_connection(stream, host, rh, remote_port));
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                res = listener.accept() => {
+                    let Ok((stream, _)) = res else { break };
+                    let handle = Arc::clone(&ssh_handle);
+                    let host = remote_host.clone();
+                    tokio::spawn(async move {
+                        match handle
+                            .channel_open_direct_tcpip(host, remote_port as u32, "127.0.0.1", 0)
+                            .await
+                        {
+                            Ok(channel) => pipe(channel, stream).await,
+                            Err(e) => log::error!("[fwd] direct-tcpip failed: {}", e),
+                        }
+                    });
+                }
+                _ = stop_rx.recv() => break,
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Err(_) => break,
         }
     });
 
-    Ok(ForwardHandle { stop_tx })
+    Ok(ForwardHandle::Local(stop_tx))
+}
+
+// ── Dynamic forward / SOCKS5 proxy (ssh -D) ─────────────────────────────────
+
+pub async fn start_socks_forward(
+    ssh_handle: SshHandle,
+    local_port: u16,
+) -> Result<ForwardHandle, String> {
+    let (stop_tx, mut stop_rx) = mpsc::channel::<()>(1);
+    let listener = TcpListener::bind(("127.0.0.1", local_port))
+        .await
+        .map_err(|e| format!("Cannot bind SOCKS on 127.0.0.1:{}: {}", local_port, e))?;
+
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                res = listener.accept() => {
+                    let Ok((stream, _)) = res else { break };
+                    let handle = Arc::clone(&ssh_handle);
+                    tokio::spawn(socks_bridge(handle, stream));
+                }
+                _ = stop_rx.recv() => break,
+            }
+        }
+    });
+
+    Ok(ForwardHandle::Local(stop_tx))
+}
+
+async fn socks_bridge(handle: SshHandle, mut tcp: TcpStream) {
+    let (target_host, target_port) = match negotiate_socks5(&mut tcp).await {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+
+    let channel = match handle
+        .channel_open_direct_tcpip(target_host, target_port as u32, "127.0.0.1", 0)
+        .await
+    {
+        Ok(c) => c,
+        Err(_) => {
+            let _ = tcp.write_all(&socks5_reply(0x04)).await; // host unreachable
+            return;
+        }
+    };
+
+    if tcp.write_all(&socks5_reply(0x00)).await.is_err() {
+        return;
+    }
+    pipe(channel, tcp).await;
+}
+
+/// Minimal SOCKS5 handshake: no-auth + CONNECT. Returns the requested target.
+async fn negotiate_socks5(tcp: &mut TcpStream) -> Result<(String, u16), ()> {
+    let mut header = [0u8; 2];
+    tcp.read_exact(&mut header).await.map_err(|_| ())?;
+    if header[0] != 0x05 {
+        return Err(());
+    }
+    let mut methods = vec![0u8; header[1] as usize];
+    tcp.read_exact(&mut methods).await.map_err(|_| ())?;
+    if !methods.contains(&0x00) {
+        let _ = tcp.write_all(&[0x05, 0xFF]).await;
+        return Err(());
+    }
+    tcp.write_all(&[0x05, 0x00]).await.map_err(|_| ())?;
+
+    let mut req = [0u8; 4];
+    tcp.read_exact(&mut req).await.map_err(|_| ())?;
+    if req[0] != 0x05 {
+        return Err(());
+    }
+    if req[1] != 0x01 {
+        let _ = tcp.write_all(&socks5_reply(0x07)).await; // command not supported
+        return Err(());
+    }
+
+    let host = match req[3] {
+        0x01 => {
+            let mut a = [0u8; 4];
+            tcp.read_exact(&mut a).await.map_err(|_| ())?;
+            format!("{}.{}.{}.{}", a[0], a[1], a[2], a[3])
+        }
+        0x03 => {
+            let mut len = [0u8; 1];
+            tcp.read_exact(&mut len).await.map_err(|_| ())?;
+            let mut domain = vec![0u8; len[0] as usize];
+            tcp.read_exact(&mut domain).await.map_err(|_| ())?;
+            String::from_utf8(domain).map_err(|_| ())?
+        }
+        0x04 => {
+            let mut a = [0u8; 16];
+            tcp.read_exact(&mut a).await.map_err(|_| ())?;
+            let segs: Vec<String> = a
+                .chunks(2)
+                .map(|c| format!("{:02x}{:02x}", c[0], c[1]))
+                .collect();
+            format!("[{}]", segs.join(":"))
+        }
+        _ => {
+            let _ = tcp.write_all(&socks5_reply(0x08)).await; // address type not supported
+            return Err(());
+        }
+    };
+
+    let mut port = [0u8; 2];
+    tcp.read_exact(&mut port).await.map_err(|_| ())?;
+    Ok((host, u16::from_be_bytes(port)))
+}
+
+fn socks5_reply(rep: u8) -> [u8; 10] {
+    // VER REP RSV ATYP=IPv4 BND.ADDR(0.0.0.0) BND.PORT(0)
+    [0x05, rep, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+}
+
+// ── Remote forward (ssh -R) ─────────────────────────────────────────────────
+
+pub async fn start_remote_forward(
+    ssh_handle: SshHandle,
+    routes: RemoteRoutes,
+    bind_host: String,
+    remote_port: u16,
+    target_host: String,
+    target_port: u16,
+) -> Result<ForwardHandle, String> {
+    // Register the route before requesting the listener to avoid a race with
+    // the first incoming connection.
+    routes
+        .lock()
+        .unwrap()
+        .insert((bind_host.clone(), remote_port), (target_host, target_port));
+
+    if let Err(e) = ssh_handle
+        .tcpip_forward(bind_host.clone(), remote_port as u32)
+        .await
+    {
+        routes
+            .lock()
+            .unwrap()
+            .remove(&(bind_host.clone(), remote_port));
+        return Err(format!("Remote forward request failed: {}", e));
+    }
+
+    Ok(ForwardHandle::Remote {
+        handle: ssh_handle,
+        routes,
+        bind_host,
+        remote_port,
+    })
+}
+
+/// Bridge a server-initiated forwarded channel to a local TCP target.
+/// Called from the client `Handler` when the server opens a forwarded-tcpip.
+pub async fn bridge_remote(channel: Channel<client::Msg>, target_host: String, target_port: u16) {
+    match TcpStream::connect((target_host.as_str(), target_port)).await {
+        Ok(tcp) => pipe(channel, tcp).await,
+        Err(_) => {
+            let _ = channel.close().await;
+        }
+    }
 }

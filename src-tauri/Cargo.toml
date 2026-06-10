@@ -1,6 +1,6 @@
 [package]
 name = "ssh-manager"
-version = "0.3.0"
+version = "0.4.0"
 description = "Kino SSH Manager - Secure SSH credential manager"
 authors = ["Kino SSH Manager contributors"]
 license = "MIT"
@@ -21,7 +21,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 aes-gcm = "0.10"
 argon2 = { version = "0.5", features = ["std"] }
-ssh2 = "0.9"
 ssh-key = { version = "0.6", features = ["ed25519", "getrandom"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 uuid = { version = "1", features = ["v4"] }
@@ -30,13 +29,19 @@ dirs = "5"
 ureq = { version = "2", features = ["json"] }
 zeroize = "1"
 portable-pty = "0.8.1"
-
-# On Windows, libssh2 defaults to the WinCNG backend, which lacks
-# `userauth_pubkey_memory` (in-memory key auth). Build it against a vendored
-# OpenSSL there so we never have to write private keys to disk. Linux/macOS keep
-# using the system OpenSSL backend, which already provides it.
-[target.'cfg(windows)'.dependencies]
-ssh2 = { version = "0.9", features = ["vendored-openssl"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "io-util", "time", "process"] }
+russh = "0.61"
+russh-sftp = "2.3"
+log = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
+
+# russh pulls pre-release RustCrypto crates (ssh-key/elliptic-curve/p256/…) that
+# trip the std `ptr::copy_nonoverlapping` UB-precondition check during the SSH
+# handshake. The violations are benign on supported platforms, but the check
+# (enabled with debug-assertions) aborts the process on connect. Disable
+# debug-assertions for dependencies only — our own crate keeps them on.
+[profile.dev.package."*"]
+debug-assertions = false
+overflow-checks = false

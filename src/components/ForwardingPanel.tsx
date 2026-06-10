@@ -73,9 +73,16 @@ export function ForwardingPanel({ sessionId, host }: Props) {
               <div key={fwd.id} className={`fwd-item ${isActive ? "active" : ""}`}>
                 <div className="fwd-status-dot" title={isActive ? "Active" : "Inactive"} />
                 <div className="fwd-info">
-                  <span className="fwd-label">{fwd.label || "Tunnel"}</span>
+                  <span className="fwd-label">
+                    {fwd.label || "Tunnel"}
+                    <span className="fwd-kind-tag">{fwd.kind ?? "local"}</span>
+                  </span>
                   <span className="fwd-meta">
-                    localhost:{fwd.local_port} → {fwd.remote_host}:{fwd.remote_port}
+                    {(fwd.kind ?? "local") === "socks"
+                      ? `SOCKS5 · localhost:${fwd.local_port}`
+                      : (fwd.kind ?? "local") === "remote"
+                        ? `${fwd.bind_host || "127.0.0.1"}:${fwd.remote_port} → ${fwd.remote_host}:${fwd.local_port}`
+                        : `localhost:${fwd.local_port} → ${fwd.remote_host}:${fwd.remote_port}`}
                   </span>
                 </div>
                 <button

@@ -1,12 +1,15 @@
+mod docker;
 mod forwarding;
 mod history;
 mod host_keys;
 mod keygen;
 mod local_session;
+mod metrics;
 mod sftp_session;
 mod snippets;
 mod ssh_session;
 mod sync;
+mod update;
 mod vault;
 
 use std::collections::HashMap;
@@ -25,6 +28,8 @@ pub struct AppState {
     pub local_sessions: local_session::LocalSessions,
     pub active_forwards: Arc<Mutex<HashMap<String, forwarding::ForwardHandle>>>,
     pub sftp_sessions: Arc<Mutex<HashMap<String, sftp_session::SftpHandle>>>,
+    pub metrics_streams: metrics::MetricsStreams,
+    pub docker_log_streams: docker::LogStreams,
 }
 
 // ── Vault commands ────────────────────────────────────────────────────────────
@@ -672,8 +677,8 @@ fn generate_ssh_key() -> Result<keygen::SshKeyPair, String> {
 
 /// Fetch the server's host key fingerprint and compare to the trusted store.
 #[tauri::command]
-fn verify_host_key(host: vault::Host) -> Result<host_keys::HostKeyVerdict, String> {
-    host_keys::verify(&host)
+async fn verify_host_key(host: vault::Host) -> Result<host_keys::HostKeyVerdict, String> {
+    host_keys::verify(&host).await
 }
 
 /// Trust the fingerprint the user approved in the UI.
@@ -691,7 +696,7 @@ fn forget_host_key(host: vault::Host) -> Result<(), String> {
 // ── SSH terminal commands ─────────────────────────────────────────────────────
 
 #[tauri::command]
-fn ssh_connect(
+async fn ssh_connect(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
     host: Host,
@@ -712,40 +717,52 @@ fn ssh_connect(
         session_id.clone(),
         host,
         on_connect,
-    )?;
+    )
+    .await?;
     Ok(session_id)
 }
 
 #[tauri::command]
-fn ssh_write(state: State<'_, AppState>, session_id: String, data: Vec<u8>) -> Result<(), String> {
-    let sessions = state.sessions.lock().unwrap();
-    let session = sessions.get(&session_id).ok_or("Session not found")?;
-    session
-        .cmd_tx
-        .send(ssh_session::TermCommand::Data(data))
+async fn ssh_write(
+    state: State<'_, AppState>,
+    session_id: String,
+    data: Vec<u8>,
+) -> Result<(), String> {
+    let tx = {
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.get(&session_id).ok_or("Session not found")?;
+        session.cmd_tx.clone()
+    };
+    tx.send(ssh_session::TermCommand::Data(data))
+        .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn ssh_resize(
+async fn ssh_resize(
     state: State<'_, AppState>,
     session_id: String,
     cols: u32,
     rows: u32,
 ) -> Result<(), String> {
-    let sessions = state.sessions.lock().unwrap();
-    let session = sessions.get(&session_id).ok_or("Session not found")?;
-    session
-        .cmd_tx
-        .send(ssh_session::TermCommand::Resize(cols, rows))
+    let tx = {
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.get(&session_id).ok_or("Session not found")?;
+        session.cmd_tx.clone()
+    };
+    tx.send(ssh_session::TermCommand::Resize(cols, rows))
+        .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn ssh_disconnect(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
-    let sessions = state.sessions.lock().unwrap();
-    if let Some(session) = sessions.get(&session_id) {
-        session.cmd_tx.send(ssh_session::TermCommand::Close).ok();
+async fn ssh_disconnect(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    let tx = {
+        let sessions = state.sessions.lock().unwrap();
+        sessions.get(&session_id).map(|s| s.cmd_tx.clone())
+    };
+    if let Some(tx) = tx {
+        tx.send(ssh_session::TermCommand::Close).await.ok();
     }
     // Stop all port forwards belonging to this session
     let prefix = format!("{}:", session_id);
@@ -754,9 +771,11 @@ fn ssh_disconnect(state: State<'_, AppState>, session_id: String) -> Result<(), 
         .lock()
         .unwrap()
         .retain(|k, _| !k.starts_with(&prefix));
-    // Close the SFTP connection for this session, if any.
-    if let Some(handle) = state.sftp_sessions.lock().unwrap().remove(&session_id) {
-        handle.tx.send(sftp_session::SftpRequest::Close).ok();
+    // Close the SFTP connection for this session, if any. Drop the lock guard
+    // before awaiting so we don't hold a std Mutex across an await point.
+    let sftp_handle = state.sftp_sessions.lock().unwrap().remove(&session_id);
+    if let Some(handle) = sftp_handle {
+        handle.tx.send(sftp_session::SftpRequest::Close).await.ok();
     }
     Ok(())
 }
@@ -818,7 +837,7 @@ fn local_disconnect(state: State<'_, AppState>, session_id: String) -> Result<()
 fn sftp_tx(
     state: &State<'_, AppState>,
     session_id: &str,
-) -> Result<std::sync::mpsc::Sender<sftp_session::SftpRequest>, String> {
+) -> Result<tokio::sync::mpsc::Sender<sftp_session::SftpRequest>, String> {
     let sessions = state.sftp_sessions.lock().unwrap();
     Ok(sessions
         .get(session_id)
@@ -830,17 +849,31 @@ fn sftp_tx(
 /// Open (or re-open) an SFTP session for the host bound to `session_id`.
 /// Returns the starting remote directory.
 #[tauri::command]
-fn sftp_open(
+async fn sftp_open(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
     session_id: String,
-    host: vault::Host,
+    _host: vault::Host, // Ignored, we use the active ssh_handle now
 ) -> Result<String, String> {
-    // Replace any existing session so a stale connection can't linger.
-    if let Some(old) = state.sftp_sessions.lock().unwrap().remove(&session_id) {
-        old.tx.send(sftp_session::SftpRequest::Close).ok();
+    let old_tx = {
+        state
+            .sftp_sessions
+            .lock()
+            .unwrap()
+            .remove(&session_id)
+            .map(|s| s.tx)
+    };
+    if let Some(tx) = old_tx {
+        let _ = tx.send(sftp_session::SftpRequest::Close).await;
     }
-    let (handle, home) = sftp_session::open(app_handle, session_id.clone(), host)?;
+
+    let ssh_handle = {
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.get(&session_id).ok_or("SSH session is not open")?;
+        Arc::clone(&session.handle)
+    };
+
+    let (handle, home) = sftp_session::open(app_handle, session_id.clone(), ssh_handle).await?;
     state
         .sftp_sessions
         .lock()
@@ -850,109 +883,126 @@ fn sftp_open(
 }
 
 #[tauri::command]
-fn sftp_list(
+async fn sftp_list(
     state: State<'_, AppState>,
     session_id: String,
     path: String,
 ) -> Result<Vec<sftp_session::SftpEntry>, String> {
     let tx = sftp_tx(&state, &session_id)?;
-    let (resp, rx) = std::sync::mpsc::channel();
+    let (resp, rx) = tokio::sync::oneshot::channel();
     tx.send(sftp_session::SftpRequest::List { path, resp })
+        .await
         .map_err(|_| "SFTP session closed")?;
-    rx.recv().map_err(|_| "SFTP worker did not respond")?
+    rx.await.map_err(|_| "SFTP worker did not respond")?
 }
 
 #[tauri::command]
-fn sftp_download(
+async fn sftp_download(
     state: State<'_, AppState>,
     session_id: String,
     remote: String,
     local: String,
 ) -> Result<(), String> {
     let tx = sftp_tx(&state, &session_id)?;
-    let (resp, rx) = std::sync::mpsc::channel();
+    let (resp, rx) = tokio::sync::oneshot::channel();
     tx.send(sftp_session::SftpRequest::Download {
         remote,
         local,
         resp,
     })
+    .await
     .map_err(|_| "SFTP session closed")?;
-    rx.recv().map_err(|_| "SFTP worker did not respond")?
+    rx.await.map_err(|_| "SFTP worker did not respond")?
 }
 
 #[tauri::command]
-fn sftp_upload(
+async fn sftp_upload(
     state: State<'_, AppState>,
     session_id: String,
     local: String,
     remote: String,
 ) -> Result<(), String> {
     let tx = sftp_tx(&state, &session_id)?;
-    let (resp, rx) = std::sync::mpsc::channel();
+    let (resp, rx) = tokio::sync::oneshot::channel();
     tx.send(sftp_session::SftpRequest::Upload {
         local,
         remote,
         resp,
     })
+    .await
     .map_err(|_| "SFTP session closed")?;
-    rx.recv().map_err(|_| "SFTP worker did not respond")?
+    rx.await.map_err(|_| "SFTP worker did not respond")?
 }
 
 #[tauri::command]
-fn sftp_rename(
+async fn sftp_rename(
     state: State<'_, AppState>,
     session_id: String,
     from: String,
     to: String,
 ) -> Result<(), String> {
     let tx = sftp_tx(&state, &session_id)?;
-    let (resp, rx) = std::sync::mpsc::channel();
+    let (resp, rx) = tokio::sync::oneshot::channel();
     tx.send(sftp_session::SftpRequest::Rename { from, to, resp })
+        .await
         .map_err(|_| "SFTP session closed")?;
-    rx.recv().map_err(|_| "SFTP worker did not respond")?
+    rx.await.map_err(|_| "SFTP worker did not respond")?
 }
 
 #[tauri::command]
-fn sftp_delete(
+async fn sftp_delete(
     state: State<'_, AppState>,
     session_id: String,
     path: String,
     is_dir: bool,
 ) -> Result<(), String> {
     let tx = sftp_tx(&state, &session_id)?;
-    let (resp, rx) = std::sync::mpsc::channel();
+    let (resp, rx) = tokio::sync::oneshot::channel();
     tx.send(sftp_session::SftpRequest::Delete { path, is_dir, resp })
+        .await
         .map_err(|_| "SFTP session closed")?;
-    rx.recv().map_err(|_| "SFTP worker did not respond")?
+    rx.await.map_err(|_| "SFTP worker did not respond")?
 }
 
 #[tauri::command]
-fn sftp_mkdir(state: State<'_, AppState>, session_id: String, path: String) -> Result<(), String> {
+async fn sftp_mkdir(
+    state: State<'_, AppState>,
+    session_id: String,
+    path: String,
+) -> Result<(), String> {
     let tx = sftp_tx(&state, &session_id)?;
-    let (resp, rx) = std::sync::mpsc::channel();
+    let (resp, rx) = tokio::sync::oneshot::channel();
     tx.send(sftp_session::SftpRequest::Mkdir { path, resp })
+        .await
         .map_err(|_| "SFTP session closed")?;
-    rx.recv().map_err(|_| "SFTP worker did not respond")?
+    rx.await.map_err(|_| "SFTP worker did not respond")?
 }
 
 #[tauri::command]
-fn sftp_chmod(
+async fn sftp_chmod(
     state: State<'_, AppState>,
     session_id: String,
     path: String,
     mode: u32,
 ) -> Result<(), String> {
     let tx = sftp_tx(&state, &session_id)?;
-    let (resp, rx) = std::sync::mpsc::channel();
+    let (resp, rx) = tokio::sync::oneshot::channel();
     tx.send(sftp_session::SftpRequest::Chmod { path, mode, resp })
+        .await
         .map_err(|_| "SFTP session closed")?;
-    rx.recv().map_err(|_| "SFTP worker did not respond")?
+    rx.await.map_err(|_| "SFTP worker did not respond")?
 }
 
 #[tauri::command]
-fn sftp_close(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
-    if let Some(handle) = state.sftp_sessions.lock().unwrap().remove(&session_id) {
-        handle.tx.send(sftp_session::SftpRequest::Close).ok();
+async fn sftp_close(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    let tx = state
+        .sftp_sessions
+        .lock()
+        .unwrap()
+        .remove(&session_id)
+        .map(|h| h.tx);
+    if let Some(tx) = tx {
+        let _ = tx.send(sftp_session::SftpRequest::Close).await;
     }
     Ok(())
 }
@@ -960,34 +1010,74 @@ fn sftp_close(state: State<'_, AppState>, session_id: String) -> Result<(), Stri
 // ── Port forwarding commands ──────────────────────────────────────────────────
 
 #[tauri::command]
-fn start_forward(
+#[allow(clippy::too_many_arguments)]
+async fn start_forward(
     state: State<'_, AppState>,
     session_id: String,
     forward_id: String,
-    host: vault::Host,
+    _host: vault::Host,
+    kind: Option<String>,
     local_port: u16,
     remote_host: String,
     remote_port: u16,
+    bind_host: Option<String>,
 ) -> Result<(), String> {
     let key = format!("{}:{}", session_id, forward_id);
-    let mut forwards = state.active_forwards.lock().unwrap();
-    if forwards.contains_key(&key) {
-        return Ok(());
+    {
+        let forwards = state.active_forwards.lock().unwrap();
+        if forwards.contains_key(&key) {
+            return Ok(());
+        }
     }
-    let handle = forwarding::start_local_forward(host, local_port, remote_host, remote_port)?;
-    forwards.insert(key, handle);
+
+    let (ssh_handle, routes) = {
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.get(&session_id).ok_or("SSH session is not open")?;
+        (
+            std::sync::Arc::clone(&session.handle),
+            std::sync::Arc::clone(&session.remote_routes),
+        )
+    };
+
+    // Field meanings per kind (see the frontend):
+    //   local : listen on local_port → forward to remote_host:remote_port
+    //   socks : SOCKS5 proxy on local_port
+    //   remote: server listens on bind_host:remote_port → forward to
+    //           remote_host:local_port on the app side
+    let handle = match kind.as_deref().unwrap_or("local") {
+        "local" => {
+            forwarding::start_local_forward(ssh_handle, local_port, remote_host, remote_port)
+                .await?
+        }
+        "socks" => forwarding::start_socks_forward(ssh_handle, local_port).await?,
+        "remote" => {
+            let bind = bind_host.unwrap_or_else(|| "127.0.0.1".to_string());
+            forwarding::start_remote_forward(
+                ssh_handle,
+                routes,
+                bind,
+                remote_port,
+                remote_host,
+                local_port,
+            )
+            .await?
+        }
+        other => return Err(format!("Unknown forward kind: {}", other)),
+    };
+    state.active_forwards.lock().unwrap().insert(key, handle);
     Ok(())
 }
 
 #[tauri::command]
-fn stop_forward(
+async fn stop_forward(
     state: State<'_, AppState>,
     session_id: String,
     forward_id: String,
 ) -> Result<(), String> {
     let key = format!("{}:{}", session_id, forward_id);
-    if let Some(handle) = state.active_forwards.lock().unwrap().remove(&key) {
-        handle.stop_tx.send(()).ok();
+    let handle = state.active_forwards.lock().unwrap().remove(&key);
+    if let Some(h) = handle {
+        h.stop().await;
     }
     Ok(())
 }
@@ -1017,6 +1107,8 @@ pub fn run() {
         local_sessions: Arc::new(Mutex::new(HashMap::new())),
         active_forwards: Arc::new(Mutex::new(HashMap::new())),
         sftp_sessions: Arc::new(Mutex::new(HashMap::new())),
+        metrics_streams: Arc::new(Mutex::new(HashMap::new())),
+        docker_log_streams: Arc::new(Mutex::new(HashMap::new())),
     };
 
     tauri::Builder::default()
@@ -1071,6 +1163,18 @@ pub fn run() {
             sftp_mkdir,
             sftp_chmod,
             sftp_close,
+            docker::docker_ps,
+            docker::docker_images,
+            docker::docker_volumes,
+            docker::docker_networks,
+            docker::docker_action,
+            docker::docker_logs,
+            docker::docker_logs_stream,
+            docker::docker_logs_stream_stop,
+            docker::docker_shell,
+            metrics::metrics_start,
+            metrics::metrics_stop,
+            update::check_for_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

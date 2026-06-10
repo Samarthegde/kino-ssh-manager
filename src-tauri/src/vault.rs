@@ -51,6 +51,10 @@ pub struct Host {
     /// Group or folder tag for organization.
     #[serde(default)]
     pub group: Option<String>,
+    /// Operating system tag, e.g. "linux", "ubuntu", "windows", "macos".
+    /// Drives the OS icon shown in the host list.
+    #[serde(default)]
+    pub os: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -221,6 +225,7 @@ mod tests {
             color: None,
             notes: None,
             group: None,
+            os: None,
         }]
     }
 

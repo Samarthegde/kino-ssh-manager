@@ -1,17 +1,13 @@
-//! SFTP sessions. Each open SFTP browser gets its own SSH connection living in
-//! a dedicated thread — `ssh2::Sftp` borrows its `Session` and neither is `Send`,
-//! so (like the terminal and port-forward sessions) the connection stays pinned
-//! to one thread and we talk to it over a request/response channel.
-
+use russh::client;
+use russh_sftp::client::SftpSession;
 use serde::Serialize;
-use std::io::{Read, Write};
+use std::future::Future;
 use std::path::Path;
-use std::sync::mpsc::{self, Sender};
-use std::time::Instant;
+use std::pin::Pin;
+use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
-
-use crate::forwarding::connect_and_auth;
-use crate::vault::Host;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::{mpsc, oneshot};
 
 #[derive(Serialize, Clone)]
 pub struct SftpEntry {
@@ -19,342 +15,368 @@ pub struct SftpEntry {
     pub path: String,
     pub is_dir: bool,
     pub size: u64,
-    /// Unix permission bits (e.g. 0o644), 0 if the server didn't report them.
     pub perm: u32,
 }
 
 #[derive(Serialize, Clone)]
 struct TransferProgress {
-    direction: &'static str, // "download" | "upload"
+    direction: &'static str,
     name: String,
     transferred: u64,
     total: u64,
     done: bool,
 }
 
-/// Copy in chunks, emitting throttled progress events to `sftp-progress-{session_id}`
-/// (at most every ~80ms, plus a final 100% event). `total` of 0 means unknown size.
-fn copy_with_progress<R: Read, W: Write>(
-    reader: &mut R,
-    writer: &mut W,
-    total: u64,
-    direction: &'static str,
-    name: &str,
-    app: &AppHandle,
-    session_id: &str,
-) -> Result<(), String> {
-    let event = format!("sftp-progress-{}", session_id);
-    let emit = |transferred: u64, done: bool| {
-        app.emit(
-            &event,
-            TransferProgress {
-                direction,
-                name: name.to_string(),
-                transferred,
-                total,
-                done,
-            },
-        )
-        .ok();
-    };
-
-    let mut buf = [0u8; 65536];
-    let mut transferred: u64 = 0;
-    let mut last = Instant::now();
-    emit(0, false);
-
-    loop {
-        let n = reader
-            .read(&mut buf)
-            .map_err(|e| format!("Read failed: {}", e))?;
-        if n == 0 {
-            break;
-        }
-        writer
-            .write_all(&buf[..n])
-            .map_err(|e| format!("Write failed: {}", e))?;
-        transferred += n as u64;
-        if last.elapsed().as_millis() >= 80 {
-            emit(transferred, false);
-            last = Instant::now();
-        }
-    }
-    writer.flush().ok();
-    emit(transferred, true);
-    Ok(())
-}
-
-/// A unit of work for the SFTP worker thread. Each request carries a one-shot
-/// channel the worker replies on.
 pub enum SftpRequest {
     List {
         path: String,
-        resp: Sender<Result<Vec<SftpEntry>, String>>,
+        resp: oneshot::Sender<Result<Vec<SftpEntry>, String>>,
     },
     Download {
         remote: String,
         local: String,
-        resp: Sender<Result<(), String>>,
+        resp: oneshot::Sender<Result<(), String>>,
     },
     Upload {
         local: String,
         remote: String,
-        resp: Sender<Result<(), String>>,
+        resp: oneshot::Sender<Result<(), String>>,
     },
     Rename {
         from: String,
         to: String,
-        resp: Sender<Result<(), String>>,
+        resp: oneshot::Sender<Result<(), String>>,
     },
     Delete {
         path: String,
         is_dir: bool,
-        resp: Sender<Result<(), String>>,
+        resp: oneshot::Sender<Result<(), String>>,
     },
     Mkdir {
         path: String,
-        resp: Sender<Result<(), String>>,
+        resp: oneshot::Sender<Result<(), String>>,
     },
     Chmod {
         path: String,
         mode: u32,
-        resp: Sender<Result<(), String>>,
+        resp: oneshot::Sender<Result<(), String>>,
     },
     Close,
 }
 
 pub struct SftpHandle {
-    pub tx: Sender<SftpRequest>,
+    pub tx: mpsc::Sender<SftpRequest>,
 }
 
-fn to_path_string(p: &Path) -> String {
-    p.to_string_lossy().to_string()
-}
-
-fn do_list(sftp: &ssh2::Sftp, path: &str) -> Result<Vec<SftpEntry>, String> {
-    let entries = sftp
-        .readdir(Path::new(path))
-        .map_err(|e| format!("Cannot list {}: {}", path, e))?;
-
-    let mut out: Vec<SftpEntry> = entries
-        .into_iter()
-        .filter_map(|(pathbuf, stat)| {
-            let name = pathbuf.file_name()?.to_string_lossy().to_string();
-            if name.is_empty() {
-                return None;
-            }
-            Some(SftpEntry {
-                name,
-                path: to_path_string(&pathbuf),
-                is_dir: stat.is_dir(),
-                size: stat.size.unwrap_or(0),
-                // Keep just the low 12 bits (rwx + setuid/gid/sticky).
-                perm: stat.perm.unwrap_or(0) & 0o7777,
-            })
-        })
-        .collect();
-
-    // Directories first, then case-insensitive by name.
-    out.sort_by(|a, b| {
-        b.is_dir
-            .cmp(&a.is_dir)
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-    });
-    Ok(out)
-}
-
-fn file_name(path: &str) -> String {
-    Path::new(path)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| path.to_string())
-}
-
-fn do_download(
-    sftp: &ssh2::Sftp,
-    remote: &str,
-    local: &str,
-    app: &AppHandle,
-    session_id: &str,
-) -> Result<(), String> {
-    let total = sftp
-        .stat(Path::new(remote))
-        .ok()
-        .and_then(|s| s.size)
-        .unwrap_or(0);
-    let mut remote_file = sftp
-        .open(Path::new(remote))
-        .map_err(|e| format!("Cannot open remote {}: {}", remote, e))?;
-    let mut local_file =
-        std::fs::File::create(local).map_err(|e| format!("Cannot create {}: {}", local, e))?;
-    copy_with_progress(
-        &mut remote_file,
-        &mut local_file,
-        total,
-        "download",
-        &file_name(remote),
-        app,
-        session_id,
-    )
-}
-
-fn do_upload(
-    sftp: &ssh2::Sftp,
-    local: &str,
-    remote: &str,
-    app: &AppHandle,
-    session_id: &str,
-) -> Result<(), String> {
-    let total = std::fs::metadata(local).map(|m| m.len()).unwrap_or(0);
-    let mut local_file =
-        std::fs::File::open(local).map_err(|e| format!("Cannot open {}: {}", local, e))?;
-    let mut remote_file = sftp
-        .create(Path::new(remote))
-        .map_err(|e| format!("Cannot create remote {}: {}", remote, e))?;
-    copy_with_progress(
-        &mut local_file,
-        &mut remote_file,
-        total,
-        "upload",
-        &file_name(remote),
-        app,
-        session_id,
-    )
-}
-
-fn do_rename(sftp: &ssh2::Sftp, from: &str, to: &str) -> Result<(), String> {
-    sftp.rename(Path::new(from), Path::new(to), None)
-        .map_err(|e| format!("Rename failed: {}", e))
-}
-
-fn do_mkdir(sftp: &ssh2::Sftp, path: &str) -> Result<(), String> {
-    sftp.mkdir(Path::new(path), 0o755)
-        .map_err(|e| format!("Create folder failed: {}", e))
-}
-
-fn do_chmod(sftp: &ssh2::Sftp, path: &str, mode: u32) -> Result<(), String> {
-    let stat = ssh2::FileStat {
-        size: None,
-        uid: None,
-        gid: None,
-        perm: Some(mode),
-        atime: None,
-        mtime: None,
-    };
-    sftp.setstat(Path::new(path), stat)
-        .map_err(|e| format!("Change permissions failed: {}", e))
-}
-
-/// Recursively remove a directory and its contents (SFTP `rmdir` only removes
-/// empty dirs, so we walk children depth-first first).
-fn remove_dir_recursive(sftp: &ssh2::Sftp, path: &str) -> Result<(), String> {
-    let children = sftp
-        .readdir(Path::new(path))
-        .map_err(|e| format!("Cannot list {}: {}", path, e))?;
-    for (child, stat) in children {
-        let name = child
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        if name.is_empty() || name == "." || name == ".." {
-            continue;
-        }
-        if stat.is_dir() {
-            remove_dir_recursive(sftp, &to_path_string(&child))?;
-        } else {
-            sftp.unlink(&child)
-                .map_err(|e| format!("Delete failed: {}", e))?;
-        }
-    }
-    sftp.rmdir(Path::new(path))
-        .map_err(|e| format!("Delete failed: {}", e))
-}
-
-fn do_delete(sftp: &ssh2::Sftp, path: &str, is_dir: bool) -> Result<(), String> {
-    if is_dir {
-        remove_dir_recursive(sftp, path)
-    } else {
-        sftp.unlink(Path::new(path))
-            .map_err(|e| format!("Delete failed: {}", e))
-    }
-}
-
-/// Open an SFTP session for `host`. Returns a handle plus the starting directory
-/// (the remote home dir). Connection + auth happen on the worker thread; the
-/// result is reported back before this returns.
-pub fn open(
-    app: AppHandle,
+pub async fn open(
+    app_handle: AppHandle,
     session_id: String,
-    host: Host,
+    ssh_handle: Arc<client::Handle<crate::ssh_session::ClientHandler>>,
 ) -> Result<(SftpHandle, String), String> {
-    let (tx, rx) = mpsc::channel::<SftpRequest>();
-    let (ready_tx, ready_rx) = mpsc::channel::<Result<String, String>>();
+    let channel = ssh_handle
+        .channel_open_session()
+        .await
+        .map_err(|e| format!("SFTP channel open failed: {}", e))?;
 
-    std::thread::spawn(move || {
-        let session = match connect_and_auth(&host) {
-            Ok(s) => s,
-            Err(e) => {
-                ready_tx.send(Err(e)).ok();
-                return;
-            }
-        };
-        let sftp = match session.sftp() {
-            Ok(s) => s,
-            Err(e) => {
-                ready_tx.send(Err(format!("SFTP init failed: {}", e))).ok();
-                return;
-            }
-        };
+    channel
+        .request_subsystem(true, "sftp")
+        .await
+        .map_err(|e| format!("SFTP subsystem request failed: {}", e))?;
 
-        let home = sftp
-            .realpath(Path::new("."))
-            .map(|p| to_path_string(&p))
-            .unwrap_or_else(|_| "/".to_string());
-        if ready_tx.send(Ok(home)).is_err() {
-            return; // caller went away
-        }
+    let sftp = SftpSession::new(channel.into_stream())
+        .await
+        .map_err(|e| format!("SFTP session init failed: {}", e))?;
 
-        while let Ok(req) = rx.recv() {
+    // russh-sftp's canonicalize returns the resolved path as a String already.
+    let home_path = sftp
+        .canonicalize(".")
+        .await
+        .map_err(|e| format!("Failed to get home dir: {}", e))?;
+
+    let (tx, mut rx) = mpsc::channel::<SftpRequest>(32);
+    let handle = SftpHandle { tx };
+
+    tokio::spawn(async move {
+        while let Some(req) = rx.recv().await {
             match req {
-                SftpRequest::Close => break,
                 SftpRequest::List { path, resp } => {
-                    resp.send(do_list(&sftp, &path)).ok();
+                    let _ = resp.send(do_list(&sftp, &path).await);
                 }
                 SftpRequest::Download {
                     remote,
                     local,
                     resp,
                 } => {
-                    resp.send(do_download(&sftp, &remote, &local, &app, &session_id))
-                        .ok();
+                    let _ = resp
+                        .send(do_download(&sftp, &remote, &local, &app_handle, &session_id).await);
                 }
                 SftpRequest::Upload {
                     local,
                     remote,
                     resp,
                 } => {
-                    resp.send(do_upload(&sftp, &local, &remote, &app, &session_id))
-                        .ok();
+                    let _ = resp
+                        .send(do_upload(&sftp, &local, &remote, &app_handle, &session_id).await);
                 }
                 SftpRequest::Rename { from, to, resp } => {
-                    resp.send(do_rename(&sftp, &from, &to)).ok();
+                    let _ = resp.send(do_rename(&sftp, &from, &to).await);
                 }
                 SftpRequest::Delete { path, is_dir, resp } => {
-                    resp.send(do_delete(&sftp, &path, is_dir)).ok();
+                    let _ = resp.send(do_delete(&sftp, &path, is_dir).await);
                 }
                 SftpRequest::Mkdir { path, resp } => {
-                    resp.send(do_mkdir(&sftp, &path)).ok();
+                    let _ = resp.send(sftp.create_dir(path).await.map_err(|e| e.to_string()));
                 }
                 SftpRequest::Chmod { path, mode, resp } => {
-                    resp.send(do_chmod(&sftp, &path, mode)).ok();
+                    let attrs = russh_sftp::protocol::FileAttributes {
+                        permissions: Some(mode),
+                        ..Default::default()
+                    };
+                    let _ = resp.send(
+                        sftp.set_metadata(path, attrs)
+                            .await
+                            .map_err(|e| e.to_string()),
+                    );
+                }
+                SftpRequest::Close => {
+                    break;
                 }
             }
         }
-        // session/sftp dropped here, closing the connection.
     });
 
-    let home = ready_rx
-        .recv()
-        .map_err(|_| "SFTP worker stopped unexpectedly".to_string())??;
-    Ok((SftpHandle { tx }, home))
+    Ok((handle, home_path))
+}
+
+async fn do_list(sftp: &SftpSession, path: &str) -> Result<Vec<SftpEntry>, String> {
+    let entries = sftp
+        .read_dir(path)
+        .await
+        .map_err(|e| format!("Cannot list {}: {}", path, e))?;
+    let mut out: Vec<SftpEntry> = entries
+        .into_iter()
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            let attrs = entry.metadata();
+            if name.is_empty() || name == "." || name == ".." {
+                return None;
+            }
+            Some(SftpEntry {
+                path: format!("{}/{}", path.trim_end_matches('/'), name),
+                name,
+                is_dir: attrs.is_dir(),
+                size: attrs.size.unwrap_or(0),
+                perm: attrs.permissions.unwrap_or(0),
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+    });
+    Ok(out)
+}
+
+async fn do_download(
+    sftp: &SftpSession,
+    remote: &str,
+    local: &str,
+    app: &AppHandle,
+    session_id: &str,
+) -> Result<(), String> {
+    let attrs = sftp.metadata(remote).await.map_err(|e| e.to_string())?;
+    let total = attrs.size.unwrap_or(0);
+
+    let mut remote_file = sftp
+        .open(remote)
+        .await
+        .map_err(|e| format!("Cannot open remote: {}", e))?;
+    let mut local_file = tokio::fs::File::create(local)
+        .await
+        .map_err(|e| format!("Cannot create local: {}", e))?;
+
+    let event = format!("sftp-progress-{}", session_id);
+    let name = Path::new(remote)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    let mut buf = [0u8; 65536];
+    let mut transferred: u64 = 0;
+    let mut last = std::time::Instant::now();
+
+    let _ = app.emit(
+        &event,
+        TransferProgress {
+            direction: "download",
+            name: name.clone(),
+            transferred,
+            total,
+            done: false,
+        },
+    );
+
+    loop {
+        let n = remote_file
+            .read(&mut buf)
+            .await
+            .map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        local_file
+            .write_all(&buf[..n])
+            .await
+            .map_err(|e| e.to_string())?;
+        transferred += n as u64;
+
+        if last.elapsed().as_millis() >= 80 {
+            let _ = app.emit(
+                &event,
+                TransferProgress {
+                    direction: "download",
+                    name: name.clone(),
+                    transferred,
+                    total,
+                    done: false,
+                },
+            );
+            last = std::time::Instant::now();
+        }
+    }
+    let _ = local_file.flush().await;
+    let _ = app.emit(
+        &event,
+        TransferProgress {
+            direction: "download",
+            name,
+            transferred,
+            total,
+            done: true,
+        },
+    );
+    Ok(())
+}
+
+async fn do_upload(
+    sftp: &SftpSession,
+    local: &str,
+    remote: &str,
+    app: &AppHandle,
+    session_id: &str,
+) -> Result<(), String> {
+    let mut local_file = tokio::fs::File::open(local)
+        .await
+        .map_err(|e| format!("Cannot open local: {}", e))?;
+    let meta = local_file.metadata().await.map_err(|e| e.to_string())?;
+    let total = meta.len();
+
+    use russh_sftp::protocol::OpenFlags;
+    let mut remote_file = sftp
+        .open_with_flags(
+            remote,
+            OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::TRUNCATE,
+        )
+        .await
+        .map_err(|e| format!("Cannot open remote: {}", e))?;
+
+    let event = format!("sftp-progress-{}", session_id);
+    let name = Path::new(local)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    let mut buf = [0u8; 65536];
+    let mut transferred: u64 = 0;
+    let mut last = std::time::Instant::now();
+
+    let _ = app.emit(
+        &event,
+        TransferProgress {
+            direction: "upload",
+            name: name.clone(),
+            transferred,
+            total,
+            done: false,
+        },
+    );
+
+    loop {
+        let n = local_file.read(&mut buf).await.map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        remote_file
+            .write_all(&buf[..n])
+            .await
+            .map_err(|e| e.to_string())?;
+        transferred += n as u64;
+
+        if last.elapsed().as_millis() >= 80 {
+            let _ = app.emit(
+                &event,
+                TransferProgress {
+                    direction: "upload",
+                    name: name.clone(),
+                    transferred,
+                    total,
+                    done: false,
+                },
+            );
+            last = std::time::Instant::now();
+        }
+    }
+
+    let _ = app.emit(
+        &event,
+        TransferProgress {
+            direction: "upload",
+            name,
+            transferred,
+            total,
+            done: true,
+        },
+    );
+    Ok(())
+}
+
+async fn do_rename(sftp: &SftpSession, from: &str, to: &str) -> Result<(), String> {
+    sftp.rename(from, to).await.map_err(|e| e.to_string())
+}
+
+async fn do_delete(sftp: &SftpSession, path: &str, is_dir: bool) -> Result<(), String> {
+    if is_dir {
+        remove_dir_recursive(sftp, path).await
+    } else {
+        sftp.remove_file(path).await.map_err(|e| e.to_string())
+    }
+}
+
+fn remove_dir_recursive<'a>(
+    sftp: &'a SftpSession,
+    path: &'a str,
+) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+    Box::pin(async move {
+        let entries = match sftp.read_dir(path).await {
+            Ok(e) => e,
+            Err(_) => return sftp.remove_dir(path).await.map_err(|e| e.to_string()),
+        };
+        for entry in entries {
+            let n = entry.file_name();
+            let attrs = entry.metadata();
+            if n == "." || n == ".." {
+                continue;
+            }
+            let child = format!("{}/{}", path.trim_end_matches('/'), n);
+            if attrs.is_dir() {
+                remove_dir_recursive(sftp, &child).await?;
+            } else {
+                sftp.remove_file(&child).await.map_err(|e| e.to_string())?;
+            }
+        }
+        sftp.remove_dir(path).await.map_err(|e| e.to_string())
+    })
 }

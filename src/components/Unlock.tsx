@@ -1,5 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useVaultStore } from "../store";
+import { getVersion } from "@tauri-apps/api/app";
+import { openUrl } from "@tauri-apps/plugin-opener";
+
+const REPO_URL = "https://github.com/Samarthegde/kino-ssh-manager";
 
 export function Unlock() {
   const [password, setPassword] = useState("");
@@ -16,12 +20,17 @@ export function Unlock() {
   const [path, setPath] = useState("vault.enc");
   const [branch, setBranch] = useState("main");
   const [token, setToken] = useState("");
+  const [version, setVersion] = useState("");
 
   const { unlock, checkVaultExists, syncRestore } = useVaultStore();
 
   useState(() => {
     checkVaultExists().then((exists) => setIsNew(!exists));
   });
+
+  useEffect(() => {
+    getVersion().then(setVersion).catch(() => setVersion(""));
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -66,6 +75,16 @@ export function Unlock() {
           </svg>
         </div>
         <h1>Kino SSH Manager</h1>
+        <p className="unlock-version">Version {version}</p>
+        <button
+          className="btn btn-sm about-repo-btn"
+          onClick={() => openUrl(REPO_URL).catch(() => { })}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22" />
+          </svg>
+          View on GitHub
+        </button>
 
         {mode === "vault" ? (
           <>
@@ -73,8 +92,8 @@ export function Unlock() {
               {isNew === null
                 ? ""
                 : isNew
-                ? "Create your master password to secure your vault"
-                : "Enter your master password to unlock"}
+                  ? "Create your master password to secure your vault"
+                  : "Enter your master password to unlock"}
             </p>
             <form onSubmit={handleSubmit}>
               <div className="unlock-pw-wrap">

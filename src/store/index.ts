@@ -3,12 +3,18 @@ import { create } from "zustand";
 
 export type DefaultAuth = "Password" | "SshKey";
 
+export type ForwardKind = "local" | "socks" | "remote";
+
 export interface PortForward {
   id: string;
   label: string;
+  /** "local" (ssh -L), "socks" (ssh -D), or "remote" (ssh -R). Defaults to local. */
+  kind?: ForwardKind;
   local_port: number;
   remote_host: string;
   remote_port: number;
+  /** Remote forwards: the address the server binds on (default 127.0.0.1). */
+  bind_host?: string;
 }
 
 export interface Host {
@@ -27,6 +33,7 @@ export interface Host {
   color?: string | null;
   notes?: string | null;
   group?: string | null;
+  os?: string | null;
 }
 
 export interface Snippet {
@@ -43,6 +50,60 @@ export interface SftpEntry {
   perm: number;
 }
 
+export interface DockerContainer {
+  id: string;
+  name: string;
+  image: string;
+  status: string;
+  state: string;
+  ports: string;
+}
+
+export type DockerAction = "start" | "stop" | "restart" | "pause" | "unpause" | "remove";
+
+export interface DockerImage {
+  id: string;
+  repo_tag: string;
+  size: string;
+}
+
+export interface DockerVolume {
+  name: string;
+  driver: string;
+}
+
+export interface DockerNetwork {
+  id: string;
+  name: string;
+  driver: string;
+}
+
+export interface UpdateInfo {
+  current: string;
+  latest: string;
+  available: boolean;
+  url: string;
+}
+
+export interface DiskInfo {
+  mount: string;
+  used_kb: number;
+  total_kb: number;
+}
+
+export interface MetricsSnapshot {
+  cpu_percent: number;
+  mem_used_kb: number;
+  mem_total_kb: number;
+  net_rx_bytes_per_sec: number;
+  net_tx_bytes_per_sec: number;
+  load1: number;
+  load5: number;
+  load15: number;
+  uptime_secs: number;
+  disks: DiskInfo[] | null;
+}
+
 export type HostKeyVerdict =
   | { status: "trusted" }
   | { status: "new"; fingerprint: string }
@@ -56,6 +117,9 @@ export interface Tab {
   kind: TabKind;
   host?: Host;
   connected: boolean;
+  paneId: string;
+  /** Optional custom tab label (e.g. a container shell name). */
+  title?: string;
 }
 
 export interface SshKeyPair {
@@ -104,7 +168,9 @@ interface VaultStore {
   hosts: Host[];
   snippets: Snippet[];
   tabs: Tab[];
-  activeTabId: string | null;
+  panes: string[];
+  activePaneId: string;
+  activeTabIds: Record<string, string | null>;
   theme: string;
   idleLockMinutes: number;
   activeForwards: Set<string>;
@@ -122,6 +188,9 @@ interface VaultStore {
   openLocalShell: () => Promise<void>;
   closeTab: (tabId: string) => void;
   setActiveTab: (tabId: string) => void;
+  splitPane: (paneId: string) => void;
+  closePane: (paneId: string) => void;
+  setActivePane: (paneId: string) => void;
   markTabDisconnected: (sessionId: string) => void;
   generateSshKey: () => Promise<SshKeyPair>;
   loadKeyFile: (path: string) => Promise<string>;
@@ -147,6 +216,19 @@ interface VaultStore {
   sftpMkdir: (sessionId: string, path: string) => Promise<void>;
   sftpChmod: (sessionId: string, path: string, mode: number) => Promise<void>;
   sftpClose: (sessionId: string) => Promise<void>;
+  dockerPs: (sessionId: string, local: boolean, all: boolean) => Promise<DockerContainer[]>;
+  dockerAction: (sessionId: string, local: boolean, containerId: string, action: DockerAction) => Promise<void>;
+  dockerLogs: (sessionId: string, local: boolean, containerId: string, tail: number) => Promise<string>;
+  dockerShell: (sessionId: string, local: boolean, containerId: string, containerName: string) => Promise<void>;
+  dockerImages: (sessionId: string, local: boolean) => Promise<DockerImage[]>;
+  dockerVolumes: (sessionId: string, local: boolean) => Promise<DockerVolume[]>;
+  dockerNetworks: (sessionId: string, local: boolean) => Promise<DockerNetwork[]>;
+  dockerLogsStream: (sessionId: string, local: boolean, containerId: string, tail: number) => Promise<string>;
+  dockerLogsStreamStop: (streamId: string) => Promise<void>;
+  metricsStart: (sessionId: string, local: boolean) => Promise<string>;
+  metricsStop: (streamId: string) => Promise<void>;
+  updateInfo: UpdateInfo | null;
+  checkForUpdate: () => Promise<void>;
   changeMasterPassword: (currentPassword: string, newPassword: string) => Promise<void>;
   verifyHostKey: (host: Host) => Promise<HostKeyVerdict>;
   trustHostKey: (host: Host, fingerprint: string) => Promise<void>;
@@ -170,10 +252,13 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
   hosts: [],
   snippets: [],
   tabs: [],
-  activeTabId: null,
+  panes: ["default"],
+  activePaneId: "default",
+  activeTabIds: { "default": null },
   theme: localStorage.getItem("ssh-mgr:theme") ?? "catppuccin-mocha",
   idleLockMinutes: Number(localStorage.getItem("ssh-mgr:idle-lock") ?? "0"),
   activeForwards: new Set<string>(),
+  updateInfo: null,
 
   setTheme: (id) => {
     localStorage.setItem("ssh-mgr:theme", id);
@@ -190,9 +275,11 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
       sessionId,
       forwardId: forward.id,
       host,
+      kind: forward.kind ?? "local",
       localPort: forward.local_port,
       remoteHost: forward.remote_host,
       remotePort: forward.remote_port,
+      bindHost: forward.bind_host ?? null,
     });
     set((s) => ({
       activeForwards: new Set([...s.activeForwards, `${sessionId}:${forward.id}`]),
@@ -247,7 +334,7 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
     get().tabs.forEach((t) =>
       invoke("ssh_disconnect", { sessionId: t.sessionId }).catch(() => {})
     );
-    set({ unlocked: false, hosts: [], tabs: [], activeTabId: null });
+    set({ unlocked: false, hosts: [], tabs: [], panes: ["default"], activePaneId: "default", activeTabIds: { "default": null } });
   },
 
   saveHost: async (host) => {
@@ -309,19 +396,51 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
     }).catch(console.error);
 
     set((state) => ({
-      tabs: [...state.tabs, { id: tabId, sessionId, kind: "ssh", host, connected: true }],
-      activeTabId: tabId,
+      tabs: [...state.tabs, { id: tabId, sessionId, kind: "ssh", host, connected: true, paneId: state.activePaneId }],
+      activeTabIds: { ...state.activeTabIds, [state.activePaneId]: tabId },
     }));
     return sessionId;
+  },
+
+  checkForUpdate: async () => {
+    try {
+      const info = await invoke<UpdateInfo>("check_for_update");
+      set({ updateInfo: info });
+    } catch {
+      // Offline or rate-limited — fail silently, leave updateInfo as-is.
+    }
   },
 
   openLocalShell: async () => {
     const sessionId = await invoke<string>("local_connect");
     const tabId = crypto.randomUUID();
-    
+
     set((state) => ({
-      tabs: [...state.tabs, { id: tabId, sessionId, kind: "local", connected: true }],
-      activeTabId: tabId,
+      tabs: [...state.tabs, { id: tabId, sessionId, kind: "local", connected: true, paneId: state.activePaneId }],
+      activeTabIds: { ...state.activeTabIds, [state.activePaneId]: tabId },
+    }));
+  },
+
+  dockerShell: async (sessionId, local, containerId, containerName) => {
+    // Backend opens an interactive `docker exec` PTY and returns a new session
+    // id; we attach a terminal tab to it (ssh-style for remote, local for local).
+    const newSessionId = await invoke<string>("docker_shell", { sessionId, local, containerId });
+    const tabId = crypto.randomUUID();
+    const parent = get().tabs.find((t) => t.sessionId === sessionId);
+    set((state) => ({
+      tabs: [
+        ...state.tabs,
+        {
+          id: tabId,
+          sessionId: newSessionId,
+          kind: local ? "local" : "ssh",
+          host: parent?.host,
+          title: `🐳 ${containerName || containerId}`,
+          connected: true,
+          paneId: state.activePaneId,
+        },
+      ],
+      activeTabIds: { ...state.activeTabIds, [state.activePaneId]: tabId },
     }));
   },
 
@@ -347,20 +466,70 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
     }
     set((state) => {
       const newTabs = state.tabs.filter((t) => t.id !== tabId);
-      const newActive =
-        state.activeTabId === tabId
-          ? newTabs.length > 0 ? newTabs[newTabs.length - 1].id : null
-          : state.activeTabId;
+      const paneId = tab!.paneId;
+      const paneTabs = newTabs.filter(t => t.paneId === paneId);
+      const newActiveForPane =
+        state.activeTabIds[paneId] === tabId
+          ? paneTabs.length > 0 ? paneTabs[paneTabs.length - 1].id : null
+          : state.activeTabIds[paneId];
       // Remove all active forwards for this session
       const sid = tab?.sessionId;
       const newForwards = sid
         ? new Set([...state.activeForwards].filter((k) => !k.startsWith(`${sid}:`)))
         : state.activeForwards;
-      return { tabs: newTabs, activeTabId: newActive, activeForwards: newForwards };
+      return { tabs: newTabs, activeTabIds: { ...state.activeTabIds, [paneId]: newActiveForPane }, activeForwards: newForwards };
     });
   },
 
-  setActiveTab: (tabId) => set({ activeTabId: tabId }),
+  setActiveTab: (tabId) => set((state) => {
+    const paneId = state.tabs.find((t) => t.id === tabId)?.paneId;
+    if (!paneId) return state;
+    return { activeTabIds: { ...state.activeTabIds, [paneId]: tabId }, activePaneId: paneId };
+  }),
+
+  splitPane: (paneId) => set((state) => {
+    const newPaneId = crypto.randomUUID();
+    const paneIndex = state.panes.indexOf(paneId);
+    if (paneIndex === -1) return state;
+    const newPanes = [...state.panes];
+    newPanes.splice(paneIndex + 1, 0, newPaneId);
+    return {
+      panes: newPanes,
+      activePaneId: newPaneId,
+      activeTabIds: { ...state.activeTabIds, [newPaneId]: null },
+    };
+  }),
+
+  closePane: (paneId) => {
+    // Before updating state, cleanly disconnect all tabs in this pane
+    const tabsInPane = get().tabs.filter((t) => t.paneId === paneId);
+    tabsInPane.forEach((tab) => {
+      if (tab.kind === "local") {
+        invoke("local_disconnect", { sessionId: tab.sessionId }).catch(() => {});
+      } else {
+        invoke("ssh_disconnect", { sessionId: tab.sessionId }).catch(() => {});
+      }
+    });
+
+    set((state) => {
+      const newPanes = state.panes.filter((p) => p !== paneId);
+      if (newPanes.length === 0) return state; // Don't close the last pane
+      const newTabs = state.tabs.filter((t) => t.paneId !== paneId);
+      const newActiveTabIds = { ...state.activeTabIds };
+      delete newActiveTabIds[paneId];
+      
+      const newActivePaneId = state.activePaneId === paneId ? newPanes[newPanes.length - 1] : state.activePaneId;
+      
+      return {
+        panes: newPanes,
+        tabs: newTabs,
+        activeTabIds: newActiveTabIds,
+        activePaneId: newActivePaneId,
+      };
+    });
+  },
+
+  setActivePane: (paneId) => set({ activePaneId: paneId }),
 
   markTabDisconnected: (sessionId) => {
     const tab = get().tabs.find((t) => t.sessionId === sessionId);
@@ -541,6 +710,19 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
   sftpMkdir: (sessionId, path) => invoke<void>("sftp_mkdir", { sessionId, path }),
   sftpChmod: (sessionId, path, mode) => invoke<void>("sftp_chmod", { sessionId, path, mode }),
   sftpClose: (sessionId) => invoke<void>("sftp_close", { sessionId }),
+  dockerPs: (sessionId, local, all) => invoke<DockerContainer[]>("docker_ps", { sessionId, local, all }),
+  dockerAction: (sessionId, local, containerId, action) =>
+    invoke<void>("docker_action", { sessionId, local, containerId, action }),
+  dockerLogs: (sessionId, local, containerId, tail) =>
+    invoke<string>("docker_logs", { sessionId, local, containerId, tail }),
+  metricsStart: (sessionId, local) => invoke<string>("metrics_start", { sessionId, local }),
+  metricsStop: (streamId) => invoke<void>("metrics_stop", { streamId }),
+  dockerImages: (sessionId, local) => invoke<DockerImage[]>("docker_images", { sessionId, local }),
+  dockerVolumes: (sessionId, local) => invoke<DockerVolume[]>("docker_volumes", { sessionId, local }),
+  dockerNetworks: (sessionId, local) => invoke<DockerNetwork[]>("docker_networks", { sessionId, local }),
+  dockerLogsStream: (sessionId, local, containerId, tail) =>
+    invoke<string>("docker_logs_stream", { sessionId, local, containerId, tail }),
+  dockerLogsStreamStop: (streamId) => invoke<void>("docker_logs_stream_stop", { streamId }),
 
   changeMasterPassword: (currentPassword, newPassword) =>
     invoke<void>("change_master_password", { currentPassword, newPassword }),

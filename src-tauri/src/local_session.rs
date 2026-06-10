@@ -22,6 +22,23 @@ pub fn connect(
     sessions: LocalSessions,
     session_id: String,
 ) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let cmd = CommandBuilder::new("powershell.exe");
+
+    #[cfg(not(target_os = "windows"))]
+    let cmd = CommandBuilder::new(std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string()));
+
+    connect_command(app_handle, sessions, session_id, cmd)
+}
+
+/// Spawn a local PTY running an arbitrary command. Used both for the default
+/// shell and for `docker exec` container shells.
+pub fn connect_command(
+    app_handle: AppHandle,
+    sessions: LocalSessions,
+    session_id: String,
+    cmd: CommandBuilder,
+) -> Result<(), String> {
     let pty_system = native_pty_system();
 
     let pair = pty_system
@@ -32,12 +49,6 @@ pub fn connect(
             pixel_height: 0,
         })
         .map_err(|e| format!("Failed to create PTY: {}", e))?;
-
-    #[cfg(target_os = "windows")]
-    let cmd = CommandBuilder::new("powershell.exe");
-
-    #[cfg(not(target_os = "windows"))]
-    let cmd = CommandBuilder::new(std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string()));
 
     let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
 
