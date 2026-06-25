@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kino SSH Manager — Encrypted SSH credentials & terminal</title>
+  <meta name="description" content="A secure, cross-platform SSH credential manager and terminal. Your secrets live in a single encrypted vault on your machine and never leave the device." />
+
+  <!-- Open Graph / social preview -->
+  <meta property="og:title" content="Kino SSH Manager" />
+  <meta property="og:description" content="Secure, cross-platform SSH credential manager and terminal. Encrypted vault, SFTP, port forwarding, snippets — built with Tauri + Rust." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://samarthegde.github.io/kino-ssh-manager/" />
+
+  <style>
+    :root {
+      --bg:        #1e1e2e;
+      --bg-alt:    #181825;
+      --surface:   #282a3a;
+      --surface-2: #313244;
+      --border:    #45475a;
+      --text:      #cdd6f4;
+      --subtext:   #a6adc8;
+      --muted:     #7f849c;
+      --blue:      #89b4fa;
+      --green:     #a6e3a1;
+      --red:       #f38ba8;
+      --yellow:    #f9e2af;
+      --mauve:     #cba6f7;
+      --peach:     #fab387;
+      --radius:    14px;
+      --maxw:      1080px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+    code, .mono {
+      font-family: "SFMono-Regular", "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+    }
+
+    /* ---------- Nav ---------- */
+    header.nav {
+      position: sticky; top: 0; z-index: 50;
+      backdrop-filter: blur(10px);
+      background: rgba(30, 30, 46, 0.72);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-inner {
+      display: flex; align-items: center; justify-content: space-between;
+      height: 64px;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.05rem; }
+    .brand .logo {
+      width: 30px; height: 30px; border-radius: 8px;
+      background: linear-gradient(135deg, var(--blue), var(--mauve));
+      display: grid; place-items: center; color: var(--bg); font-weight: 800;
+      font-family: monospace;
+    }
+    .nav-links { display: flex; align-items: center; gap: 26px; }
+    .nav-links a { color: var(--subtext); font-size: 0.92rem; }
+    .nav-links a:hover { color: var(--text); text-decoration: none; }
+    .nav-cta {
+      background: var(--blue); color: var(--bg) !important;
+      padding: 8px 16px; border-radius: 9px; font-weight: 600;
+    }
+    .nav-cta:hover { text-decoration: none; opacity: 0.9; }
+    @media (max-width: 680px) { .nav-links a:not(.nav-cta) { display: none; } }
+
+    /* ---------- Hero ---------- */
+    .hero { padding: 90px 0 70px; position: relative; }
+    .hero::before {
+      content: ""; position: absolute; inset: 0;
+      background:
+        radial-gradient(600px 320px at 18% 0%, rgba(137,180,250,0.16), transparent 70%),
+        radial-gradient(560px 320px at 90% 10%, rgba(203,166,247,0.14), transparent 70%);
+      pointer-events: none;
+    }
+    .hero-grid {
+      position: relative;
+      display: grid; grid-template-columns: 1.05fr 1fr; gap: 48px; align-items: center;
+    }
+    @media (max-width: 900px) { .hero-grid { grid-template-columns: 1fr; gap: 40px; } }
+
+    .badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: var(--surface); border: 1px solid var(--border);
+      color: var(--subtext); padding: 6px 12px; border-radius: 999px;
+      font-size: 0.8rem; margin-bottom: 22px;
+    }
+    .badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); }
+
+    .hero h1 {
+      font-size: clamp(2.2rem, 5vw, 3.4rem); line-height: 1.1; font-weight: 800;
+      letter-spacing: -0.02em; margin-bottom: 18px;
+    }
+    .hero h1 .grad {
+      background: linear-gradient(120deg, var(--blue), var(--mauve));
+      -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .hero p.lead { font-size: 1.12rem; color: var(--subtext); max-width: 540px; margin-bottom: 30px; }
+
+    .cta-row { display: flex; flex-wrap: wrap; gap: 14px; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 9px;
+      padding: 13px 22px; border-radius: 11px; font-weight: 600; font-size: 0.96rem;
+      border: 1px solid transparent; cursor: pointer; transition: transform .12s ease, opacity .12s ease;
+    }
+    .btn:hover { text-decoration: none; transform: translateY(-1px); }
+    .btn-primary { background: var(--blue); color: var(--bg); }
+    .btn-primary:hover { opacity: 0.92; }
+    .btn-ghost { background: var(--surface); color: var(--text); border-color: var(--border); }
+    .btn-ghost:hover { background: var(--surface-2); }
+
+    .hero-meta { margin-top: 22px; color: var(--muted); font-size: 0.85rem; display: flex; gap: 18px; flex-wrap: wrap; }
+    .hero-meta span { display: inline-flex; align-items: center; gap: 7px; }
+
+    /* ---------- Terminal mockup ---------- */
+    .terminal {
+      background: var(--bg-alt); border: 1px solid var(--border); border-radius: var(--radius);
+      box-shadow: 0 30px 70px -20px rgba(0,0,0,0.6); overflow: hidden;
+    }
+    .term-bar { display: flex; align-items: center; gap: 8px; padding: 12px 14px; background: var(--surface); border-bottom: 1px solid var(--border); }
+    .term-bar .lights { display: flex; gap: 7px; }
+    .term-bar .lights i { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+    .term-bar .lights .r { background: #f38ba8; }
+    .term-bar .lights .y { background: #f9e2af; }
+    .term-bar .lights .g { background: #a6e3a1; }
+    .term-bar .title { color: var(--muted); font-size: 0.8rem; margin: 0 auto; font-family: monospace; }
+    .term-body { padding: 18px 20px; font-family: "SFMono-Regular", "JetBrains Mono", Menlo, monospace; font-size: 0.86rem; line-height: 1.85; }
+    .term-body .pr { color: var(--green); }
+    .term-body .pth { color: var(--blue); }
+    .term-body .cm { color: var(--text); }
+    .term-body .ot { color: var(--subtext); }
+    .term-body .ok { color: var(--green); }
+    .term-body .dim { color: var(--muted); }
+    .cursor { display: inline-block; width: 8px; height: 1.05em; background: var(--text); vertical-align: text-bottom; animation: blink 1.1s step-end infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    /* ---------- Section headings ---------- */
+    section { padding: 72px 0; }
+    .sec-head { text-align: center; max-width: 640px; margin: 0 auto 48px; }
+    .sec-head .kicker { color: var(--blue); font-weight: 600; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.08em; }
+    .sec-head h2 { font-size: clamp(1.7rem, 3.5vw, 2.3rem); margin: 10px 0 12px; letter-spacing: -0.01em; }
+    .sec-head p { color: var(--subtext); }
+
+    /* ---------- Feature grid ---------- */
+    .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+    @media (max-width: 860px) { .features { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 560px) { .features { grid-template-columns: 1fr; } }
+    .card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 24px; transition: border-color .15s ease, transform .15s ease;
+    }
+    .card:hover { border-color: var(--blue); transform: translateY(-3px); }
+    .card .ic { font-size: 1.4rem; margin-bottom: 12px; display: inline-block; }
+    .card h3 { font-size: 1.05rem; margin-bottom: 7px; }
+    .card p { color: var(--subtext); font-size: 0.9rem; }
+
+    /* ---------- Security band ---------- */
+    .security { background: var(--bg-alt); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+    .sec-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: center; }
+    @media (max-width: 860px) { .sec-grid { grid-template-columns: 1fr; gap: 32px; } }
+    .sec-list { list-style: none; display: flex; flex-direction: column; gap: 16px; }
+    .sec-list li { display: flex; gap: 12px; align-items: flex-start; }
+    .sec-list .chk { color: var(--green); font-weight: 800; flex-shrink: 0; }
+    .sec-list b { color: var(--text); }
+    .sec-list span.t { color: var(--subtext); font-size: 0.95rem; }
+    .crypto-card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 26px;
+      font-family: monospace; font-size: 0.85rem;
+    }
+    .crypto-card .row { display: flex; justify-content: space-between; padding: 11px 0; border-bottom: 1px dashed var(--border); }
+    .crypto-card .row:last-child { border-bottom: none; }
+    .crypto-card .k { color: var(--muted); }
+    .crypto-card .v { color: var(--green); }
+
+    /* ---------- Tech stack ---------- */
+    .stack-chips { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
+    .chip {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 999px;
+      padding: 9px 18px; font-size: 0.88rem; color: var(--subtext); font-family: monospace;
+    }
+    .chip b { color: var(--text); }
+
+    /* ---------- CTA band ---------- */
+    .cta-band { text-align: center; }
+    .cta-card {
+      background: linear-gradient(135deg, rgba(137,180,250,0.12), rgba(203,166,247,0.12));
+      border: 1px solid var(--border); border-radius: 20px; padding: 56px 32px;
+    }
+    .cta-card h2 { font-size: clamp(1.6rem, 4vw, 2.2rem); margin-bottom: 12px; }
+    .cta-card p { color: var(--subtext); max-width: 480px; margin: 0 auto 28px; }
+
+    /* ---------- Footer ---------- */
+    footer { border-top: 1px solid var(--border); padding: 36px 0; color: var(--muted); font-size: 0.85rem; }
+    .foot-inner { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; }
+    .foot-inner a { color: var(--subtext); }
+  </style>
+</head>
+<body>
+
+  <!-- NAV -->
+  <header class="nav">
+    <div class="wrap nav-inner">
+      <div class="brand"><span class="logo">K</span> Kino SSH Manager</div>
+      <nav class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#security">Security</a>
+        <a href="#stack">Stack</a>
+        <a class="nav-cta" href="https://github.com/Samarthegde/kino-ssh-manager">GitHub ↗</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div>
+        <span class="badge"><span class="dot"></span> Open source · MIT licensed</span>
+        <h1>Your SSH credentials, <span class="grad">encrypted and local.</span></h1>
+        <p class="lead">
+          A cross-platform SSH credential manager and terminal. Everything lives in a single
+          encrypted vault on your machine — your master password and secrets never leave the
+          device unless <em>you</em> turn on sync.
+        </p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="https://github.com/Samarthegde/kino-ssh-manager/releases">↓ Download</a>
+          <a class="btn btn-ghost" href="https://github.com/Samarthegde/kino-ssh-manager">View on GitHub</a>
+        </div>
+        <div class="hero-meta">
+          <span>🦀 Built with Rust + Tauri</span>
+          <span>🔒 AES-256-GCM vault</span>
+          <span>🖥️ Linux · macOS · Windows</span>
+        </div>
+      </div>
+
+      <div class="terminal">
+        <div class="term-bar">
+          <div class="lights"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+          <div class="title">prod-web-01 — kino</div>
+        </div>
+        <div class="term-body">
+          <div><span class="pr">vault</span> <span class="dim">unlocked</span> <span class="ok">✓</span></div>
+          <div><span class="pr">~ $</span> <span class="cm">connect prod-web-01</span></div>
+          <div class="ot">→ host key verified <span class="ok">(SHA256 trusted)</span></div>
+          <div class="ot">→ tunnel <span class="pth">localhost:5432</span> → db:5432 <span class="ok">up</span></div>
+          <div class="ot">→ snippet <span class="dim">"htop"</span> auto-run</div>
+          <div><span class="pr">root@prod-web-01:~#</span> <span class="cursor"></span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section id="features">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="kicker">Features</span>
+        <h2>Everything you need to manage hosts</h2>
+        <p>A full terminal, file transfer, tunnels, and a credential vault — in one native app.</p>
+      </div>
+      <div class="features">
+        <div class="card"><span class="ic">🔐</span><h3>Encrypted vault</h3><p>Argon2 key derivation + AES-256-GCM. One master password unlocks every host, key, and snippet.</p></div>
+        <div class="card"><span class="ic">🖥️</span><h3>SSH terminal</h3><p>A full xterm.js terminal per host, with scrollback search (Ctrl+F) and adjustable font size.</p></div>
+        <div class="card"><span class="ic">🗝️</span><h3>Flexible auth</h3><p>Password and/or SSH key per host. Import .pem / .key / .ppk, or generate ed25519 keypairs on the spot.</p></div>
+        <div class="card"><span class="ic">🔀</span><h3>Port forwarding</h3><p>Per-host local tunnels you can start and stop independently for each session.</p></div>
+        <div class="card"><span class="ic">📁</span><h3>SFTP browser</h3><p>Browse, upload and download with progress bars, rename, delete, mkdir, and chmod — built in.</p></div>
+        <div class="card"><span class="ic">⚡</span><h3>Snippets</h3><p>A reusable command library. Selected snippets auto-run on connect, configurable per host.</p></div>
+        <div class="card"><span class="ic">☁️</span><h3>Optional cloud sync</h3><p>Sync the <em>encrypted</em> vault to a private GitHub repo, with sha-based conflict detection.</p></div>
+        <div class="card"><span class="ic">🛡️</span><h3>Host key verification</h3><p>TOFU SHA256 fingerprint store. Trust on first use, then refuse on any mismatch — MITM protection.</p></div>
+        <div class="card"><span class="ic">🎨</span><h3>Quality of life</h3><p>Idle auto-lock, host search, per-host accent colors, 6 themes, connection history, and session logging.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SECURITY -->
+  <section id="security" class="security">
+    <div class="wrap sec-grid">
+      <div>
+        <span class="kicker" style="color:var(--green)">Security model</span>
+        <h2 style="font-size:clamp(1.7rem,3.5vw,2.3rem);margin:10px 0 22px;">Secrets that stay yours</h2>
+        <ul class="sec-list">
+          <li><span class="chk">✓</span><span class="t"><b>Local-first.</b> The vault is an AES-256-GCM ciphertext on your disk. Plaintext never touches a server.</span></li>
+          <li><span class="chk">✓</span><span class="t"><b>Argon2-derived key.</b> Your master password plus a random 16-byte salt derive the encryption key — nothing is stored in the clear.</span></li>
+          <li><span class="chk">✓</span><span class="t"><b>Zero-knowledge sync.</b> Cloud sync uploads only the encrypted blob. GitHub never sees your secrets or master password.</span></li>
+          <li><span class="chk">✓</span><span class="t"><b>Memory hygiene.</b> Secrets are zeroized in memory on lock; idle auto-lock and re-keying are built in.</span></li>
+        </ul>
+      </div>
+      <div class="crypto-card">
+        <div class="row"><span class="k">vault.enc</span><span class="v">AES-256-GCM</span></div>
+        <div class="row"><span class="k">key derivation</span><span class="v">Argon2</span></div>
+        <div class="row"><span class="k">salt</span><span class="v">16 bytes, random</span></div>
+        <div class="row"><span class="k">host keys</span><span class="v">TOFU SHA256</span></div>
+        <div class="row"><span class="k">on lock</span><span class="v">zeroized</span></div>
+        <div class="row"><span class="k">sync payload</span><span class="v">ciphertext only</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STACK -->
+  <section id="stack">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="kicker">Tech stack</span>
+        <h2>Native, fast, and small</h2>
+        <p>A Rust backend behind a React UI, packaged as a lightweight Tauri 2 desktop app.</p>
+      </div>
+      <div class="stack-chips">
+        <span class="chip"><b>Rust</b> backend</span>
+        <span class="chip"><b>Tauri 2</b> shell</span>
+        <span class="chip"><b>russh</b> SSH/SFTP</span>
+        <span class="chip"><b>aes-gcm</b> + <b>argon2</b></span>
+        <span class="chip"><b>React 19</b> + TypeScript</span>
+        <span class="chip"><b>Vite</b> + Zustand</span>
+        <span class="chip"><b>xterm.js</b> terminal</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="cta-band">
+    <div class="wrap">
+      <div class="cta-card">
+        <h2>Take your hosts everywhere — securely.</h2>
+        <p>Free and open source under the MIT license. Grab a build or compile it yourself.</p>
+        <div class="cta-row" style="justify-content:center;">
+          <a class="btn btn-primary" href="https://github.com/Samarthegde/kino-ssh-manager/releases">↓ Download a release</a>
+          <a class="btn btn-ghost" href="https://github.com/Samarthegde/kino-ssh-manager">Star on GitHub ★</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer>
+    <div class="wrap foot-inner">
+      <div>© <span id="year"></span> Kino SSH Manager · MIT licensed</div>
+      <div style="display:flex;gap:20px;">
+        <a href="https://github.com/Samarthegde/kino-ssh-manager">GitHub</a>
+        <a href="https://github.com/Samarthegde/kino-ssh-manager/blob/main/SECURITY.md">Security</a>
+        <a href="https://github.com/Samarthegde/kino-ssh-manager/blob/main/CONTRIBUTING.md">Contributing</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>document.getElementById('year').textContent = new Date().getFullYear();</script>
+</body>
+</html>
