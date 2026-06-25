@@ -145,7 +145,18 @@ export function DockerPanel({ sessionId, title, local, onClose }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [logsFor, setLogsFor] = useState<DockerContainer | null>(null);
   const [logsText, setLogsText] = useState("");
+  const [copiedLogs, setCopiedLogs] = useState(false);
   const logsRef = useRef<HTMLPreElement>(null);
+
+  async function copyLogs() {
+    try {
+      await navigator.clipboard.writeText(logsText);
+      setCopiedLogs(true);
+      setTimeout(() => setCopiedLogs(false), 1500);
+    } catch {
+      /* clipboard unavailable — ignore */
+    }
+  }
 
   const loadView = useCallback(
     async (v: View) => {
@@ -420,9 +431,28 @@ export function DockerPanel({ sessionId, title, local, onClose }: Props) {
               <span className="docker-logs-title mono">
                 <span className="metrics-live-dot" /> logs · {logsFor.name || logsFor.id}
               </span>
-              <button className="icon-btn" onClick={() => setLogsFor(null)} title="Stop & close logs">
-                ✕
-              </button>
+              <div className="docker-logs-actions">
+                <button
+                  className="icon-btn"
+                  onClick={copyLogs}
+                  disabled={!logsText}
+                  title="Copy logs to clipboard"
+                >
+                  {copiedLogs ? (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  ) : (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                    </svg>
+                  )}
+                </button>
+                <button className="icon-btn" onClick={() => setLogsFor(null)} title="Stop & close logs">
+                  ✕
+                </button>
+              </div>
             </div>
             <pre ref={logsRef} className="docker-logs-body mono">
               {logsText || "waiting for output…"}

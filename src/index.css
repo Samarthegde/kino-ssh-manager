@@ -2216,6 +2216,7 @@ select:focus,
   justify-content: space-between;
   padding: 8px 0 6px;
 }
+.docker-logs-actions { display: flex; align-items: center; gap: 2px; }
 
 .docker-logs-title {
   font-size: 12px;

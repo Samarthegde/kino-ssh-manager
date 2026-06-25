@@ -4,6 +4,12 @@ All notable changes to Kino SSH Manager are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] - 2026-06-10
+
+### Added
+- **Copy Docker logs** — a one-click button in the container log viewer copies
+  the current log buffer to the clipboard.
+
 ## [0.4.0] - 2026-06-10
 
 ### Added
