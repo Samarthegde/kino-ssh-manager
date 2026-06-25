@@ -10,7 +10,10 @@
   <meta property="og:description" content="Secure, cross-platform SSH credential manager and terminal. Encrypted vault, SFTP, port forwarding, snippets — built with Rust + Tauri." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://samarthegde.github.io/kino-ssh-manager/" />
+  <meta property="og:image" content="https://samarthegde.github.io/kino-ssh-manager/social-preview.png" />
+  <meta name="twitter:card" content="summary_large_image" />
   <meta name="theme-color" content="#0a0b0d" />
+  <link rel="icon" type="image/png" href="favicon.png" />
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -27,9 +30,9 @@
       --text:      #e7e9ec;
       --subtext:   #98a0ac;
       --faint:     #6a7280;
-      --accent:    #4f83f1;
-      --accent-2:  #6ea0ff;
-      --accent-soft: rgba(79,131,241,0.10);
+      --accent:    #ef5d2e;
+      --accent-2:  #ff8159;
+      --accent-soft: rgba(255,110,64,0.11);
       --green:     #4ade80;
       --green-soft: rgba(74,222,128,0.12);
       --maxw:      1120px;
@@ -226,19 +229,10 @@
 </head>
 <body>
 
-  <!-- SVG logo symbol -->
-  <svg width="0" height="0" style="position:absolute"><symbol id="kino" viewBox="0 0 32 32">
-    <rect x="1.5" y="1.5" width="29" height="29" rx="8" fill="none" stroke="url(#kg)" stroke-width="1.6"/>
-    <path d="M11 9.5v13M11 16l7-6.5M11 16l7.5 6.5" stroke="url(#kg)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-    <defs><linearGradient id="kg" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#6ea0ff"/><stop offset="1" stop-color="#4f83f1"/>
-    </linearGradient></defs>
-  </symbol></svg>
-
   <!-- NAV -->
   <header class="nav">
     <div class="wrap nav-inner">
-      <a class="brand" href="#"><svg class="mark"><use href="#kino"/></svg> Kino SSH Manager</a>
+      <a class="brand" href="#"><img class="mark" src="icon.png" alt="" /> Kino SSH Manager</a>
       <nav class="nav-links">
         <a class="lnk" href="#features">Features</a>
         <a class="lnk" href="#security">Security</a>
@@ -426,7 +420,7 @@
   <!-- FOOTER -->
   <footer>
     <div class="wrap foot">
-      <div class="fbrand"><svg class="mark"><use href="#kino"/></svg> Kino SSH Manager · MIT licensed</div>
+      <div class="fbrand"><img class="mark" src="icon.png" alt="" /> Kino SSH Manager · MIT licensed</div>
       <nav>
         <a href="https://github.com/Samarthegde/kino-ssh-manager">GitHub</a>
         <a href="https://github.com/Samarthegde/kino-ssh-manager/blob/main/SECURITY.md">Security</a>
