@@ -4,6 +4,22 @@ All notable changes to Kino SSH Manager are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.2] - 2026-06-29
+
+### Changed
+- **Full-screen Docker panel** — the Docker management modal now opens maximized,
+  so the containers / images / volumes / networks lists use the full window
+  height instead of a fixed-height box.
+- **Full-screen log viewer** — clicking a container's logs now opens a dedicated
+  full-screen modal with larger, more readable text, layered above the Docker
+  panel, instead of the small panel that was docked at the bottom. Live
+  streaming, auto-scroll, and copy-to-clipboard are unchanged. Closing it (✕ or
+  click-away) stops the stream and returns to the Docker panel.
+
+### Removed
+- Dropped the unused `resolve_public_key` helper left over from the `ssh2`
+  backend; `russh` derives the public key itself during key-based auth.
+
 ## [0.4.1] - 2026-06-10
 
 ### Added
