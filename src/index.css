@@ -1904,7 +1904,13 @@ select:focus,
 
 /* ── Docker panel ───────────────────────────────────────────────── */
 .docker-modal {
-  width: 640px;
+  width: 96vw;
+  max-width: none;
+  height: 93vh;
+  max-height: 93vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .docker-tabs {
@@ -1993,7 +1999,8 @@ select:focus,
 }
 
 .docker-list {
-  max-height: 56vh;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   padding: 10px 14px;
   display: flex;
@@ -2205,34 +2212,38 @@ select:focus,
   padding: 2px 7px;
 }
 
-.docker-logs {
-  border-top: 1px solid var(--muted);
-  margin: 0 16px 12px;
+/* Logs open in their own full-screen modal layered above the Docker modal. */
+.docker-logs-overlay { z-index: 110; }
+
+.docker-logs-modal {
+  width: 96vw;
+  max-width: none;
+  height: 93vh;
+  max-height: 93vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-.docker-logs-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 0 6px;
-}
 .docker-logs-actions { display: flex; align-items: center; gap: 2px; }
 
 .docker-logs-title {
-  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
   color: var(--subtext);
 }
 
 .docker-logs-body {
+  flex: 1 1 auto;
   margin: 0;
-  max-height: 240px;
+  min-height: 0;
   overflow: auto;
-  font-size: 11px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.6;
   background: var(--bg);
-  border: 1px solid var(--muted);
-  border-radius: var(--radius);
-  padding: 10px;
+  padding: 14px 18px;
   white-space: pre-wrap;
   word-break: break-word;
 }

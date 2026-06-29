@@ -146,27 +146,6 @@ pub fn save_vault(hosts: &[Host], key: &[u8; 32], salt: &[u8; 16]) -> Result<(),
     save_encrypted(&vault_path(), &hosts, key, salt)
 }
 
-/// The OpenSSH public key to hand to `userauth_pubkey_memory`, if we can obtain
-/// one. Prefer a stored public key; otherwise derive it from the private key.
-///
-/// libssh2 can fail to derive the public key from an in-memory OpenSSH-format
-/// private key (notably ed25519) on some backends — passing the public key
-/// explicitly avoids that. The OpenSSH private-key format embeds the public key
-/// in the clear, so derivation works even for encrypted keys without the
-/// passphrase. Returns `None` for formats we can't parse (e.g. legacy RSA PEM),
-/// in which case the caller falls back to letting libssh2 derive it.
-pub fn resolve_public_key(host: &Host) -> Option<String> {
-    if let Some(stored) = host.public_key.as_deref() {
-        let trimmed = stored.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_string());
-        }
-    }
-    let private = host.private_key.as_deref()?;
-    let parsed = ssh_key::PrivateKey::from_openssh(private).ok()?;
-    parsed.public_key().to_openssh().ok()
-}
-
 /// Decrypted hosts plus the derived key and salt used to encrypt them.
 pub type VaultData = (Vec<Host>, [u8; 32], [u8; 16]);
 
@@ -297,26 +276,5 @@ mod tests {
         assert!(h.color.is_none());
         // Fields added later must default cleanly so existing vaults keep loading.
         assert!(h.notes.is_none());
-    }
-
-    #[test]
-    fn resolve_public_key_derives_from_private_when_not_stored() {
-        let kp = crate::keygen::generate_ed25519().unwrap();
-        let mut h = sample_hosts().remove(0);
-        h.private_key = Some(kp.private_key);
-        h.public_key = None;
-        let derived = resolve_public_key(&h).expect("should derive a public key");
-        assert!(derived.starts_with("ssh-ed25519 "));
-    }
-
-    #[test]
-    fn resolve_public_key_prefers_stored() {
-        let mut h = sample_hosts().remove(0);
-        h.public_key = Some("ssh-ed25519 STORED comment".into());
-        h.private_key = None;
-        assert_eq!(
-            resolve_public_key(&h).as_deref(),
-            Some("ssh-ed25519 STORED comment")
-        );
     }
 }
