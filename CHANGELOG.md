@@ -4,6 +4,22 @@ All notable changes to Kino SSH Manager are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.3] - 2026-06-30
+
+### Added
+- **Session recording & replay** — capture any SSH or local-shell session to an
+  [asciicast](https://docs.asciinema.org/) (`.cast`) file:
+  - A **Record / Stop** toggle in the terminal toolbar starts and stops capture
+    for the active session, with a live "recording" indicator.
+  - Recordings are saved to `~/Videos/Kino Recordings`.
+  - A **Recordings** manager (Settings → Recordings) lists every recording with
+    its date and size, and plays them back in an embedded asciinema player or
+    deletes them.
+- **Remote file editor** — open a text file from the SFTP browser to edit it in
+  a built-in Monaco (VS Code) editor and save it straight back over SFTP, with
+  no download/re-upload round trip. Syntax highlighting is picked from the file
+  extension and the editor follows the app's active theme.
+
 ## [0.4.2] - 2026-06-29
 
 ### Changed
