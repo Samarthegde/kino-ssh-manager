@@ -211,6 +211,8 @@ interface VaultStore {
   sftpList: (sessionId: string, path: string) => Promise<SftpEntry[]>;
   sftpDownload: (sessionId: string, remote: string, local: string) => Promise<void>;
   sftpUpload: (sessionId: string, local: string, remote: string) => Promise<void>;
+  sftpReadFile: (sessionId: string, path: string) => Promise<string>;
+  sftpWriteFile: (sessionId: string, path: string, content: string) => Promise<void>;
   sftpRename: (sessionId: string, from: string, to: string) => Promise<void>;
   sftpDelete: (sessionId: string, path: string, isDir: boolean) => Promise<void>;
   sftpMkdir: (sessionId: string, path: string) => Promise<void>;
@@ -704,6 +706,10 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
     invoke<void>("sftp_download", { sessionId, remote, local }),
   sftpUpload: (sessionId, local, remote) =>
     invoke<void>("sftp_upload", { sessionId, local, remote }),
+  sftpReadFile: (sessionId, path) =>
+    invoke<string>("sftp_read_file", { sessionId, path }),
+  sftpWriteFile: (sessionId, path, content) =>
+    invoke<void>("sftp_write_file", { sessionId, path, content }),
   sftpRename: (sessionId, from, to) => invoke<void>("sftp_rename", { sessionId, from, to }),
   sftpDelete: (sessionId, path, isDir) =>
     invoke<void>("sftp_delete", { sessionId, path, isDir }),

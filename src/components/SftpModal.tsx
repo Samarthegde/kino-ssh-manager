@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { open as openDialog, save as saveDialog, confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { Host, SftpEntry, useVaultStore } from "../store";
+import { SftpEditorModal } from "./SftpEditorModal";
 
 interface Props {
   sessionId: string;
@@ -46,7 +47,7 @@ function formatSize(bytes: number): string {
 }
 
 export function SftpModal({ sessionId, host, onClose }: Props) {
-  const { sftpOpen, sftpList, sftpDownload, sftpUpload, sftpRename, sftpDelete, sftpMkdir, sftpChmod, sftpClose } =
+  const { sftpOpen, sftpList, sftpDownload, sftpUpload, sftpReadFile, sftpRename, sftpDelete, sftpMkdir, sftpChmod, sftpClose } =
     useVaultStore();
   const [path, setPath] = useState("");
   const [entries, setEntries] = useState<SftpEntry[]>([]);
@@ -63,6 +64,7 @@ export function SftpModal({ sessionId, host, onClose }: Props) {
   const [chmodPath, setChmodPath] = useState<string | null>(null);
   const [chmodValue, setChmodValue] = useState("");
   const [progress, setProgress] = useState<TransferProgress | null>(null);
+  const [editingFile, setEditingFile] = useState<{path: string, content: string} | null>(null);
 
   const navigate = useCallback(
     async (target: string) => {
@@ -157,6 +159,23 @@ export function SftpModal({ sessionId, host, onClose }: Props) {
     } finally {
       setBusy(null);
       setProgress(null);
+    }
+  }
+
+  async function handleEdit(entry: SftpEntry) {
+    if (entry.size > 10 * 1024 * 1024) {
+      setError("File is too large to edit in-app (> 10MB).");
+      return;
+    }
+    setBusy(entry.path);
+    setError("");
+    try {
+      const content = await sftpReadFile(sessionId, entry.path);
+      setEditingFile({ path: entry.path, content });
+    } catch (e: any) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -398,9 +417,14 @@ export function SftpModal({ sessionId, host, onClose }: Props) {
                     ) : (
                       <>
                         {!entry.is_dir && (
-                          <button className="btn btn-sm" onClick={() => handleDownload(entry)} disabled={rowBusy}>
-                            {rowBusy ? "…" : "Download"}
-                          </button>
+                          <>
+                            <button className="btn btn-sm" onClick={() => handleDownload(entry)} disabled={rowBusy}>
+                              {rowBusy ? "…" : "Download"}
+                            </button>
+                            <button className="btn btn-sm" onClick={() => handleEdit(entry)} disabled={rowBusy}>
+                              Edit
+                            </button>
+                          </>
                         )}
                         <button
                           className="btn btn-sm"
@@ -425,6 +449,19 @@ export function SftpModal({ sessionId, host, onClose }: Props) {
           <button className="btn btn-primary" onClick={handleClose}>Close</button>
         </div>
       </div>
+      
+      {editingFile && (
+        <SftpEditorModal
+          sessionId={sessionId}
+          path={editingFile.path}
+          initialContent={editingFile.content}
+          onClose={() => setEditingFile(null)}
+          onSaved={() => {
+            setEditingFile(null);
+            navigate(path);
+          }}
+        />
+      )}
     </div>
   );
 }

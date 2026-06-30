@@ -61,6 +61,15 @@ pub enum SftpRequest {
         mode: u32,
         resp: oneshot::Sender<Result<(), String>>,
     },
+    ReadFile {
+        path: String,
+        resp: oneshot::Sender<Result<String, String>>,
+    },
+    WriteFile {
+        path: String,
+        content: String,
+        resp: oneshot::Sender<Result<(), String>>,
+    },
     Close,
 }
 
@@ -137,6 +146,12 @@ pub async fn open(
                             .await
                             .map_err(|e| e.to_string()),
                     );
+                }
+                SftpRequest::ReadFile { path, resp } => {
+                    let _ = resp.send(do_read_file(&sftp, &path).await);
+                }
+                SftpRequest::WriteFile { path, content, resp } => {
+                    let _ = resp.send(do_write_file(&sftp, &path, &content).await);
                 }
                 SftpRequest::Close => {
                     break;
@@ -379,4 +394,38 @@ fn remove_dir_recursive<'a>(
         }
         sftp.remove_dir(path).await.map_err(|e| e.to_string())
     })
+}
+
+async fn do_read_file(sftp: &SftpSession, path: &str) -> Result<String, String> {
+    let mut file = sftp
+        .open(path)
+        .await
+        .map_err(|e| format!("Cannot open file: {}", e))?;
+    
+    let mut data = Vec::new();
+    let mut buf = [0u8; 65536];
+    loop {
+        let n = file.read(&mut buf).await.map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        data.extend_from_slice(&buf[..n]);
+    }
+    
+    String::from_utf8(data).map_err(|e| format!("File contains invalid UTF-8: {}", e))
+}
+
+async fn do_write_file(sftp: &SftpSession, path: &str, content: &str) -> Result<(), String> {
+    use russh_sftp::protocol::OpenFlags;
+    let mut file = sftp
+        .open_with_flags(
+            path,
+            OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::TRUNCATE,
+        )
+        .await
+        .map_err(|e| format!("Cannot open file for writing: {}", e))?;
+        
+    let bytes = content.as_bytes();
+    file.write_all(bytes).await.map_err(|e| format!("Cannot write to file: {}", e))?;
+    Ok(())
 }

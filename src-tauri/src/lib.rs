@@ -994,6 +994,35 @@ async fn sftp_chmod(
 }
 
 #[tauri::command]
+async fn sftp_read_file(
+    state: State<'_, AppState>,
+    session_id: String,
+    path: String,
+) -> Result<String, String> {
+    let tx = sftp_tx(&state, &session_id)?;
+    let (resp, rx) = tokio::sync::oneshot::channel();
+    tx.send(sftp_session::SftpRequest::ReadFile { path, resp })
+        .await
+        .map_err(|_| "SFTP session closed")?;
+    rx.await.map_err(|_| "SFTP worker did not respond")?
+}
+
+#[tauri::command]
+async fn sftp_write_file(
+    state: State<'_, AppState>,
+    session_id: String,
+    path: String,
+    content: String,
+) -> Result<(), String> {
+    let tx = sftp_tx(&state, &session_id)?;
+    let (resp, rx) = tokio::sync::oneshot::channel();
+    tx.send(sftp_session::SftpRequest::WriteFile { path, content, resp })
+        .await
+        .map_err(|_| "SFTP session closed")?;
+    rx.await.map_err(|_| "SFTP worker did not respond")?
+}
+
+#[tauri::command]
 async fn sftp_close(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
     let tx = state
         .sftp_sessions
@@ -1162,6 +1191,8 @@ pub fn run() {
             sftp_delete,
             sftp_mkdir,
             sftp_chmod,
+            sftp_read_file,
+            sftp_write_file,
             sftp_close,
             docker::docker_ps,
             docker::docker_images,
