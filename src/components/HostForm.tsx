@@ -147,13 +147,13 @@ export function HostForm({ host, onClose }: Props) {
 
   return (
     <div className="modal-overlay">
-      <div className="modal modal-resizable">
+      <div className="modal" style={{ width: "96vw", maxWidth: "none", height: "93vh", maxHeight: "93vh", display: "flex", flexDirection: "column" }}>
         <div className="modal-header">
           <h2>{host ? "Edit Host" : "Add Host"}</h2>
           <button className="icon-btn" onClick={onClose}>✕</button>
         </div>
 
-        <form onSubmit={handleSubmit} className="host-form">
+        <form onSubmit={handleSubmit} className="host-form" style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}>
           {/* Basic info */}
           <div className="form-row">
             <label>Display Name</label>
@@ -552,7 +552,7 @@ export function HostForm({ host, onClose }: Props) {
 
           {error && <p className="form-error">{error}</p>}
 
-          <div className="modal-footer">
+          <div className="modal-footer" style={{ marginTop: "auto", paddingTop: "16px" }}>
             <button type="button" className="btn" onClick={onClose}>Cancel</button>
             <button type="submit" className="btn btn-primary" disabled={saving}>
               {saving ? "Saving…" : "Save"}
