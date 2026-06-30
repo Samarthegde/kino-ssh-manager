@@ -1,8 +1,8 @@
+use serde_json::json;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 use std::time::Instant;
-use serde_json::json;
 
 pub struct Recorder {
     file: File,
@@ -55,15 +55,11 @@ impl Recorder {
         let now = Instant::now();
         let delta = now.duration_since(self.last_event_time).as_secs_f64();
         self.last_event_time = now;
-        
+
         let data_str = String::from_utf8_lossy(data);
-        
-        let event = json!([
-            delta,
-            "o",
-            data_str
-        ]);
-        
+
+        let event = json!([delta, "o", data_str]);
+
         writeln!(self.file, "{}", event).map_err(|e| e.to_string())?;
         Ok(())
     }

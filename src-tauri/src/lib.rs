@@ -1017,9 +1017,13 @@ async fn sftp_write_file(
 ) -> Result<(), String> {
     let tx = sftp_tx(&state, &session_id)?;
     let (resp, rx) = tokio::sync::oneshot::channel();
-    tx.send(sftp_session::SftpRequest::WriteFile { path, content, resp })
-        .await
-        .map_err(|_| "SFTP session closed")?;
+    tx.send(sftp_session::SftpRequest::WriteFile {
+        path,
+        content,
+        resp,
+    })
+    .await
+    .map_err(|_| "SFTP session closed")?;
     rx.await.map_err(|_| "SFTP worker did not respond")?
 }
 
@@ -1045,39 +1049,54 @@ async fn start_recording(
     session_id: String,
     filename: String,
 ) -> Result<(), String> {
-    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_else(|_| ".".to_string());
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
     let path = std::path::PathBuf::from(home)
         .join("Videos")
         .join("Kino Recordings")
         .join(filename);
-    
+
     let path_str = path.to_string_lossy().to_string();
 
     if let Some(session) = state.local_sessions.lock().unwrap().get(&session_id) {
-        let _ = session.cmd_tx.send(local_session::TermCommand::StartRecording(path_str));
+        let _ = session
+            .cmd_tx
+            .send(local_session::TermCommand::StartRecording(path_str));
         return Ok(());
     }
 
-    let tx = state.sessions.lock().unwrap().get(&session_id).map(|s| s.cmd_tx.clone());
+    let tx = state
+        .sessions
+        .lock()
+        .unwrap()
+        .get(&session_id)
+        .map(|s| s.cmd_tx.clone());
     if let Some(tx) = tx {
-        let _ = tx.send(ssh_session::TermCommand::StartRecording(path_str)).await;
+        let _ = tx
+            .send(ssh_session::TermCommand::StartRecording(path_str))
+            .await;
         return Ok(());
     }
-    
+
     Err("Session not found".to_string())
 }
 
 #[tauri::command]
-async fn stop_recording(
-    state: State<'_, AppState>,
-    session_id: String,
-) -> Result<(), String> {
+async fn stop_recording(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
     if let Some(session) = state.local_sessions.lock().unwrap().get(&session_id) {
-        let _ = session.cmd_tx.send(local_session::TermCommand::StopRecording);
+        let _ = session
+            .cmd_tx
+            .send(local_session::TermCommand::StopRecording);
         return Ok(());
     }
 
-    let tx = state.sessions.lock().unwrap().get(&session_id).map(|s| s.cmd_tx.clone());
+    let tx = state
+        .sessions
+        .lock()
+        .unwrap()
+        .get(&session_id)
+        .map(|s| s.cmd_tx.clone());
     if let Some(tx) = tx {
         let _ = tx.send(ssh_session::TermCommand::StopRecording).await;
         return Ok(());
@@ -1096,11 +1115,13 @@ struct RecordingInfo {
 
 #[tauri::command]
 async fn list_recordings() -> Result<Vec<RecordingInfo>, String> {
-    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_else(|_| ".".to_string());
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
     let dir = std::path::PathBuf::from(home)
         .join("Videos")
         .join("Kino Recordings");
-    
+
     if !dir.exists() {
         return Ok(vec![]);
     }
@@ -1109,10 +1130,17 @@ async fn list_recordings() -> Result<Vec<RecordingInfo>, String> {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             if let Ok(meta) = entry.metadata() {
-                if meta.is_file() && entry.path().extension().and_then(|e| e.to_str()) == Some("cast") {
-                    let created = meta.created()
+                if meta.is_file()
+                    && entry.path().extension().and_then(|e| e.to_str()) == Some("cast")
+                {
+                    let created = meta
+                        .created()
                         .or_else(|_| meta.modified())
-                        .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs())
+                        .map(|t| {
+                            t.duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs()
+                        })
                         .unwrap_or(0);
                     result.push(RecordingInfo {
                         name: entry.file_name().to_string_lossy().to_string(),
@@ -1123,14 +1151,16 @@ async fn list_recordings() -> Result<Vec<RecordingInfo>, String> {
             }
         }
     }
-    
-    result.sort_by(|a, b| b.created.cmp(&a.created));
+
+    result.sort_by_key(|r| std::cmp::Reverse(r.created));
     Ok(result)
 }
 
 #[tauri::command]
 async fn read_recording(filename: String) -> Result<String, String> {
-    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_else(|_| ".".to_string());
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
     let path = std::path::PathBuf::from(home)
         .join("Videos")
         .join("Kino Recordings")
@@ -1140,7 +1170,9 @@ async fn read_recording(filename: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn delete_recording(filename: String) -> Result<(), String> {
-    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_else(|_| ".".to_string());
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
     let path = std::path::PathBuf::from(home)
         .join("Videos")
         .join("Kino Recordings")

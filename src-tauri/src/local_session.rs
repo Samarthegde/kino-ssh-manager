@@ -118,7 +118,9 @@ pub fn connect_command(
                         .ok();
                 }
                 TermCommand::StartRecording(path) => {
-                    if let Ok(rec) = crate::recorder::Recorder::new(std::path::Path::new(&path), 80, 24) {
+                    if let Ok(rec) =
+                        crate::recorder::Recorder::new(std::path::Path::new(&path), 80, 24)
+                    {
                         if let Ok(mut lock) = recorder.lock() {
                             *lock = Some(rec);
                         }
