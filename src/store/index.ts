@@ -104,6 +104,12 @@ export interface MetricsSnapshot {
   disks: DiskInfo[] | null;
 }
 
+export interface RecordingInfo {
+  name: string;
+  size: number;
+  created: number;
+}
+
 export type HostKeyVerdict =
   | { status: "trusted" }
   | { status: "new"; fingerprint: string }
@@ -235,6 +241,14 @@ interface VaultStore {
   verifyHostKey: (host: Host) => Promise<HostKeyVerdict>;
   trustHostKey: (host: Host, fingerprint: string) => Promise<void>;
   forgetHostKey: (host: Host) => Promise<void>;
+
+  recordingSessions: Set<string>;
+  startRecording: (sessionId: string, filename: string) => Promise<void>;
+  stopRecording: (sessionId: string) => Promise<void>;
+  listRecordings: () => Promise<RecordingInfo[]>;
+  readRecording: (filename: string) => Promise<string>;
+  deleteRecording: (filename: string) => Promise<void>;
+  setRecordingState: (sessionId: string, isRecording: boolean) => void;
 }
 
 const AUTO_SYNC_KEY = "ssh-mgr:autosync";
@@ -260,6 +274,7 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
   theme: localStorage.getItem("ssh-mgr:theme") ?? "catppuccin-mocha",
   idleLockMinutes: Number(localStorage.getItem("ssh-mgr:idle-lock") ?? "0"),
   activeForwards: new Set<string>(),
+  recordingSessions: new Set<string>(),
   updateInfo: null,
 
   setTheme: (id) => {
@@ -736,4 +751,28 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
   verifyHostKey: (host) => invoke<HostKeyVerdict>("verify_host_key", { host }),
   trustHostKey: (host, fingerprint) => invoke<void>("trust_host_key", { host, fingerprint }),
   forgetHostKey: (host) => invoke<void>("forget_host_key", { host }),
+
+  startRecording: async (sessionId, filename) => {
+    await invoke("start_recording", { sessionId, filename });
+  },
+  stopRecording: async (sessionId) => {
+    await invoke("stop_recording", { sessionId });
+  },
+  listRecordings: async () => {
+    return await invoke("list_recordings");
+  },
+  readRecording: async (filename) => {
+    return await invoke("read_recording", { filename });
+  },
+  deleteRecording: async (filename) => {
+    await invoke("delete_recording", { filename });
+  },
+  setRecordingState: (sessionId, isRecording) => {
+    set((state) => {
+      const next = new Set(state.recordingSessions);
+      if (isRecording) next.add(sessionId);
+      else next.delete(sessionId);
+      return { recordingSessions: next };
+    });
+  },
 }));

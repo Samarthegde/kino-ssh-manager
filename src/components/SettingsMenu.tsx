@@ -7,6 +7,7 @@ import { SyncModal } from "./SyncModal";
 import { SnippetsModal } from "./SnippetsModal";
 import { ChangePasswordModal } from "./ChangePasswordModal";
 import { AboutModal } from "./AboutModal";
+import { RecordingsModal } from "./RecordingsModal";
 
 interface Props {
   onLock: () => void;
@@ -16,6 +17,7 @@ export function SettingsMenu({ onLock }: Props) {
   const { theme: themeId, setTheme, idleLockMinutes, setIdleLockMinutes, updateInfo } = useVaultStore();
   const [open, setOpen] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [showRecordings, setShowRecordings] = useState(false);
   const [showSync, setShowSync] = useState(false);
   const [showSnippets, setShowSnippets] = useState(false);
   const [showChangePw, setShowChangePw] = useState(false);
@@ -119,6 +121,14 @@ export function SettingsMenu({ onLock }: Props) {
             View History
           </button>
 
+          <button className="settings-action" onClick={() => { setOpen(false); setShowRecordings(true); }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polygon points="23 7 16 12 23 17 23 7" />
+              <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+            </svg>
+            Recordings
+          </button>
+
           <button className="settings-action" onClick={() => { setOpen(false); setShowSnippets(true); }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <polyline points="16 18 22 12 16 6" />
@@ -166,6 +176,7 @@ export function SettingsMenu({ onLock }: Props) {
       )}
 
       {showHistory && <HistoryModal onClose={() => setShowHistory(false)} />}
+      {showRecordings && <RecordingsModal onClose={() => setShowRecordings(false)} />}
       {showSync && <SyncModal onClose={() => setShowSync(false)} />}
       {showSnippets && <SnippetsModal onClose={() => setShowSnippets(false)} />}
       {showChangePw && <ChangePasswordModal onClose={() => setShowChangePw(false)} />}

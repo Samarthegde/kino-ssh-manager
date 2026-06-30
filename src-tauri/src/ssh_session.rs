@@ -17,6 +17,8 @@ use crate::vault::Host;
 pub enum TermCommand {
     Data(Vec<u8>),
     Resize(u32, u32),
+    StartRecording(String),
+    StopRecording,
     Close,
 }
 
@@ -229,7 +231,6 @@ fn spawn_relay(
     on_connect: Vec<String>,
 ) {
     tokio::spawn(async move {
-        // Auto-run on-connect snippets (empty for container shells).
         if !on_connect.is_empty() {
             tokio::time::sleep(Duration::from_millis(400)).await;
             for snippet in &on_connect {
@@ -243,6 +244,8 @@ fn spawn_relay(
             }
         }
 
+        let mut recorder: Option<crate::recorder::Recorder> = None;
+
         loop {
             tokio::select! {
                 cmd = cmd_rx.recv() => {
@@ -252,6 +255,14 @@ fn spawn_relay(
                         }
                         Some(TermCommand::Resize(cols, rows)) => {
                             let _ = channel.window_change(cols, rows, 0, 0).await;
+                        }
+                        Some(TermCommand::StartRecording(path)) => {
+                            if let Ok(rec) = crate::recorder::Recorder::new(std::path::Path::new(&path), 80, 24) {
+                                recorder = Some(rec);
+                            }
+                        }
+                        Some(TermCommand::StopRecording) => {
+                            recorder = None;
                         }
                         Some(TermCommand::Close) | None => {
                             let _ = channel.close().await;
@@ -263,7 +274,10 @@ fn spawn_relay(
                 }
                 msg = channel.wait() => {
                     match msg {
-                        Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
+                        Some(ChannelMsg::Data { ref data }) | Some(ChannelMsg::ExtendedData { ref data, .. }) => {
+                            if let Some(ref mut rec) = recorder {
+                                let _ = rec.record_output(data.as_ref());
+                            }
                             app_handle.emit(&format!("ssh-data-{}", session_id), data.as_ref()).ok();
                         }
                         Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => {

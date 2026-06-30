@@ -30,6 +30,10 @@ function App() {
     theme,
     idleLockMinutes,
     checkForUpdate,
+    recordingSessions,
+    startRecording,
+    stopRecording,
+    setRecordingState,
   } = useVaultStore();
   const [sftpTabId, setSftpTabId] = useState<string | null>(null);
   const [dockerTabId, setDockerTabId] = useState<string | null>(null);
@@ -248,6 +252,44 @@ function App() {
                       )}
                       {activeTab?.kind === "ssh" && activeTab.host && (
                         <ForwardingPanel sessionId={activeTab.sessionId} host={activeTab.host} />
+                      )}
+                      
+                      {activeTab && activeTab.connected && (
+                        <button
+                          className={`fwd-trigger ${recordingSessions.has(activeTab.sessionId) ? "active" : ""}`}
+                          onClick={async () => {
+                            const isRecording = recordingSessions.has(activeTab.sessionId);
+                            if (isRecording) {
+                              await stopRecording(activeTab.sessionId);
+                              setRecordingState(activeTab.sessionId, false);
+                            } else {
+                              const hostName = activeTab.host?.name ?? "local";
+                              const timeStr = new Date().toISOString().replace(/[:.]/g, "-");
+                              const filename = `${hostName}-${timeStr}.cast`;
+                              try {
+                                await startRecording(activeTab.sessionId, filename);
+                                setRecordingState(activeTab.sessionId, true);
+                              } catch (e) {
+                                alert(`Failed to start recording: ${e}`);
+                              }
+                            }
+                          }}
+                          title={recordingSessions.has(activeTab.sessionId) ? "Stop recording" : "Record session (Asciinema)"}
+                        >
+                          {recordingSessions.has(activeTab.sessionId) ? (
+                            <span style={{ color: "var(--red)", display: "flex", alignItems: "center", gap: 4 }}>
+                              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--red)", boxShadow: "0 0 4px var(--red)" }}></span>
+                              Recording
+                            </span>
+                          ) : (
+                            <>
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <circle cx="12" cy="12" r="6" />
+                              </svg>
+                              Record
+                            </>
+                          )}
+                        </button>
                       )}
                       
                       <button className="fwd-trigger" onClick={() => splitPane(paneId)} title="Split Right">

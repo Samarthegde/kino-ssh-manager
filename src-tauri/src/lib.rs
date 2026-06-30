@@ -5,6 +5,7 @@ mod host_keys;
 mod keygen;
 mod local_session;
 mod metrics;
+mod recorder;
 mod sftp_session;
 mod snippets;
 mod ssh_session;
@@ -1036,6 +1037,117 @@ async fn sftp_close(state: State<'_, AppState>, session_id: String) -> Result<()
     Ok(())
 }
 
+// ── Recording commands ─────────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn start_recording(
+    state: State<'_, AppState>,
+    session_id: String,
+    filename: String,
+) -> Result<(), String> {
+    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_else(|_| ".".to_string());
+    let path = std::path::PathBuf::from(home)
+        .join("Videos")
+        .join("Kino Recordings")
+        .join(filename);
+    
+    let path_str = path.to_string_lossy().to_string();
+
+    if let Some(session) = state.local_sessions.lock().unwrap().get(&session_id) {
+        let _ = session.cmd_tx.send(local_session::TermCommand::StartRecording(path_str));
+        return Ok(());
+    }
+
+    let tx = state.sessions.lock().unwrap().get(&session_id).map(|s| s.cmd_tx.clone());
+    if let Some(tx) = tx {
+        let _ = tx.send(ssh_session::TermCommand::StartRecording(path_str)).await;
+        return Ok(());
+    }
+    
+    Err("Session not found".to_string())
+}
+
+#[tauri::command]
+async fn stop_recording(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<(), String> {
+    if let Some(session) = state.local_sessions.lock().unwrap().get(&session_id) {
+        let _ = session.cmd_tx.send(local_session::TermCommand::StopRecording);
+        return Ok(());
+    }
+
+    let tx = state.sessions.lock().unwrap().get(&session_id).map(|s| s.cmd_tx.clone());
+    if let Some(tx) = tx {
+        let _ = tx.send(ssh_session::TermCommand::StopRecording).await;
+        return Ok(());
+    }
+
+    Err("Session not found".to_string())
+}
+
+use serde::Serialize;
+#[derive(Serialize)]
+struct RecordingInfo {
+    name: String,
+    size: u64,
+    created: u64,
+}
+
+#[tauri::command]
+async fn list_recordings() -> Result<Vec<RecordingInfo>, String> {
+    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_else(|_| ".".to_string());
+    let dir = std::path::PathBuf::from(home)
+        .join("Videos")
+        .join("Kino Recordings");
+    
+    if !dir.exists() {
+        return Ok(vec![]);
+    }
+
+    let mut result = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                if meta.is_file() && entry.path().extension().and_then(|e| e.to_str()) == Some("cast") {
+                    let created = meta.created()
+                        .or_else(|_| meta.modified())
+                        .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs())
+                        .unwrap_or(0);
+                    result.push(RecordingInfo {
+                        name: entry.file_name().to_string_lossy().to_string(),
+                        size: meta.len(),
+                        created,
+                    });
+                }
+            }
+        }
+    }
+    
+    result.sort_by(|a, b| b.created.cmp(&a.created));
+    Ok(result)
+}
+
+#[tauri::command]
+async fn read_recording(filename: String) -> Result<String, String> {
+    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_else(|_| ".".to_string());
+    let path = std::path::PathBuf::from(home)
+        .join("Videos")
+        .join("Kino Recordings")
+        .join(filename);
+    std::fs::read_to_string(path).map_err(|e| format!("Failed to read recording: {}", e))
+}
+
+#[tauri::command]
+async fn delete_recording(filename: String) -> Result<(), String> {
+    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_else(|_| ".".to_string());
+    let path = std::path::PathBuf::from(home)
+        .join("Videos")
+        .join("Kino Recordings")
+        .join(filename);
+    std::fs::remove_file(path).map_err(|e| format!("Failed to delete recording: {}", e))
+}
+
 // ── Port forwarding commands ──────────────────────────────────────────────────
 
 #[tauri::command]
@@ -1206,6 +1318,11 @@ pub fn run() {
             metrics::metrics_start,
             metrics::metrics_stop,
             update::check_for_update,
+            start_recording,
+            stop_recording,
+            list_recordings,
+            read_recording,
+            delete_recording,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

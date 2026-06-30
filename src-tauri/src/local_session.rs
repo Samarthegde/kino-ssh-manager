@@ -8,6 +8,8 @@ use tauri::{AppHandle, Emitter};
 pub enum TermCommand {
     Data(Vec<u8>),
     Resize(u16, u16),
+    StartRecording(String),
+    StopRecording,
     Close,
 }
 
@@ -67,6 +69,9 @@ pub fn connect_command(
     let sid_read = session_id.clone();
     let sessions_read = sessions.clone();
 
+    let recorder: Arc<Mutex<Option<crate::recorder::Recorder>>> = Arc::new(Mutex::new(None));
+    let recorder_read = recorder.clone();
+
     // Reader thread
     thread::spawn(move || {
         let mut buf = [0u8; 8192];
@@ -74,6 +79,11 @@ pub fn connect_command(
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
+                    if let Ok(mut lock) = recorder_read.lock() {
+                        if let Some(ref mut rec) = *lock {
+                            let _ = rec.record_output(&buf[..n]);
+                        }
+                    }
                     app_handle_read
                         .emit(&format!("local-data-{}", sid_read), buf[..n].to_vec())
                         .ok();
@@ -106,6 +116,18 @@ pub fn connect_command(
                             pixel_height: 0,
                         })
                         .ok();
+                }
+                TermCommand::StartRecording(path) => {
+                    if let Ok(rec) = crate::recorder::Recorder::new(std::path::Path::new(&path), 80, 24) {
+                        if let Ok(mut lock) = recorder.lock() {
+                            *lock = Some(rec);
+                        }
+                    }
+                }
+                TermCommand::StopRecording => {
+                    if let Ok(mut lock) = recorder.lock() {
+                        *lock = None;
+                    }
                 }
                 TermCommand::Close => {
                     child.kill().ok();
