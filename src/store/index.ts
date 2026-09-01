@@ -59,6 +59,16 @@ export interface Host {
   jump?: Host | null;
   /** Unix seconds when this key was generated or last rotated; null if unknown. */
   key_added_at?: number | null;
+  /** Topic URL for ntfy.sh (or similar) to receive heartbeat failure notifications. */
+  ntfy_topic?: string | null;
+}
+
+export interface Note {
+  id: string;
+  title: string;
+  body: string;
+  /** Unix seconds; stamped by the backend on every save. */
+  updated_at: number;
 }
 
 export interface Snippet {
@@ -146,7 +156,7 @@ export interface ProcessInfo {
   command: string;
 }
 
-export type KillSignal = "TERM" | "KILL" | "HUP" | "INT";
+export type KillSignal = "TERM" | "KILL" | "HUP" | "INT" | "STOP" | "CONT";
 
 export interface CronJob {
   /** Index into `CronTable.lines`; edits target this one line. */
@@ -385,6 +395,7 @@ interface VaultStore {
   terminalFont: string;
   /** Hex background override for terminals; "" follows the active theme. */
   terminalBackground: string;
+  imageExport: ImageExportOptions;
   /** Interface font family (the app chrome, not the terminal). */
   appFont: string;
   /** Colour recognised patterns in terminal output (see src/highlight.ts). */
@@ -418,6 +429,7 @@ interface VaultStore {
   setScrollbackLines: (lines: number) => void;
   setTerminalFont: (family: string) => void;
   setTerminalBackground: (hex: string) => void;
+  setImageExport: (opts: Partial<ImageExportOptions>) => void;
   setAppFont: (family: string) => void;
   setSyntaxHighlight: (on: boolean) => void;
   setLiteMode: (on: boolean) => void;
@@ -500,6 +512,15 @@ interface VaultStore {
   profileIsEncrypted: (path: string) => Promise<boolean>;
   importHostEncrypted: (path: string, password: string) => Promise<Host>;
   getHistory: () => Promise<HistoryEvent[]>;
+  /** Fetch from the host, merge into the stored archive, return the merged list. */
+  fetchShellHistory: (sessionId: string, hostId: string) => Promise<string[]>;
+  /** What's archived for a host, without contacting it. */
+  getShellHistory: (hostId: string) => Promise<string[]>;
+  clearShellHistory: (hostId: string) => Promise<void>;
+  notes: Note[];
+  refreshNotes: () => Promise<void>;
+  saveNote: (note: Note) => Promise<Note>;
+  deleteNote: (id: string) => Promise<void>;
   refreshSnippets: () => Promise<void>;
   saveSnippet: (snippet: Snippet) => Promise<Snippet>;
   deleteSnippet: (id: string) => Promise<void>;
@@ -606,8 +627,48 @@ function initialFavorites(): string[] {
 // to every host, which shows up in server logs. 0 means off.
 const HEALTH_INTERVAL_KEY = "ssh-mgr:health-interval";
 const SCROLLBACK_KEY = "ssh-mgr:scrollback";
+/** Frame drawn around an exported terminal capture. */
+export type ImageFrame = "kino" | "minimal" | "window";
+
+export interface ImageExportOptions {
+  frame: ImageFrame;
+  /** Print the host name in the caption. */
+  showHost: boolean;
+  /** Print the local timestamp in the caption. */
+  showTimestamp: boolean;
+  /** A soft accent wash behind the capture, for pasting onto light backgrounds. */
+  background: boolean;
+}
+
+export const DEFAULT_IMAGE_EXPORT: ImageExportOptions = {
+  frame: "kino",
+  showHost: true,
+  showTimestamp: true,
+  background: false,
+};
+
+/** Tolerant of a stored blob from an older version, or none at all. */
+function loadImageExport(): ImageExportOptions {
+  try {
+    const raw = localStorage.getItem(IMG_EXPORT_KEY);
+    if (!raw) return DEFAULT_IMAGE_EXPORT;
+    const parsed = JSON.parse(raw) as Partial<ImageExportOptions>;
+    const frame: ImageFrame =
+      parsed.frame === "minimal" || parsed.frame === "window" ? parsed.frame : "kino";
+    return {
+      frame,
+      showHost: parsed.showHost ?? true,
+      showTimestamp: parsed.showTimestamp ?? true,
+      background: parsed.background ?? false,
+    };
+  } catch {
+    return DEFAULT_IMAGE_EXPORT;
+  }
+}
+
 const TERM_FONT_KEY = "ssh-mgr:term-font";
 const TERM_BG_KEY = "ssh-mgr:term-bg";
+const IMG_EXPORT_KEY = "ssh-mgr:image-export";
 const APP_FONT_KEY = "ssh-mgr:app-font";
 const HIGHLIGHT_KEY = "ssh-mgr:syntax-highlight";
 const LITE_KEY = "ssh-mgr:lite";
@@ -768,6 +829,7 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
   unlocked: false,
   hosts: [],
   snippets: [],
+  notes: [],
   tabs: [],
   panes: ["default"],
   activePaneId: "default",
@@ -786,6 +848,7 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
   scrollbackLines: initialScrollback(),
   terminalFont: localStorage.getItem(TERM_FONT_KEY) || DEFAULT_TERMINAL_FONT,
   terminalBackground: localStorage.getItem(TERM_BG_KEY) ?? "",
+  imageExport: loadImageExport(),
   appFont: localStorage.getItem(APP_FONT_KEY) || DEFAULT_APP_FONT,
   // On unless explicitly turned off: it is display-only, heavily guarded, and a
   // feature nobody discovers is a feature that was not shipped.
@@ -870,6 +933,16 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
     forEachTerminal((t) => { t.options.fontFamily = terminalFontStack(f); });
   },
 
+  setImageExport: (opts) => {
+    const next = { ...get().imageExport, ...opts };
+    try {
+      localStorage.setItem(IMG_EXPORT_KEY, JSON.stringify(next));
+    } catch {
+      // A preference that won't persist isn't worth failing a capture over.
+    }
+    set({ imageExport: next });
+  },
+
   setTerminalBackground: (hex) => {
     // "" means "follow the theme"; anything else must be a hex colour, since it
     // goes straight into xterm's theme object.
@@ -915,7 +988,34 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
       const results = await invoke<HostHealth[]>("check_hosts_health", { hosts });
       set((state) => {
         const next = { ...state.hostHealth };
-        for (const r of results) next[r.id] = r;
+        for (const r of results) {
+          const prev = next[r.id];
+          if (prev && prev.status === "up" && r.status === "down") {
+            const host = hosts.find(h => h.id === r.id);
+            const hostName = host?.name || r.id;
+            
+            // 1. Desktop Notification
+            import("@tauri-apps/plugin-notification").then(async ({ isPermissionGranted, requestPermission, sendNotification }) => {
+              let permissionGranted = await isPermissionGranted();
+              if (!permissionGranted) {
+                const permission = await requestPermission();
+                permissionGranted = permission === 'granted';
+              }
+              if (permissionGranted) {
+                sendNotification({ title: 'Host Down', body: `Heartbeat flatlined for ${hostName}` });
+              }
+            }).catch(e => console.error("Notification plugin error:", e));
+
+            // 2. Ntfy Webhook
+            if (host?.ntfy_topic) {
+              fetch(host.ntfy_topic, {
+                method: "POST",
+                body: `Heartbeat flatlined for ${hostName}`
+              }).catch(e => console.error("Failed to send ntfy notification:", e));
+            }
+          }
+          next[r.id] = r;
+        }
         return { hostHealth: next };
       });
     } catch {
@@ -1113,7 +1213,7 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
     get().tabs.forEach((t) =>
       invoke("ssh_disconnect", { sessionId: t.sessionId }).catch(() => {})
     );
-    set({ unlocked: false, hosts: [], tabs: [], panes: ["default"], activePaneId: "default", paneNames: {}, activeTabIds: { "default": null }, hostHealth: {} });
+    set({ unlocked: false, hosts: [], notes: [], snippets: [], tabs: [], panes: ["default"], activePaneId: "default", paneNames: {}, activeTabIds: { "default": null }, hostHealth: {} });
   },
 
   saveHost: async (host) => {
@@ -1542,6 +1642,37 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
   aiCancel: (requestId) => invoke<void>("ai_cancel", { requestId }),
 
   getHistory: () => invoke<HistoryEvent[]>("get_history"),
+  fetchShellHistory: async (sessionId, hostId) => {
+    const merged = await invoke<string[]>("fetch_shell_history", { sessionId, hostId });
+    autoPush();
+    return merged;
+  },
+  getShellHistory: (hostId) => invoke<string[]>("get_shell_history", { hostId }),
+  clearShellHistory: async (hostId) => {
+    await invoke("clear_shell_history", { hostId });
+    autoPush();
+  },
+
+  refreshNotes: async () => {
+    set({ notes: await invoke<Note[]>("get_notes") });
+  },
+
+  saveNote: async (note) => {
+    const saved = await invoke<Note>("save_note", { note });
+    set((state) => ({
+      notes: state.notes.some((n) => n.id === saved.id)
+        ? state.notes.map((n) => (n.id === saved.id ? saved : n))
+        : [...state.notes, saved],
+    }));
+    autoPush();
+    return saved;
+  },
+
+  deleteNote: async (id) => {
+    await invoke("delete_note", { id });
+    set((state) => ({ notes: state.notes.filter((n) => n.id !== id) }));
+    autoPush();
+  },
 
   refreshSnippets: async () => {
     const snippets = await invoke<Snippet[]>("get_snippets");

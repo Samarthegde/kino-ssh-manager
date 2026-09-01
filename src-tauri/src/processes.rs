@@ -87,11 +87,15 @@ pub async fn process_kill(
     signal: String,
 ) -> Result<(), String> {
     // Only allow a known-safe signal set; never interpolate raw user input.
+    // STOP/CONT are a pair: STOP freezes a process indefinitely and nothing but
+    // CONT (or a kill) brings it back, so the UI has to offer both together.
     let sig = match signal.to_uppercase().as_str() {
         "TERM" => "TERM",
         "KILL" => "KILL",
         "HUP" => "HUP",
         "INT" => "INT",
+        "STOP" => "STOP",
+        "CONT" => "CONT",
         other => return Err(format!("Unsupported signal: {}", other)),
     };
     let handle = transport(&state, &session_id, local)?;

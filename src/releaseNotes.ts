@@ -15,6 +15,41 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.9.0",
+    headline: "Kino now lives in the tray, and knows what your servers have been up to.",
+    items: [
+      {
+        title: "Runs in the tray",
+        detail:
+          "Minimising sends Kino to the notification area instead of the taskbar, and " +
+          "closing the window leaves it running. Show and Quit are in the tray menu. When " +
+          "a host that was up goes down you get a desktop notification - give it an ntfy " +
+          "topic and the alert reaches your phone too.",
+      },
+      {
+        title: "Archaeology",
+        detail:
+          "Tools → Archaeology pulls the shell history of the account you connect as and " +
+          "keeps it in an encrypted archive per host. It accumulates, so the commands " +
+          "HISTSIZE has already trimmed off the server survive here.",
+      },
+      {
+        title: "Notes",
+        detail:
+          "Settings → Vault → Notes: recovery codes, licence keys and tokens, encrypted " +
+          "under your master password and synced with the vault. Bodies stay blurred " +
+          "until you click to reveal.",
+      },
+      {
+        title: "Process tree, and every signal",
+        detail:
+          "Processes group under their parents, branches fold, and filtering keeps a " +
+          "match's ancestors. End has become Signal - SIGTERM, SIGINT, SIGHUP, SIGSTOP, " +
+          "SIGCONT and SIGKILL, each named for what it does.",
+      },
+    ],
+  },
+  {
     version: "0.8.0",
     headline: "Three new tools, and a safer way to keep your keys fresh.",
     items: [

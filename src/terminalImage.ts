@@ -1,5 +1,6 @@
 import type { Terminal } from "@xterm/xterm";
 import type { TermTheme } from "./themes";
+import type { ImageExportOptions } from "./store";
 
 /**
  * Render a terminal selection to a PNG.
@@ -20,6 +21,8 @@ export interface CaptureOptions {
   title: string;
   /** Accent used for the caption rule; the theme's UI accent. */
   accent: string;
+  /** Frame, caption and background choices; see Settings → Appearance. */
+  options: ImageExportOptions;
 }
 
 interface Cell {
@@ -39,6 +42,10 @@ const LINE_HEIGHT = 1.35;
 const PAD_X = 26;
 const PAD_Y = 20;
 const CAPTION_H = 30;
+/** Height of the title bar on the `window` frame. */
+const TITLEBAR_H = 34;
+/** Breathing room around the capture when a background wash is on. */
+const WASH = 22;
 /** Drawn at 2x so the PNG stays sharp when pasted into a chat that scales it. */
 const SCALE = 2;
 
@@ -191,7 +198,7 @@ function cellFont(cell: Cell, family: string): string {
  * would break the grid the whole image depends on.
  */
 export async function captureSelection(opts: CaptureOptions): Promise<Blob | null> {
-  const { term, theme, fontFamily, title, accent } = opts;
+  const { term, theme, fontFamily, title, accent, options } = opts;
   const rows = selectedRows(term, theme);
   if (!rows) return null;
 
@@ -207,8 +214,17 @@ export async function captureSelection(opts: CaptureOptions): Promise<Blob | nul
     (max, row) => Math.max(max, row.reduce((n, c) => n + c.width, 0)),
     1
   );
-  const width = Math.ceil(cols * cellW) + PAD_X * 2;
-  const height = rows.length * cellH + PAD_Y * 2 + CAPTION_H;
+  // What sits above the text: a caption, a title bar, or nothing.
+  const caption =
+    options.frame === "kino" && (options.showHost || options.showTimestamp) ? CAPTION_H : 0;
+  const titlebar = options.frame === "window" ? TITLEBAR_H : 0;
+  const padX = options.frame === "minimal" ? 14 : PAD_X;
+  const padY = options.frame === "minimal" ? 12 : PAD_Y;
+  // The wash is margin outside the capture, so it only enlarges the canvas.
+  const wash = options.background ? WASH : 0;
+
+  const width = Math.ceil(cols * cellW) + padX * 2 + wash * 2;
+  const height = rows.length * cellH + padY * 2 + caption + titlebar + wash * 2;
 
   const canvas = document.createElement("canvas");
   canvas.width = Math.ceil(width * SCALE);
@@ -218,38 +234,79 @@ export async function captureSelection(opts: CaptureOptions): Promise<Blob | nul
   ctx.scale(SCALE, SCALE);
   ctx.textBaseline = "top";
 
+  // An accent wash behind the capture, for pasting onto a light background
+  // where a bare dark rectangle would float unanchored.
+  if (wash) {
+    const grad = ctx.createLinearGradient(0, 0, width, height);
+    grad.addColorStop(0, mix(accent, theme.background, 0.55));
+    grad.addColorStop(1, mix(theme.foreground, theme.background, 0.22));
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, width, height);
+  }
+
   // Mat.
   ctx.fillStyle = theme.background;
-  ctx.fillRect(0, 0, width, height);
+  ctx.fillRect(wash, wash, width - wash * 2, height - wash * 2);
 
-  // Caption: what this is and when, so a pasted image still says where it came
-  // from a week later. Set in the same face as the terminal, quietly.
-  ctx.font = `600 9px ${fontFamily}`;
-  ctx.fillStyle = mix(theme.foreground, theme.background, 0.45);
   // Local time, not UTC: this is a caption for a human, and an unlabelled ISO
   // string five hours out from the clock on their wall is worse than none.
   const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
+  const two = (n: number) => String(n).padStart(2, "0");
   const stamp =
-    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
-    `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  ctx.fillText(title.toUpperCase(), PAD_X, PAD_Y - 6);
-  const stampWidth = ctx.measureText(stamp).width;
-  ctx.fillText(stamp, width - PAD_X - stampWidth, PAD_Y - 6);
+    `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ` +
+    `${two(d.getHours())}:${two(d.getMinutes())}`;
 
-  ctx.fillStyle = accent;
-  ctx.fillRect(PAD_X, PAD_Y + 8, width - PAD_X * 2, 1);
-
-  // The perforation rail from the app's own chrome, at a whisper. Bounded to the
-  // text block so it reads as a film edge rather than running off the picture.
-  const top = PAD_Y + CAPTION_H;
-  ctx.fillStyle = mix(theme.foreground, theme.background, 0.1);
-  for (let y = top; y + 7 <= top + rows.length * cellH; y += 14) {
-    ctx.fillRect(9, y, 5, 7);
+  if (options.frame === "kino") {
+    // Caption: what this is and when, so a pasted image still says where it
+    // came from a week later. Set in the same face as the terminal, quietly.
+    if (caption) {
+      ctx.font = `600 9px ${fontFamily}`;
+      ctx.fillStyle = mix(theme.foreground, theme.background, 0.45);
+      if (options.showHost) {
+        ctx.fillText(title.toUpperCase(), wash + padX, wash + padY - 6);
+      }
+      if (options.showTimestamp) {
+        const w = ctx.measureText(stamp).width;
+        ctx.fillText(stamp, width - wash - padX - w, wash + padY - 6);
+      }
+      ctx.fillStyle = accent;
+      ctx.fillRect(wash + padX, wash + padY + 8, width - (wash + padX) * 2, 1);
+    }
+    // The perforation rail from the app's own chrome, at a whisper. Bounded to
+    // the text block so it reads as a film edge, not a runaway border.
+    const railTop = wash + padY + caption;
+    ctx.fillStyle = mix(theme.foreground, theme.background, 0.1);
+    for (let y = railTop; y + 7 <= railTop + rows.length * cellH; y += 14) {
+      ctx.fillRect(wash + 9, y, 5, 7);
+    }
+  } else if (options.frame === "window") {
+    // A title bar with three dots - the shape everyone reads as "terminal
+    // window" without imitating any one platform's chrome.
+    ctx.fillStyle = mix(theme.foreground, theme.background, 0.08);
+    ctx.fillRect(wash, wash, width - wash * 2, TITLEBAR_H);
+    ctx.fillStyle = mix(theme.foreground, theme.background, 0.28);
+    for (let i = 0; i < 3; i++) {
+      ctx.beginPath();
+      ctx.arc(wash + 18 + i * 15, wash + TITLEBAR_H / 2, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    const bits = [
+      options.showHost ? title : "",
+      options.showTimestamp ? stamp : "",
+    ].filter(Boolean);
+    if (bits.length) {
+      ctx.font = `600 10px ${fontFamily}`;
+      ctx.fillStyle = mix(theme.foreground, theme.background, 0.5);
+      const label = bits.join("  ·  ");
+      const w = ctx.measureText(label).width;
+      ctx.fillText(label, (width - w) / 2, wash + TITLEBAR_H / 2 - 5);
+    }
   }
+
+  const top = wash + padY + caption + titlebar;
   rows.forEach((row, r) => {
     const y = top + r * cellH;
-    let x = PAD_X;
+    let x = wash + padX;
 
     // Backgrounds first, as runs: per-cell fills leave hairline seams between
     // adjacent cells of the same colour at fractional widths.
@@ -268,7 +325,7 @@ export async function captureSelection(opts: CaptureOptions): Promise<Blob | nul
       if (cell) x += cell.width * cellW;
     }
 
-    x = PAD_X;
+    x = wash + padX;
     for (const cell of row) {
       if (cell.chars !== " ") {
         ctx.font = cellFont(cell, fontFamily);

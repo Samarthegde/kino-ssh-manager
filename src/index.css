@@ -5250,6 +5250,15 @@ textarea.mono,
 .proc-table tbody tr:hover td:first-child::before { transform: scaleY(1); }
 
 .proc-cmd { color: color-mix(in srgb, var(--ink-paper) 45%, transparent); }
+
+/* `nowrap` collapses runs of spaces, so a command captured with its spacing
+   intact was still displayed with it squashed - `grep "foo    bar"` read back
+   as `grep "foo bar"`, which is exactly the impression the pipeline fix exists
+   to avoid. `pre` keeps the text as captured and still clips with an ellipsis.
+   Qualified with `td` because the `white-space` it has to beat comes from
+   `.proc-table td`, which is a class *and* an element - a bare `.proc-cmd`
+   loses the specificity tie no matter where it sits in the file. */
+.proc-table td.proc-cmd { white-space: pre; }
 .proc-table .hot { color: var(--red); font-weight: 700; }
 
 .proc-auto {
@@ -5257,6 +5266,75 @@ textarea.mono,
   font-size: 9.5px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
+}
+
+/* ── Archaeology ─────────────────────────────────────────────────────────────*/
+
+.arch-count {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--ink-paper) 40%, transparent);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Says out loud what the archive contains and where it does not travel. A
+   feature that hoovers up command lines should not be quiet about it. */
+.arch-foot {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 1.9;
+  letter-spacing: 0.08em;
+  color: color-mix(in srgb, var(--ink-paper) 34%, transparent);
+  margin: 9px 0 0;
+}
+
+/* ── Processes: tree view ────────────────────────────────────────────────────*/
+
+/* The command cell is `max-width: 0` so the column can ellipsize; the indent
+   has to live on an inner span or it would be clipped away with the text. */
+.proc-tree-cell {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.proc-twisty,
+.proc-twisty-spacer {
+  width: 13px;
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.proc-twisty {
+  font-size: 9px;
+  line-height: 1;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--ink-paper) 45%, transparent);
+  cursor: pointer;
+  transition: color 140ms ease;
+}
+
+.proc-twisty:hover { color: var(--ink-accent); }
+
+/* How many descendants a collapsed row is hiding. */
+.proc-hidden {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  color: var(--ink-accent);
+  flex-shrink: 0;
+}
+
+/* The pressed state for a toggle rendered as an ordinary button. */
+.proc-toolbar .btn.active {
+  color: var(--ink-accent);
+  border-color: var(--ink-accent);
 }
 
 /* ── Cron ────────────────────────────────────────────────────────────────────*/
@@ -5761,6 +5839,167 @@ textarea.mono,
   text-transform: uppercase;
   color: color-mix(in srgb, var(--ink-paper) 34%, transparent);
   margin-left: auto;
+}
+
+/* ── Notes ───────────────────────────────────────────────────────────────────*/
+
+.notes-modal {
+  width: min(900px, 96vw);
+  max-width: none;
+  height: min(640px, 90vh);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.notes-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 14px;
+  padding-top: 12px;
+}
+
+.notes-side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  border-right: 1px solid var(--rule);
+  padding-right: 14px;
+}
+
+/* `.proc-filter` is `flex: 1`, which grows *vertically* in this column and
+   stretched the search box to the full height of the sidebar. */
+.notes-side .proc-filter,
+.notes-new {
+  flex: 0 0 auto;
+}
+
+.notes-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.notes-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  padding: 9px 10px;
+  border: 0;
+  border-left: 2px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  transition: background-color 140ms ease, border-left-color 140ms ease;
+}
+
+.notes-item:hover { background: color-mix(in srgb, var(--ink-paper) 5%, transparent); }
+
+.notes-item.active {
+  border-left-color: var(--ink-accent);
+  background: color-mix(in srgb, var(--ink-paper) 7%, transparent);
+}
+
+.notes-item-title {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--ink-paper);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.notes-item-when,
+.notes-empty {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--ink-paper) 36%, transparent);
+}
+
+.notes-empty { padding: 12px 10px; line-height: 1.9; }
+
+.notes-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-height: 0;
+}
+
+.notes-title {
+  font-family: var(--font-display);
+  font-size: 20px;
+  letter-spacing: 0.01em;
+  padding: 8px 10px;
+  margin: 0;
+}
+
+.notes-text-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.notes-text {
+  flex: 1;
+  resize: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.8;
+  letter-spacing: 0.02em;
+  padding: 12px 14px;
+  border: 1px solid var(--rule);
+  background: var(--bg);
+  color: var(--ink-paper);
+  overflow: auto;
+}
+
+.notes-text:focus { outline: none; border-color: var(--ink-accent); }
+
+/* A stored recovery code shouldn't be readable over your shoulder the instant
+   the note is opened. Blur, not masking: the text stays selectable and the
+   layout doesn't shift when it clears. */
+.notes-text.masked {
+  filter: blur(5px);
+  user-select: none;
+}
+
+.notes-reveal {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--ink-accent);
+}
+
+.notes-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.notes-foot-note {
+  margin-left: auto;
+  align-self: center;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--ink-paper) 34%, transparent);
 }
 
 /* ── Key audit ───────────────────────────────────────────────────────────────*/

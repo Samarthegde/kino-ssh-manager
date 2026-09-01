@@ -45,6 +45,12 @@ pub struct SyncConfig {
     /// Same, for the sibling history blob (history follows the vault).
     #[serde(default)]
     pub history_sha: Option<String>,
+    /// Same, for the sibling shell-history blob.
+    #[serde(default)]
+    pub shell_history_sha: Option<String>,
+    /// Same, for the sibling notes blob.
+    #[serde(default)]
+    pub notes_sha: Option<String>,
     /// Same, for the sibling snippets-library blob.
     #[serde(default)]
     pub snippets_sha: Option<String>,
@@ -66,6 +72,14 @@ pub fn history_remote_path(config: &SyncConfig) -> String {
 
 pub fn snippets_remote_path(config: &SyncConfig) -> String {
     sibling_remote_path(config, "snippets.enc")
+}
+
+pub fn notes_remote_path(config: &SyncConfig) -> String {
+    sibling_remote_path(config, "notes.enc")
+}
+
+pub fn shell_history_remote_path(config: &SyncConfig) -> String {
+    sibling_remote_path(config, "shell-history.enc")
 }
 
 /// What the frontend may see - never includes the token itself.
@@ -303,6 +317,8 @@ mod tests {
             branch: "main".into(),
             last_sha: None,
             history_sha: None,
+            notes_sha: None,
+            shell_history_sha: None,
             snippets_sha: None,
             last_synced_at: None,
         }
@@ -312,6 +328,7 @@ mod tests {
     fn sibling_paths_are_derived_from_the_vault_path() {
         assert_eq!(history_remote_path(&cfg("vault.enc")), "history.enc");
         assert_eq!(snippets_remote_path(&cfg("vault.enc")), "snippets.enc");
+        assert_eq!(notes_remote_path(&cfg("vault.enc")), "notes.enc");
         assert_eq!(
             history_remote_path(&cfg("dir/vault.enc")),
             "dir/history.enc"

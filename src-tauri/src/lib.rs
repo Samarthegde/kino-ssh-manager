@@ -1,4 +1,5 @@
 mod ai;
+pub mod archaeology;
 mod audit;
 mod cloud;
 mod coalesce;
@@ -12,9 +13,11 @@ mod host_keys;
 mod keygen;
 mod local_session;
 mod metrics;
+mod notes;
 mod processes;
 mod recorder;
 mod sftp_session;
+mod shell_history;
 mod snippets;
 mod ssh_config;
 mod ssh_session;
@@ -34,6 +37,8 @@ pub struct AppState {
     pub hosts: Arc<Mutex<Vec<Host>>>,
     pub history: Arc<Mutex<Vec<history::HistoryEvent>>>,
     pub snippets: Arc<Mutex<Vec<snippets::Snippet>>>,
+    pub notes: Arc<Mutex<Vec<notes::Note>>>,
+    pub shell_history: Arc<Mutex<shell_history::HistoryByHost>>,
     pub sessions: ssh_session::Sessions,
     pub local_sessions: local_session::LocalSessions,
     pub active_forwards: Arc<Mutex<HashMap<String, forwarding::ForwardHandle>>>,
@@ -56,11 +61,15 @@ fn unlock_vault(state: State<'_, AppState>, password: String) -> Result<Vec<Host
         let (hosts, key, salt) = vault::load_vault(&password)?;
         let history = history::load_history(&key).unwrap_or_default();
         let snippets = snippets::load_snippets(&key).unwrap_or_default();
+        let notes = notes::load_notes(&key).unwrap_or_default();
+        let shell_hist = shell_history::load(&key).unwrap_or_default();
         *state.vault_key.lock().unwrap() = Some(key);
         *state.vault_salt.lock().unwrap() = Some(salt);
         *state.hosts.lock().unwrap() = hosts.clone();
         *state.history.lock().unwrap() = history;
         *state.snippets.lock().unwrap() = snippets;
+        *state.notes.lock().unwrap() = notes;
+        *state.shell_history.lock().unwrap() = shell_hist;
         cloud::activate(&key);
         Ok(hosts)
     } else {
@@ -72,14 +81,17 @@ fn unlock_vault(state: State<'_, AppState>, password: String) -> Result<Vec<Host
         let hosts: Vec<Host> = vec![];
         let history: Vec<history::HistoryEvent> = vec![];
         let snippets: Vec<snippets::Snippet> = vec![];
+        let notes: Vec<notes::Note> = vec![];
         vault::save_vault(&hosts, &key, &salt)?;
         history::save_history(&history, &key, &salt)?;
         snippets::save_snippets(&snippets, &key, &salt)?;
+        notes::save_notes(&notes, &key, &salt)?;
         *state.vault_key.lock().unwrap() = Some(key);
         *state.vault_salt.lock().unwrap() = Some(salt);
         *state.hosts.lock().unwrap() = hosts.clone();
         *state.history.lock().unwrap() = history;
         *state.snippets.lock().unwrap() = snippets;
+        *state.notes.lock().unwrap() = notes;
         Ok(hosts)
     }
 }
@@ -96,10 +108,12 @@ fn lock_vault(state: State<'_, AppState>) {
     state.hosts.lock().unwrap().clear();
     state.history.lock().unwrap().clear();
     state.snippets.lock().unwrap().clear();
+    state.notes.lock().unwrap().clear();
+    state.shell_history.lock().unwrap().clear();
 }
 
 /// Re-key the vault: verify the current master password, then re-encrypt the
-/// vault, history, snippets, and sync config under a key derived from a brand-new
+/// vault, history, snippets, notes, and sync config under a key derived from a brand-new
 /// password + salt.
 #[tauri::command]
 fn change_master_password(
@@ -139,6 +153,8 @@ fn change_master_password(
     vault::save_vault(&state.hosts.lock().unwrap(), &new_key, &new_salt)?;
     history::save_history(&state.history.lock().unwrap(), &new_key, &new_salt)?;
     snippets::save_snippets(&state.snippets.lock().unwrap(), &new_key, &new_salt)?;
+    notes::save_notes(&state.notes.lock().unwrap(), &new_key, &new_salt)?;
+    shell_history::save(&state.shell_history.lock().unwrap(), &new_key, &new_salt)?;
     if let Some(cfg) = sync::load_config(&old_key) {
         sync::save_config(&cfg, &new_key, &new_salt)?;
     }
@@ -212,6 +228,59 @@ fn delete_host(state: State<'_, AppState>, id: String) -> Result<(), String> {
     let mut hosts = state.hosts.lock().unwrap();
     hosts.retain(|h| h.id != id);
     vault::save_vault(&hosts, key, salt)?;
+    // Its archived shell history goes with it; leaving that behind would keep
+    // the commands (and anything typed on a command line) after the host is gone.
+    let mut hist = state.shell_history.lock().unwrap();
+    if hist.remove(&id).is_some() {
+        shell_history::save(&hist, key, salt)?;
+    }
+    Ok(())
+}
+
+// ── Notes commands ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn get_notes(state: State<'_, AppState>) -> Result<Vec<notes::Note>, String> {
+    if state.vault_key.lock().unwrap().is_none() {
+        return Err("Vault is locked".to_string());
+    }
+    Ok(state.notes.lock().unwrap().clone())
+}
+
+#[tauri::command]
+fn save_note(state: State<'_, AppState>, mut note: notes::Note) -> Result<notes::Note, String> {
+    let key_guard = state.vault_key.lock().unwrap();
+    let key = key_guard.as_ref().ok_or("Vault is locked")?;
+    let salt_guard = state.vault_salt.lock().unwrap();
+    let salt = salt_guard.as_ref().ok_or("Vault is locked")?;
+    if note.id.is_empty() {
+        note.id = Uuid::new_v4().to_string();
+    }
+    // Stamped here rather than in the UI: the list is ordered by this, and a
+    // clock the frontend supplies is one the frontend can get wrong.
+    note.updated_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let mut list = state.notes.lock().unwrap();
+    if let Some(existing) = list.iter_mut().find(|n| n.id == note.id) {
+        *existing = note.clone();
+    } else {
+        list.push(note.clone());
+    }
+    notes::save_notes(&list, key, salt)?;
+    Ok(note)
+}
+
+#[tauri::command]
+fn delete_note(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let key_guard = state.vault_key.lock().unwrap();
+    let key = key_guard.as_ref().ok_or("Vault is locked")?;
+    let salt_guard = state.vault_salt.lock().unwrap();
+    let salt = salt_guard.as_ref().ok_or("Vault is locked")?;
+    let mut list = state.notes.lock().unwrap();
+    list.retain(|n| n.id != id);
+    notes::save_notes(&list, key, salt)?;
     Ok(())
 }
 
@@ -349,6 +418,22 @@ fn sync_set_config(
                 None
             }
         }),
+        notes_sha: existing.as_ref().and_then(|c| {
+            let same_target = c.owner == config.owner.trim() && c.repo == config.repo.trim();
+            if same_target {
+                c.notes_sha.clone()
+            } else {
+                None
+            }
+        }),
+        shell_history_sha: existing.as_ref().and_then(|c| {
+            let same_target = c.owner == config.owner.trim() && c.repo == config.repo.trim();
+            if same_target {
+                c.shell_history_sha.clone()
+            } else {
+                None
+            }
+        }),
         last_synced_at: existing.as_ref().and_then(|c| c.last_synced_at),
     };
 
@@ -459,6 +544,20 @@ fn sync_push(state: State<'_, AppState>, force: bool) -> Result<sync::PushOutcom
         config.snippets_sha.clone(),
         force,
     )?;
+    config.notes_sha = push_sibling(
+        &config,
+        sync::notes_remote_path(&config),
+        &notes::notes_path(),
+        config.notes_sha.clone(),
+        force,
+    )?;
+    config.shell_history_sha = push_sibling(
+        &config,
+        sync::shell_history_remote_path(&config),
+        &shell_history::shell_history_path(),
+        config.shell_history_sha.clone(),
+        force,
+    )?;
 
     let synced_at = sync::now_secs();
     config.last_synced_at = Some(synced_at);
@@ -516,6 +615,20 @@ fn sync_pull(state: State<'_, AppState>, password: String) -> Result<sync::PullO
     ) {
         config.snippets_sha = Some(sha);
     }
+    if let Some(sha) = pull_sibling(
+        &config,
+        sync::notes_remote_path(&config),
+        &notes::notes_path(),
+    ) {
+        config.notes_sha = Some(sha);
+    }
+    if let Some(sha) = pull_sibling(
+        &config,
+        sync::shell_history_remote_path(&config),
+        &shell_history::shell_history_path(),
+    ) {
+        config.shell_history_sha = Some(sha);
+    }
 
     // Re-derive the key from the pulled vault's own salt and load it.
     let (hosts, new_key, new_salt) = vault::load_vault(&password).inspect_err(|_| {
@@ -524,6 +637,8 @@ fn sync_pull(state: State<'_, AppState>, password: String) -> Result<sync::PullO
     })?;
     let history = history::load_history(&new_key).unwrap_or_default();
     let snippet_lib = snippets::load_snippets(&new_key).unwrap_or_default();
+    let note_lib = notes::load_notes(&new_key).unwrap_or_default();
+    let hist_cmds = shell_history::load(&new_key).unwrap_or_default();
 
     let synced_at = sync::now_secs();
     config.last_sha = Some(blob.sha.clone());
@@ -534,6 +649,8 @@ fn sync_pull(state: State<'_, AppState>, password: String) -> Result<sync::PullO
     *state.hosts.lock().unwrap() = hosts.clone();
     *state.history.lock().unwrap() = history;
     *state.snippets.lock().unwrap() = snippet_lib;
+    *state.notes.lock().unwrap() = note_lib;
+    *state.shell_history.lock().unwrap() = hist_cmds;
 
     // Re-save config under the new key (the pulled vault may use a new salt).
     sync::save_config(&config, &new_key, &new_salt)?;
@@ -579,6 +696,8 @@ fn sync_restore(
         last_sha: None,
         history_sha: None,
         snippets_sha: None,
+        notes_sha: None,
+        shell_history_sha: None,
         last_synced_at: None,
     };
     if cfg.token.is_empty() || cfg.owner.is_empty() || cfg.repo.is_empty() {
@@ -606,6 +725,12 @@ fn sync_restore(
     let snip_blob = sync::backend_for_path(&cfg, sync::snippets_remote_path(&cfg))
         .ok()
         .and_then(|b| b.pull().ok().flatten());
+    let notes_blob = sync::backend_for_path(&cfg, sync::notes_remote_path(&cfg))
+        .ok()
+        .and_then(|b| b.pull().ok().flatten());
+    let hist_cmds_blob = sync::backend_for_path(&cfg, sync::shell_history_remote_path(&cfg))
+        .ok()
+        .and_then(|b| b.pull().ok().flatten());
 
     let (hosts, key, salt) = vault::load_vault(&password).map_err(|e| {
         // Wrong password: undo the vault we just wrote.
@@ -631,8 +756,20 @@ fn sync_restore(
             cfg.snippets_sha = Some(sb.sha);
         }
     }
+    if let Some(nb) = notes_blob {
+        if std::fs::write(notes::notes_path(), &nb.data).is_ok() {
+            cfg.notes_sha = Some(nb.sha);
+        }
+    }
+    if let Some(hb) = hist_cmds_blob {
+        if std::fs::write(shell_history::shell_history_path(), &hb.data).is_ok() {
+            cfg.shell_history_sha = Some(hb.sha);
+        }
+    }
     let history = history::load_history(&key).unwrap_or_default();
     let snippet_lib = snippets::load_snippets(&key).unwrap_or_default();
+    let note_lib = notes::load_notes(&key).unwrap_or_default();
+    let hist_cmds = shell_history::load(&key).unwrap_or_default();
 
     cfg.last_sha = Some(blob.sha);
     cfg.last_synced_at = Some(sync::now_secs());
@@ -643,6 +780,8 @@ fn sync_restore(
     *state.hosts.lock().unwrap() = hosts.clone();
     *state.history.lock().unwrap() = history;
     *state.snippets.lock().unwrap() = snippet_lib;
+    *state.notes.lock().unwrap() = note_lib;
+    *state.shell_history.lock().unwrap() = hist_cmds;
 
     Ok(hosts)
 }
@@ -1415,6 +1554,20 @@ fn list_active_forwards(state: State<'_, AppState>) -> Vec<String> {
 // ── App entry ─────────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Bring the main window back from the tray.
+///
+/// `hide()` on a minimised window leaves it minimised, so showing it alone can
+/// return an invisible or empty frame - it has to be un-minimised as well, and
+/// after `show()`, since a hidden window won't accept the state change first.
+fn restore_main_window(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
 pub fn run() {
     // Both aws-lc-rs and ring end up in our dependency tree, so rustls 0.23 cannot
     // pick a backend on its own - it panics on the first TLS handshake instead.
@@ -1428,6 +1581,8 @@ pub fn run() {
         hosts: Arc::new(Mutex::new(vec![])),
         history: Arc::new(Mutex::new(vec![])),
         snippets: Arc::new(Mutex::new(vec![])),
+        notes: Arc::new(Mutex::new(vec![])),
+        shell_history: Arc::new(Mutex::new(Default::default())),
         sessions: Arc::new(Mutex::new(HashMap::new())),
         local_sessions: Arc::new(Mutex::new(HashMap::new())),
         active_forwards: Arc::new(Mutex::new(HashMap::new())),
@@ -1438,12 +1593,67 @@ pub fn run() {
     };
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         // In-app updates: the updater downloads/installs a signed release and
         // `process` provides the relaunch afterwards. Desktop only.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .setup(|app| {
+            use tauri::menu::{Menu, MenuItem};
+            use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+            // The menu is not decoration. Once the window can vanish into the
+            // tray, this is the only guaranteed way back to it and the only way
+            // out of the app - on Linux, libappindicator delivers no click
+            // events at all, so `on_tray_icon_event` below never fires there.
+            let show = MenuItem::with_id(app, "show", "Show Kino", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Quit Kino", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &quit])?;
+
+            if let Some(icon) = app.default_window_icon().cloned() {
+                TrayIconBuilder::new()
+                    .tooltip("Kino SSH Manager")
+                    .icon(icon)
+                    .menu(&menu)
+                    .on_menu_event(|app, event| match event.id().as_ref() {
+                        "show" => restore_main_window(app),
+                        // Bypasses the window's CloseRequested handler, which
+                        // would otherwise just hide the window again.
+                        "quit" => app.exit(0),
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        // Only on release, and only the left button: `Click`
+                        // fires for press and release both.
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            restore_main_window(tray.app_handle());
+                        }
+                    })
+                    .build(app)?;
+            }
+            Ok(())
+        })
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                // Keep the app running in the background; Quit in the tray menu
+                // is what actually ends it.
+                let _ = window.hide();
+                api.prevent_close();
+            }
+            // Minimise to the tray. Tauri has no `Minimized` event - a minimise
+            // arrives as a resize - so the state has to be asked for.
+            tauri::WindowEvent::Resized(_) if window.is_minimized().unwrap_or(false) => {
+                let _ = window.hide();
+            }
+            _ => {}
+        })
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             vault_exists,
@@ -1480,6 +1690,9 @@ pub fn run() {
             local_disconnect,
             get_history,
             log_history,
+            get_notes,
+            save_note,
+            delete_note,
             get_snippets,
             save_snippet,
             delete_snippet,
@@ -1538,6 +1751,9 @@ pub fn run() {
             list_recordings,
             read_recording,
             delete_recording,
+            archaeology::fetch_shell_history,
+            archaeology::get_shell_history,
+            archaeology::clear_shell_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -1578,6 +1794,7 @@ mod export_tests {
             jump_host: None,
             jump: None,
             key_added_at: None,
+            ntfy_topic: None,
         }
     }
 

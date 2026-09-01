@@ -102,6 +102,9 @@ pub struct Host {
     /// admitting the gap.
     #[serde(default)]
     pub key_added_at: Option<i64>,
+    /// Topic URL for ntfy.sh (or similar) to receive heartbeat failure notifications.
+    #[serde(default)]
+    pub ntfy_topic: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -265,6 +268,7 @@ mod tests {
             jump_host: None,
             jump: None,
             key_added_at: None,
+            ntfy_topic: None,
         }]
     }
 

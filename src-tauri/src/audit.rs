@@ -598,6 +598,7 @@ mod tests {
             jump_host: None,
             jump: None,
             key_added_at: Some(NOW - 10 * DAY),
+            ntfy_topic: None,
         }
     }
 

@@ -43,6 +43,7 @@ export function HostForm({ host, onClose }: Props) {
   const [onConnectSnippets, setOnConnectSnippets] = useState<string[]>(host?.on_connect_snippets ?? []);
   const [color, setColor] = useState<string>(host?.color ?? "");
   const [notes, setNotes] = useState(host?.notes ?? "");
+  const [ntfyTopic, setNtfyTopic] = useState(host?.ntfy_topic ?? "");
   const [group, setGroup] = useState(host?.group ?? "");
   // Whether the group field is in "type a new name" mode vs. picking an existing one.
   const [creatingGroup, setCreatingGroup] = useState(false);
@@ -287,6 +288,7 @@ export function HostForm({ host, onClose }: Props) {
         on_connect_snippets: onConnectSnippets,
         color: color || null,
         notes: notes.trim() || null,
+        ntfy_topic: ntfyTopic.trim() || null,
         group: group.trim() || null,
         os: os || null,
         connection_mode: connectionMode,
@@ -867,6 +869,19 @@ export function HostForm({ host, onClose }: Props) {
                     rows={2}
                     style={{ width: "100%", resize: "vertical" }}
                   />
+                </div>
+
+                <div className="form-row">
+                  <label>Heartbeat Ntfy Topic <span className="hint-inline">(optional)</span></label>
+                  <input
+                    value={ntfyTopic}
+                    onChange={(e) => setNtfyTopic(e.target.value)}
+                    placeholder="https://ntfy.sh/my-topic"
+                  />
+                  <p className="hint">
+                    Receive push notifications via ntfy when this host goes offline.
+                    Requires health polling to be enabled in Settings.
+                  </p>
                 </div>
 
                 <div className="form-row">

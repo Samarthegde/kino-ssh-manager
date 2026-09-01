@@ -12,6 +12,7 @@ import { RecordingsModal } from "./RecordingsModal";
 import { AiSettingsModal } from "./AiSettingsModal";
 import { KeybindingsModal } from "./KeybindingsModal";
 import { SecurityPanel } from "./SecurityPanel";
+import { NotesModal } from "./NotesModal";
 import { Select } from "./Select";
 
 interface Props {
@@ -148,6 +149,8 @@ export function SettingsMenu({ onLock }: Props) {
     setSyntaxHighlight,
     liteMode,
     setLiteMode,
+    imageExport,
+    setImageExport,
     autoReconnect,
     setAutoReconnect,
     exportSshConfig,
@@ -172,6 +175,7 @@ export function SettingsMenu({ onLock }: Props) {
   const [showAi, setShowAi] = useState(false);
   const [showKeys, setShowKeys] = useState(false);
   const [showAudit, setShowAudit] = useState(false);
+  const [showNotes, setShowNotes] = useState(false);
 
   const [cloudUrl, setCloudUrl] = useState("");
   const [cloudKey, setCloudKey] = useState("");
@@ -180,7 +184,7 @@ export function SettingsMenu({ onLock }: Props) {
 
   const anyModalOpen =
     showHistory || showRecordings || showSync || showSnippets ||
-    showChangePw || showAbout || showAi || showKeys || showAudit;
+    showChangePw || showAbout || showAi || showKeys || showAudit || showNotes;
 
   // Esc closes the page - but not while a sub-dialog is open (those own Esc).
   useEffect(() => {
@@ -346,6 +350,46 @@ export function SettingsMenu({ onLock }: Props) {
                               ? undefined
                               : { fontFamily: `"${f.id}", sans-serif` },
                         }))}
+                      />
+                    </Item>
+                  </Group>
+
+                  <Group
+                    title="Image export"
+                    desc="How “Copy as image” frames a terminal selection."
+                  >
+                    <Item label="Frame" desc="The chrome drawn around the capture.">
+                      <Select
+                        className="settings-select"
+                        aria-label="Frame"
+                        value={imageExport.frame}
+                        onChange={(v) => setImageExport({ frame: v as typeof imageExport.frame })}
+                        options={[
+                          { value: "kino", label: "Kino", hint: "Caption rule and perforation rail" },
+                          { value: "window", label: "Window", hint: "Title bar with three dots" },
+                          { value: "minimal", label: "Minimal", hint: "Just the text, tightly cropped" },
+                        ]}
+                      />
+                    </Item>
+                    <Item label="Show host name" desc="Names the machine the output came from.">
+                      <OnOff
+                        value={imageExport.showHost}
+                        onChange={(on) => setImageExport({ showHost: on })}
+                      />
+                    </Item>
+                    <Item label="Show timestamp" desc="Local time of the capture, not UTC.">
+                      <OnOff
+                        value={imageExport.showTimestamp}
+                        onChange={(on) => setImageExport({ showTimestamp: on })}
+                      />
+                    </Item>
+                    <Item
+                      label="Background wash"
+                      desc="Adds a soft accent border, so a dark capture doesn't float on a light page."
+                    >
+                      <OnOff
+                        value={imageExport.background}
+                        onChange={(on) => setImageExport({ background: on })}
                       />
                     </Item>
                   </Group>
@@ -569,6 +613,12 @@ export function SettingsMenu({ onLock }: Props) {
                       onClick={() => setShowChangePw(true)}
                     />
                     <ActionItem
+                      label="Notes"
+                      desc="Recovery codes, licence keys and tokens, encrypted under your master password and synced with the vault."
+                      buttonLabel="Open…"
+                      onClick={() => setShowNotes(true)}
+                    />
+                    <ActionItem
                       label="Key audit"
                       desc="Checks every stored key for weak algorithms, reuse and age, and rotates one when you say so. Runs on this machine; no host is contacted."
                       buttonLabel="Open…"
@@ -635,6 +685,7 @@ export function SettingsMenu({ onLock }: Props) {
       {showKeys && <KeybindingsModal onClose={() => setShowKeys(false)} />}
       {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
       {showAudit && <SecurityPanel onClose={() => setShowAudit(false)} />}
+      {showNotes && <NotesModal onClose={() => setShowNotes(false)} />}
         </>,
         document.body
       )}

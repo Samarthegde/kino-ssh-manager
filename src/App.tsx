@@ -10,6 +10,7 @@ import { DockerPanel } from "./components/DockerPanel";
 import { MetricsPanel } from "./components/MetricsPanel";
 import { ProcessesPanel } from "./components/ProcessesPanel";
 import { CronPanel } from "./components/CronPanel";
+import { ArchaeologyPanel } from "./components/ArchaeologyPanel";
 import { CopilotPanel } from "./components/CopilotPanel";
 import { HomePanel } from "./components/HomePanel";
 import { AiSettingsModal } from "./components/AiSettingsModal";
@@ -59,6 +60,7 @@ function App() {
   const [metricsTabId, setMetricsTabId] = useState<string | null>(null);
   const [procTabId, setProcTabId] = useState<string | null>(null);
   const [cronTabId, setCronTabId] = useState<string | null>(null);
+  const [archaeologyTabId, setArchaeologyTabId] = useState<string | null>(null);
   const [copilotTabId, setCopilotTabId] = useState<string | null>(null);
   // Text handed to the Copilot to explain (from a terminal selection); one-shot.
   const [copilotSeed, setCopilotSeed] = useState<string | null>(null);
@@ -196,6 +198,7 @@ function App() {
   const metricsTab = tabs.find((t) => t.id === metricsTabId);
   const procTab = tabs.find((t) => t.id === procTabId);
   const cronTab = tabs.find((t) => t.id === cronTabId);
+  const archaeologyTab = tabs.find((t) => t.id === archaeologyTabId);
   const copilotTab = tabs.find((t) => t.id === copilotTabId);
 
   return (
@@ -313,6 +316,7 @@ function App() {
                           onOpenCopilot={() => setCopilotTabId(activeTab.id)}
                           onOpenProcesses={() => setProcTabId(activeTab.id)}
                           onOpenCron={() => setCronTabId(activeTab.id)}
+                          onOpenArchaeology={() => setArchaeologyTabId(activeTab.id)}
                         />
                       )}
 
@@ -449,6 +453,15 @@ function App() {
           local={cronTab.kind === "local"}
           title={cronTab.title ?? (cronTab.kind === "local" ? "Local Shell" : cronTab.host?.name ?? "Host")}
           onClose={() => setCronTabId(null)}
+        />
+      )}
+
+      {archaeologyTab && (
+        <ArchaeologyPanel
+          key={archaeologyTab.id}
+          sessionId={archaeologyTab.sessionId}
+          title={archaeologyTab.title ?? (archaeologyTab.kind === "local" ? "Local Shell" : archaeologyTab.host?.name ?? "Host")}
+          onClose={() => setArchaeologyTabId(null)}
         />
       )}
 

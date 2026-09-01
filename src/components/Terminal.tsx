@@ -524,6 +524,7 @@ export function Terminal({ sessionId, kind, active, tabId, host, onExplain }: Pr
         fontFamily: terminalFontStack(state.terminalFont),
         title: host?.name ?? (kind === "local" ? "Local Shell" : "Session"),
         accent: theme.ui.blue,
+        options: state.imageExport,
       });
     } catch (e) {
       toast(`Couldn't render the image: ${e}`);

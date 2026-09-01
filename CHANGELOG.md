@@ -4,6 +4,91 @@ All notable changes to Kino SSH Manager are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] - 2026-09-01
+
+### Added
+- **Process tree and a full signal menu.** The process list can now be grouped
+  into the tree it always described - `ps` was already reporting each process's
+  parent, it just wasn't being used. Branches fold, a collapsed row says how many
+  processes it's hiding, and filtering keeps the ancestors of a match so a hit
+  never floats without the chain that spawned it. Processes whose parent didn't
+  make the 500-row cut become roots rather than disappearing.
+
+  **End** has become **Signal**, offering SIGTERM, SIGINT, SIGHUP, SIGSTOP,
+  SIGCONT and SIGKILL by name and effect instead of just two buttons. A suspended
+  process now shows its `T` state in the alert colour, since a frozen process is
+  otherwise indistinguishable from an idle one and only SIGCONT brings it back.
+- **Notes.** Encrypted free-text storage for the things that belong beside your
+  hosts - recovery codes, licence keys, API tokens - under **Settings → Vault →
+  Notes**. Stored in a sibling blob next to the vault under the same key and
+  salt, and synced, pulled and re-keyed exactly like history and snippets.
+
+  Deliberately not a field on a host: the vault is rewritten whole on every host
+  edit, and a host is what profile export serialises to plaintext JSON, so
+  anything secret living there would leave the machine the moment a profile was
+  shared. Note bodies open blurred and reveal on click, so a stored recovery code
+  isn't sitting on screen when somebody walks past.
+- **Archaeology.** **Tools → Archaeology** reads `~/.bash_history` and
+  `~/.zsh_history` for the account you connect as, and keeps what it finds in an
+  encrypted archive of its own, per host. Filter it, copy any line back out. The
+  point is that it accumulates: `HISTSIZE` trims the host's own file, and what
+  was already archived survives that.
+
+  It is a de-duplicated set, not a timeline, and it captures command lines
+  verbatim - including anything secret typed on one. The archive is encrypted
+  with your vault and is deliberately excluded from exported host profiles.
+- **Kino runs in the tray.** Minimising sends it to the notification area rather
+  than the taskbar, and closing the window leaves it running. The tray menu has
+  **Show Kino** and **Quit Kino** - the menu is what makes the window
+  recoverable, since on Linux the tray delivers menu activations and no click
+  events at all.
+
+  Worth knowing: the vault stays unlocked while the window is hidden. Idle
+  auto-lock still applies, but closing the window no longer implies locking it.
+- **Heartbeat alerts.** When a host that was up goes down, Kino raises a desktop
+  notification. Give a host an **ntfy topic** in its settings and the same event
+  is posted there, so a flatline at 3am reaches your phone. Requires health
+  polling to be on.
+- **Image export options** under **Settings → Appearance**. Three frames - the
+  Kino caption rule and perforation rail, a plain window title bar, or minimal
+  with the text tightly cropped - plus toggles for the host name and timestamp in
+  the caption, and an optional accent wash so a dark capture doesn't float
+  unanchored when pasted onto a light page.
+
+### Fixed
+- **Archaeology could restore a superseded SSH key.** The panel saved the merged
+  command history back through `saveHost`, using the copy of the host captured
+  when the tab was opened - so it rewrote every other field from that snapshot
+  too. Rotate a key, then sync a tab opened beforehand, and the old private key
+  went back into the vault while the host had already stopped accepting it. The
+  archive is now its own store, keyed by host id, and the panel never writes a
+  host at all.
+- **Shell history is no longer part of an exported host profile.** It lived on
+  `Host`, and `export_host` serialises `Host` to plaintext JSON - so sharing a
+  profile handed over every command captured from that machine, which is exactly
+  where passwords typed on a command line and tokens in `curl` calls end up. It
+  now lives in `shell-history.enc`, a sibling blob beside the vault under the
+  same key and salt, synced and re-keyed like history and snippets, and removed
+  when its host is deleted.
+- **A re-sync no longer replaces the archive with a smaller one.** Merging ran
+  against whatever list the UI happened to be holding, which was the stale
+  snapshot above - usually empty. It now merges against what's on disk, so the
+  history that `HISTSIZE` has already trimmed off the host survives, which is the
+  point of keeping an archive.
+- **Captured commands are no longer rewritten.** The pipeline trimmed lines with
+  `awk '{$1=$1};1'`, which rejoins fields on single spaces: `grep "foo    bar"`
+  came back as `grep "foo bar"` and `-e "A=1     B=2"` as `-e "A=1 B=2"`. Copying
+  one out gave you a command that did something different from the one that ran.
+  Trimming is anchored to the ends now, and the list is displayed with the
+  spacing intact rather than collapsed by HTML.
+- **Desktop notifications could never fire.** The heartbeat notification code was
+  written, the plugin installed and registered, but `notification:default` was
+  missing from the app's capabilities and Tauri 2 denies any plugin command not
+  listed there.
+- **The shell-history fetch is bounded.** It returned the whole file - a
+  long-lived box can hold a six-figure history, every line of which crossed IPC
+  and became a table row. Capped at 5,000 unique commands per host.
+
 ## [0.8.0] - 2026-08-13
 
 ### Added

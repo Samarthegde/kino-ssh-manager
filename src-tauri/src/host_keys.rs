@@ -184,6 +184,7 @@ mod tests {
             jump_host: None,
             jump: None,
             key_added_at: None,
+            ntfy_topic: None,
         }
     }
 
