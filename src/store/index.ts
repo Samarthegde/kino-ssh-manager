@@ -61,6 +61,10 @@ export interface Host {
   key_added_at?: number | null;
   /** Topic URL for ntfy.sh (or similar) to receive heartbeat failure notifications. */
   ntfy_topic?: string | null;
+  /** "production" | "staging" | "development". Separate from `color`, which is
+   *  decoration - a colour that means "this can take the site down" depends on
+   *  the theme to be understood. */
+  environment?: string | null;
 }
 
 export interface Note {
@@ -194,6 +198,12 @@ export interface CronPreview {
   valid: boolean;
   description: string;
   next_runs: number[];
+}
+
+/** What a command line matched in the danger list, and what it does. */
+export interface DangerMatch {
+  matched: string;
+  explains: string;
 }
 
 export interface AuditFinding {
@@ -581,6 +591,9 @@ interface VaultStore {
     hostOffsetMin: number
   ) => Promise<CronPreview>;
   /** Inspect every stored key. Entirely local - no host is contacted. */
+  /** Is this command line worth stopping for? Called once per Enter, and only
+   *  in a session marked production. */
+  checkCommandDanger: (line: string) => Promise<DangerMatch | null>;
   auditKeys: () => Promise<AuditReport>;
   /** Find private keys on this machine. Detection only - it reads and
    *  describes, and works with the vault locked. */
@@ -1781,6 +1794,7 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
   cronPreview: (schedule, hostNow, hostOffsetMin) =>
     invoke<CronPreview>("cron_preview", { schedule, hostNow, hostOffsetMin }),
 
+  checkCommandDanger: (line) => invoke<DangerMatch | null>("check_command_danger", { line }),
   auditKeys: () => invoke<AuditReport>("audit_keys"),
   sweepKeys: (extraDirs) => invoke<SweepReport>("sweep_keys", { extraDirs }),
   importKeyFromDisk: (path, hostId, name) =>

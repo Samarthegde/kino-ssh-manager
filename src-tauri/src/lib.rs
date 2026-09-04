@@ -5,6 +5,7 @@ mod audit;
 mod cloud;
 mod coalesce;
 mod cron;
+mod danger;
 mod docker;
 mod exec;
 mod forwarding;
@@ -1922,6 +1923,7 @@ pub fn run() {
             cron::cron_save,
             cron::cron_preview,
             audit::audit_keys,
+            danger::check_command_danger,
             key_sweep::sweep_keys,
             key_sweep::import_key_from_disk,
             key_sweep::evict_key_from_disk,
@@ -1990,6 +1992,7 @@ mod export_tests {
             jump: None,
             key_added_at: None,
             ntfy_topic: None,
+            environment: None,
         }
     }
 

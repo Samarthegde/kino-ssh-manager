@@ -3436,6 +3436,59 @@ textarea.mono {
 
 .copilot-payload span { margin-right: auto; }
 
+/* ── Production guard ────────────────────────────────────────────────────────
+ * The frame goes on the terminal viewport, not the tab. A tab is small, it is
+ * one of several, and it is not where you are looking when you type.
+ */
+.terminal-wrap.is-production {
+  outline: 3px solid var(--red);
+  outline-offset: -3px;
+}
+
+.production-badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 3;
+  padding: 2px 8px;
+  background: var(--red);
+  color: var(--bg);
+  font-family: var(--font-mono, monospace);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  pointer-events: none;
+}
+
+.danger-overlay { z-index: calc(var(--z-modal) + 10); }
+.danger-modal { width: 520px; max-width: 92vw; }
+
+/* The hostname is the thing being got wrong, so it is the biggest thing here. */
+.danger-host {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.2;
+  font-weight: 600;
+  color: var(--red);
+  word-break: break-all;
+}
+
+.danger-line {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--muted);
+  border-left: 3px solid var(--red);
+  border-radius: 6px;
+  max-height: 30vh;
+  overflow: auto;
+  background: var(--bg);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 /* ── Transport audit ─────────────────────────────────────────────────────────
  * Reuses the key audit's row, finding and severity styles - both answer "what
  * is wrong with this host, and what do I do about it" - and adds only the two

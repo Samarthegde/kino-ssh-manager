@@ -599,6 +599,7 @@ mod tests {
             jump: None,
             key_added_at: Some(NOW - 10 * DAY),
             ntfy_topic: None,
+            environment: None,
         }
     }
 

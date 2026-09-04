@@ -621,6 +621,7 @@ pub fn import_key_from_disk(
                     jump: None,
                     key_added_at: Some(now_secs()),
                     ntfy_topic: None,
+                    environment: None,
                 };
                 let pair = (host.id.clone(), host.name.clone());
                 hosts.push(host);
