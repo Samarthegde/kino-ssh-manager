@@ -1923,6 +1923,8 @@ pub fn run() {
             cron::cron_preview,
             audit::audit_keys,
             key_sweep::sweep_keys,
+            key_sweep::import_key_from_disk,
+            key_sweep::evict_key_from_disk,
             audit::rotate_key,
             health::check_hosts_health,
             algo_probe::probe_host_algorithms,

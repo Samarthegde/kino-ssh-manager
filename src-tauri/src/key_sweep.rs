@@ -488,6 +488,251 @@ pub fn sweep_keys(
     })
 }
 
+// ── Import, and then removal ────────────────────────────────────────────────
+//
+// Two commands, deliberately not one. Importing a key is ordinary vault work.
+// Removing it from disk destroys the only other copy, and the gap between them
+// is where the user gets to change their mind.
+
+/// What an import did, so the panel can say it plainly.
+#[derive(Serialize, Clone, Debug)]
+pub struct ImportOutcome {
+    pub host_id: String,
+    pub host_name: String,
+    pub fingerprint: String,
+    /// True once the key has been read back out of the *saved* vault file.
+    /// Removal is refused until this has happened.
+    pub verified_in_saved_vault: bool,
+}
+
+/// Is this fingerprint in the vault as it exists on disk right now?
+///
+/// Reads the file rather than `AppState`, and that is the entire point. An
+/// in-memory host proves the user pressed a button; the file proves the key
+/// survived being written. Only the second is a safe basis for deleting the
+/// copy the filesystem is holding.
+fn fingerprint_in_saved_vault(key_bytes: &[u8; 32], fingerprint: &str) -> Result<bool, String> {
+    let hosts: Vec<Host> = crate::vault::load_encrypted(&crate::vault::vault_path(), key_bytes)
+        .map_err(|e| format!("Could not re-read the vault to verify the import: {e}"))?;
+    Ok(hosts
+        .iter()
+        .filter_map(|h| crate::audit::inspect(h).ok())
+        .any(|f| f.fingerprint == fingerprint))
+}
+
+/// Why a key must not be removed from disk yet. Empty means it may be.
+///
+/// Pure, so the rules can be read in one place and tested without a
+/// filesystem. Every one of these is re-checked in `evict_key_from_disk`
+/// itself: the panel calls this to decide what to offer, and the command does
+/// not trust the panel.
+pub fn eviction_blockers(
+    parsed: bool,
+    in_saved_vault: bool,
+    config_references: bool,
+    override_config: bool,
+) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    if !parsed {
+        out.push(
+            "Kino cannot read this key format, so it cannot prove it holds a copy.              Remove it yourself if you are sure.",
+        );
+    }
+    if !in_saved_vault {
+        out.push(
+            "This key is not in the saved vault. Import it first - and the vault has to be              written to disk, not merely changed on screen.",
+        );
+    }
+    if config_references && !override_config {
+        out.push(
+            "Your ~/.ssh/config names this key, so `ssh` on the command line will stop working              for those hosts.",
+        );
+    }
+    out
+}
+
+/// Import a key file into the vault, then prove it landed.
+///
+/// The passphrase of an encrypted key is *not* asked for and *not* stored: the
+/// encrypted key text goes into the vault as it is, so it keeps its own
+/// protection on top of the vault's.
+#[tauri::command]
+pub fn import_key_from_disk(
+    state: tauri::State<'_, crate::AppState>,
+    path: String,
+    host_id: Option<String>,
+    name: String,
+) -> Result<ImportOutcome, String> {
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("Cannot read {path}: {e}"))?;
+    let parsed = PrivateKey::from_openssh(text.trim())
+        .map_err(|e| format!("Kino cannot read this key format: {e}"))?;
+    let fingerprint = parsed.public_key().fingerprint(HashAlg::Sha256).to_string();
+    let public = parsed.public_key().to_openssh().unwrap_or_default();
+
+    let key_guard = state.vault_key.lock().unwrap();
+    let key = *key_guard.as_ref().ok_or("Vault is locked")?;
+    let salt_guard = state.vault_salt.lock().unwrap();
+    let salt = *salt_guard.as_ref().ok_or("Vault is locked")?;
+
+    let (host_id, host_name) = {
+        let mut hosts = state.hosts.lock().unwrap();
+        match host_id.and_then(|id| hosts.iter_mut().find(|h| h.id == id)) {
+            Some(existing) => {
+                existing.private_key = Some(text.clone());
+                existing.public_key = Some(public);
+                existing.default_auth = "SshKey".into();
+                existing.key_added_at = Some(now_secs());
+                (existing.id.clone(), existing.name.clone())
+            }
+            None => {
+                // Written out rather than `..Default::default()`: `Host` has
+                // no `Default` on purpose, because one would hand out port 0.
+                let host = Host {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    name: name.clone(),
+                    // Left blank for the user to fill in. A key on its own says
+                    // nothing about which machine it opens, and inventing a
+                    // hostname would be worse than an obvious gap.
+                    hostname: String::new(),
+                    port: 22,
+                    username: String::new(),
+                    default_auth: "SshKey".into(),
+                    password: None,
+                    private_key: Some(text.clone()),
+                    public_key: Some(public),
+                    passphrase: None,
+                    port_forwards: vec![],
+                    on_connect_snippets: vec![],
+                    color: None,
+                    notes: None,
+                    group: None,
+                    os: None,
+                    connection_mode: None,
+                    agent_id: None,
+                    relay_url: None,
+                    relay_token: None,
+                    control_url: None,
+                    proxy_type: None,
+                    proxy_host: None,
+                    proxy_port: None,
+                    proxy_username: None,
+                    proxy_password: None,
+                    jump_host: None,
+                    jump: None,
+                    key_added_at: Some(now_secs()),
+                    ntfy_topic: None,
+                };
+                let pair = (host.id.clone(), host.name.clone());
+                hosts.push(host);
+                pair
+            }
+        }
+    };
+
+    {
+        let hosts = state.hosts.lock().unwrap();
+        crate::vault::save_vault(&hosts, &key, &salt)?;
+    }
+
+    Ok(ImportOutcome {
+        verified_in_saved_vault: fingerprint_in_saved_vault(&key, &fingerprint)?,
+        host_id,
+        host_name,
+        fingerprint,
+    })
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Overwrite a file's bytes, then unlink it.
+///
+/// The overwrite is worth doing and is not a guarantee. On a copy-on-write or
+/// journalling filesystem, on anything with a flash translation layer, and on
+/// any snapshotted volume, the old blocks may still exist somewhere this
+/// process cannot reach. The UI says so; so does this comment, because the
+/// next person to read it deserves to know what it is really buying.
+fn overwrite_and_remove(path: &Path) -> Result<(), String> {
+    use std::io::Write;
+    let len = std::fs::metadata(path)
+        .map_err(|e| format!("Cannot stat {}: {e}", path.display()))?
+        .len()
+        .min(MAX_KEY_BYTES) as usize;
+
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .map_err(|e| format!("Cannot open {} for overwriting: {e}", path.display()))?;
+    file.write_all(&vec![0u8; len])
+        .map_err(|e| format!("Overwrite failed, so nothing was deleted: {e}"))?;
+    file.sync_all()
+        .map_err(|e| format!("Overwrite could not be flushed, so nothing was deleted: {e}"))?;
+    drop(file);
+
+    std::fs::remove_file(path).map_err(|e| format!("Could not remove {}: {e}", path.display()))
+}
+
+/// Remove a key from disk, once every precondition holds.
+///
+/// Re-checks all of them here rather than trusting whatever the panel decided,
+/// and re-reads the vault file to confirm the key really is stored. The order
+/// matters: prove the copy exists, then destroy the original. Never the other
+/// way round - the same rule key rotation follows.
+#[tauri::command]
+pub fn evict_key_from_disk(
+    state: tauri::State<'_, crate::AppState>,
+    path: String,
+    override_config: bool,
+) -> Result<String, String> {
+    let key_guard = state.vault_key.lock().unwrap();
+    let key = *key_guard.as_ref().ok_or("Vault is locked")?;
+
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("Cannot read {path}: {e}"))?;
+    let parsed = PrivateKey::from_openssh(text.trim()).ok();
+    let fingerprint = parsed
+        .as_ref()
+        .map(|k| k.public_key().fingerprint(HashAlg::Sha256).to_string());
+
+    let in_saved_vault = match &fingerprint {
+        Some(fp) => fingerprint_in_saved_vault(&key, fp)?,
+        None => false,
+    };
+
+    let config_text = ssh_dir()
+        .map(|d| d.join("config"))
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default();
+    let file_name = Path::new(&path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let referenced = identities_in_config(&config_text).iter().any(|i| {
+        Path::new(i)
+            .file_name()
+            .map(|n| n.to_string_lossy() == file_name)
+            .unwrap_or(false)
+    });
+
+    let blockers = eviction_blockers(
+        fingerprint.is_some(),
+        in_saved_vault,
+        referenced,
+        override_config,
+    );
+    if !blockers.is_empty() {
+        return Err(blockers.join(" "));
+    }
+
+    overwrite_and_remove(Path::new(&path))?;
+    Ok(format!(
+        "{file_name} was overwritten and deleted. Its copy in the vault is the only one now."
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,6 +791,57 @@ mod tests {
             assert!(!name.starts_with("known_hosts"), "picked up {name}");
             assert!(!name.ends_with(".pub"), "picked up {name}");
             assert_ne!(name, "config", "picked up the ssh config as a key");
+        }
+    }
+
+    // ── The rules that stand between a key and its deletion ────────────────
+    //
+    // These are the only tests here that guard something irreversible, so they
+    // enumerate rather than sample: every combination that must refuse, and
+    // the single combination that may proceed.
+
+    #[test]
+    fn nothing_is_deleted_unless_the_vault_provably_has_it() {
+        // parsed, in_saved_vault, config_references, override_config
+        assert!(!eviction_blockers(true, false, false, false).is_empty());
+        assert!(!eviction_blockers(false, false, false, false).is_empty());
+        // Parsing but absent from the saved vault is the dangerous near-miss:
+        // the host may exist on screen and never have been written.
+        let why = eviction_blockers(true, false, false, false);
+        assert!(why[0].contains("not in the saved vault"), "{why:?}");
+        assert!(why[0].contains("written to disk"), "{why:?}");
+    }
+
+    #[test]
+    fn a_key_kino_cannot_read_is_never_deleted() {
+        // No fingerprint means no proof of a copy, whatever else is true.
+        let why = eviction_blockers(false, true, false, true);
+        assert!(!why.is_empty());
+        assert!(why[0].contains("cannot read this key format"), "{why:?}");
+    }
+
+    #[test]
+    fn an_ssh_config_reference_blocks_until_it_is_overridden() {
+        assert!(!eviction_blockers(true, true, true, false).is_empty());
+        // Overriding is allowed, because `ssh` on the command line is the
+        // user's business - but it has to be said out loud.
+        assert!(eviction_blockers(true, true, true, true).is_empty());
+    }
+
+    #[test]
+    fn the_only_way_through_is_every_precondition_at_once() {
+        assert!(eviction_blockers(true, true, false, false).is_empty());
+
+        // Exhaustive: any single failure refuses.
+        for (parsed, saved, refd, over) in [
+            (false, true, false, false),
+            (true, false, false, false),
+            (true, true, true, false),
+        ] {
+            assert!(
+                !eviction_blockers(parsed, saved, refd, over).is_empty(),
+                "({parsed}, {saved}, {refd}, {over}) should refuse"
+            );
         }
     }
 

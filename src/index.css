@@ -3480,6 +3480,16 @@ textarea.mono {
 .tp-grade.classical { border-color: var(--yellow); color: var(--yellow); }
 .tp-grade.pq { border-color: var(--green); color: var(--green); }
 
+/* The one destructive action in this panel, so it is a block that interrupts
+   the row rather than a button that sits quietly beside it. */
+.evict-confirm { margin: 8px 0 4px; }
+
+.evict-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
 .audit-exported {
   margin: 6px 20px 0;
   font-size: 12px;

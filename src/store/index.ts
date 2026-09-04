@@ -279,6 +279,15 @@ export interface KeyOnDisk {
   findings: AuditFinding[];
 }
 
+export interface ImportOutcome {
+  host_id: string;
+  host_name: string;
+  fingerprint: string;
+  /** The key was read back out of the saved vault file, not just added on
+   *  screen. Removal from disk is refused until this is true. */
+  verified_in_saved_vault: boolean;
+}
+
 export interface SweepReport {
   keys: KeyOnDisk[];
   /** The directories that were looked at, so the scope is visible. */
@@ -576,6 +585,16 @@ interface VaultStore {
   /** Find private keys on this machine. Detection only - it reads and
    *  describes, and works with the vault locked. */
   sweepKeys: (extraDirs: string[]) => Promise<SweepReport>;
+  /** Copy a key on disk into the vault. Resolves with proof it was read back
+   *  out of the *saved* vault - removal is refused until that is true. */
+  importKeyFromDisk: (
+    path: string,
+    hostId: string | null,
+    name: string
+  ) => Promise<ImportOutcome>;
+  /** Overwrite and delete a key file. Every precondition is re-checked in the
+   *  backend, so this can refuse even when the UI offered it. */
+  evictKeyFromDisk: (path: string, overrideConfig: boolean) => Promise<string>;
   /** Ask each host what cryptography it would use. Opens no session and reads
    *  no credential, so it works with the vault locked. */
   probeHostAlgorithms: (hosts: Host[]) => Promise<HostProbe[]>;
@@ -1757,6 +1776,10 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
 
   auditKeys: () => invoke<AuditReport>("audit_keys"),
   sweepKeys: (extraDirs) => invoke<SweepReport>("sweep_keys", { extraDirs }),
+  importKeyFromDisk: (path, hostId, name) =>
+    invoke<ImportOutcome>("import_key_from_disk", { path, hostId, name }),
+  evictKeyFromDisk: (path, overrideConfig) =>
+    invoke<string>("evict_key_from_disk", { path, overrideConfig }),
   probeHostAlgorithms: (hosts) => invoke<HostProbe[]>("probe_host_algorithms", { hosts }),
   writeTextFile: (content, path) => invoke<void>("write_text_file", { content, path }),
   rotateKey: async (hostId) => {

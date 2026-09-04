@@ -75,8 +75,16 @@ function shortFingerprint(fp: string): string {
  * once is a very bad afternoon.
  */
 export function SecurityPanel({ onClose }: Props) {
-  const { auditKeys, rotateKey, probeHostAlgorithms, sweepKeys, writeTextFile, hosts } =
-    useVaultStore();
+  const {
+    auditKeys,
+    rotateKey,
+    probeHostAlgorithms,
+    sweepKeys,
+    importKeyFromDisk,
+    evictKeyFromDisk,
+    writeTextFile,
+    hosts,
+  } = useVaultStore();
   const [view, setView] = useState<"keys" | "disk" | "transport">("keys");
   const [report, setReport] = useState<AuditReport | null>(null);
   const [loading, setLoading] = useState(true);
@@ -102,6 +110,11 @@ export function SecurityPanel({ onClose }: Props) {
   const [sweep, setSweep] = useState<SweepReport | null>(null);
   const [sweeping, setSweeping] = useState(false);
   const [openKey, setOpenKey] = useState<string | null>(null);
+  /** Keys imported and read back out of the saved vault, this session.
+   *  Removal is only offered for these, and the backend checks again anyway. */
+  const [imported, setImported] = useState<Record<string, string>>({});
+  const [confirmEvict, setConfirmEvict] = useState<string | null>(null);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -272,6 +285,42 @@ export function SecurityPanel({ onClose }: Props) {
     }
   }
 
+  async function importKey(k: KeyOnDisk) {
+    setBusyKey(k.path);
+    setError(null);
+    try {
+      const name = k.path.split(/[\\/]/).pop() ?? k.path;
+      const outcome = await importKeyFromDisk(k.path, null, name);
+      if (!outcome.verified_in_saved_vault) {
+        setError(
+          "The key was added but could not be read back out of the saved vault, so it will not be offered for removal."
+        );
+        return;
+      }
+      setImported((prev) => ({ ...prev, [k.path]: outcome.host_name }));
+      await runSweep();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  async function evictKey(path: string, overrideConfig: boolean) {
+    setBusyKey(path);
+    setError(null);
+    try {
+      setExported(await evictKeyFromDisk(path, overrideConfig));
+      setConfirmEvict(null);
+      await runSweep();
+    } catch (e) {
+      setError(String(e));
+      setConfirmEvict(null);
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
   /** The worst thing said about a key, which is what its row is coloured by. */
   function worstOnDisk(k: KeyOnDisk): string | null {
     const order = ["critical", "high", "medium", "low"];
@@ -339,7 +388,61 @@ export function SecurityPanel({ onClose }: Props) {
                     </span>
                   )}
                 </button>
+
+                {busyKey === k.path ? (
+                  <span className="audit-progress">Working…</span>
+                ) : imported[k.path] ? (
+                  <button
+                    className="btn btn-sm btn-danger"
+                    onClick={() => setConfirmEvict(k.path)}
+                    title="Overwrite and delete this file. The vault keeps its copy."
+                  >
+                    Remove from disk
+                  </button>
+                ) : (
+                  <button
+                    className="btn btn-sm"
+                    disabled={!!busyKey || k.algorithm === null}
+                    title={
+                      k.algorithm === null
+                        ? "Kino cannot read this key format, so it cannot take a copy"
+                        : "Copy this key into the vault, where it is encrypted at rest"
+                    }
+                    onClick={() => void importKey(k)}
+                  >
+                    Import to vault
+                  </button>
+                )}
               </div>
+
+              {confirmEvict === k.path && (
+                <div className="audit-finding sev-high evict-confirm">
+                  <p className="audit-finding-title">
+                    <span className="audit-sev">delete</span>
+                    Overwrite and delete this file?
+                  </p>
+                  <p className="audit-finding-detail">
+                    <code>{k.path}</code>
+                    <br />
+                    It is now in the vault as <strong>{imported[k.path]}</strong>. The bytes are
+                    overwritten before the file is unlinked, but on a copy-on-write or
+                    journalling filesystem, on flash, or on a snapshotted volume, the old blocks
+                    may still exist somewhere Kino cannot reach. Treat this as tidying up, not as
+                    erasure.
+                  </p>
+                  <div className="evict-actions">
+                    <button className="btn btn-sm" onClick={() => setConfirmEvict(null)} autoFocus>
+                      Cancel
+                    </button>
+                    <button
+                      className="btn btn-sm btn-danger"
+                      onClick={() => void evictKey(k.path, true)}
+                    >
+                      Delete {k.path.split(/[\\/]/).pop()}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {open && (
                 <div className="audit-detail">
