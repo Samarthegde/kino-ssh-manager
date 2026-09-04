@@ -90,7 +90,7 @@ pub struct AuditReport {
 
 // ── Inspection ────────────────────────────────────────────────────────────────
 
-fn describe_algorithm(key: &PublicKey) -> (String, Option<u32>) {
+pub(crate) fn describe_algorithm(key: &PublicKey) -> (String, Option<u32>) {
     use ssh_key::Algorithm;
     match key.algorithm() {
         Algorithm::Ed25519 => ("ed25519".into(), None),
@@ -105,7 +105,7 @@ fn describe_algorithm(key: &PublicKey) -> (String, Option<u32>) {
 
 /// Modulus length in bits. `as_positive_bytes` drops the sign padding byte that
 /// would otherwise report a 2048-bit key as 2056.
-fn rsa_bits(key: &PublicKey) -> Option<u32> {
+pub(crate) fn rsa_bits(key: &PublicKey) -> Option<u32> {
     let rsa = key.key_data().rsa()?;
     let bytes = rsa.n.as_positive_bytes()?;
     Some((bytes.len() * 8) as u32)

@@ -11,6 +11,7 @@ mod forwarding;
 mod health;
 mod history;
 mod host_keys;
+mod key_sweep;
 mod keygen;
 mod local_session;
 pub mod mcp;
@@ -1921,6 +1922,7 @@ pub fn run() {
             cron::cron_save,
             cron::cron_preview,
             audit::audit_keys,
+            key_sweep::sweep_keys,
             audit::rotate_key,
             health::check_hosts_health,
             algo_probe::probe_host_algorithms,
