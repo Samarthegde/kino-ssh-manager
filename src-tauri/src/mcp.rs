@@ -485,3 +485,233 @@ impl ServerHandler for KinoMcpServer {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mcp_policy::parse_rules;
+    use crate::snippets::Snippet;
+    use std::collections::HashMap;
+
+    /// The policy tests in `mcp_policy` prove `evaluate` decides correctly.
+    /// These prove the *server* acts on the decision - a different failure, and
+    /// one none of those tests would catch: a `gate` call missing from a single
+    /// tool passes every one of them.
+    ///
+    /// Nothing here reaches the network. A refusal happens before a connection
+    /// is opened, which is the property being tested; and for a call the policy
+    /// *allows*, the host points at a closed port, so getting a transport error
+    /// rather than `policy_denied` is what proves the gate let it through.
+    fn host() -> Host {
+        Host {
+            id: "h1".into(),
+            name: "web-prod".into(),
+            // Port 1 on loopback refuses immediately - no waiting, no network.
+            hostname: "127.0.0.1".into(),
+            port: 1,
+            username: "root".into(),
+            default_auth: "Password".into(),
+            password: Some("x".into()),
+            private_key: None,
+            public_key: None,
+            passphrase: None,
+            port_forwards: vec![],
+            on_connect_snippets: vec![],
+            color: None,
+            notes: None,
+            group: None,
+            os: None,
+            connection_mode: None,
+            agent_id: None,
+            relay_url: None,
+            relay_token: None,
+            control_url: None,
+            proxy_type: None,
+            proxy_host: None,
+            proxy_port: None,
+            proxy_username: None,
+            proxy_password: None,
+            jump_host: None,
+            jump: None,
+            key_added_at: None,
+            ntfy_topic: None,
+        }
+    }
+
+    fn server(mode: McpMode, rules: &str) -> KinoMcpServer {
+        let mut policies = HashMap::new();
+        policies.insert(
+            "h1".to_string(),
+            HostPolicy {
+                mode,
+                rules: parse_rules(rules, "host").unwrap(),
+            },
+        );
+        KinoMcpServer::new(McpVault {
+            hosts: vec![host()],
+            snippets: vec![Snippet {
+                id: "s1".into(),
+                name: "deploy".into(),
+                commands: "systemctl restart app".into(),
+            }],
+            policies,
+            global_rules: vec![],
+        })
+    }
+
+    fn text(r: &CallToolResult) -> String {
+        r.content
+            .iter()
+            .filter_map(|c| c.as_text())
+            .map(|t| t.text.clone())
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    fn exec(s: &KinoMcpServer, command: &str) -> CallToolResult {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(s.ssh_exec(Parameters(ExecParams {
+                host: "web-prod".into(),
+                command: command.into(),
+            })))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_read_only_host_refuses_a_command() {
+        let r = exec(&server(McpMode::ReadOnly, ""), "uptime");
+        let body = text(&r);
+        assert_eq!(r.is_error, Some(true));
+        assert!(body.contains("\"error\": \"policy_denied\""), "{body}");
+        assert!(body.contains("\"reason\": \"default_deny\""), "{body}");
+        assert!(body.contains("\"mode\": \"read_only\""), "{body}");
+    }
+
+    #[test]
+    fn a_read_only_host_refuses_every_write_tool() {
+        let s = server(McpMode::ReadOnly, "");
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let w = rt
+            .block_on(s.sftp_write(Parameters(WriteParams {
+                host: "web-prod".into(),
+                path: "/etc/passwd".into(),
+                content: "x".into(),
+            })))
+            .unwrap();
+        assert!(
+            text(&w).contains("\"reason\": \"read_only\""),
+            "{}",
+            text(&w)
+        );
+
+        let snip = rt
+            .block_on(s.run_snippet(Parameters(RunSnippetParams {
+                host: "web-prod".into(),
+                snippet: "deploy".into(),
+            })))
+            .unwrap();
+        assert!(
+            text(&snip).contains("\"reason\": \"read_only\""),
+            "{}",
+            text(&snip)
+        );
+    }
+
+    #[test]
+    fn a_read_only_host_still_allows_reads() {
+        // Allowed, so it goes on to connect - and fails to, because the port is
+        // shut. A transport error here is the proof the gate let it past.
+        let s = server(McpMode::ReadOnly, "");
+        let r = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(s.sftp_read(Parameters(PathParams {
+                host: "web-prod".into(),
+                path: "/etc/hostname".into(),
+            })))
+            .unwrap();
+        assert!(!text(&r).contains("policy_denied"), "{}", text(&r));
+    }
+
+    #[test]
+    fn an_allow_rule_gets_a_command_past_the_gate() {
+        let r = exec(&server(McpMode::ReadOnly, "allow uptime"), "uptime");
+        assert!(!text(&r).contains("policy_denied"), "{}", text(&r));
+
+        // And only that command: the rule is not a general opening.
+        let r = exec(&server(McpMode::ReadOnly, "allow uptime"), "shutdown now");
+        assert!(
+            text(&r).contains("\"reason\": \"default_deny\""),
+            "{}",
+            text(&r)
+        );
+    }
+
+    #[test]
+    fn guarded_says_plainly_that_approval_does_not_exist_yet() {
+        let r = exec(&server(McpMode::Guarded, ""), "uptime");
+        let body = text(&r);
+        assert!(
+            body.contains("\"reason\": \"approval_unavailable\""),
+            "{body}"
+        );
+        assert!(body.contains("guarded mode"), "{body}");
+    }
+
+    #[test]
+    fn a_deny_rule_names_the_line_that_refused() {
+        let r = exec(&server(McpMode::Guarded, "deny rm -rf *"), "rm -rf /var");
+        let body = text(&r);
+        assert!(body.contains("\"reason\": \"rule\""), "{body}");
+        assert!(body.contains("\"rule_id\": \"host:1\""), "{body}");
+    }
+
+    #[test]
+    fn full_access_gates_nothing() {
+        let r = exec(&server(McpMode::Full, ""), "rm -rf /");
+        assert!(!text(&r).contains("policy_denied"), "{}", text(&r));
+    }
+
+    #[test]
+    fn a_host_with_no_policy_at_all_is_read_only() {
+        // If the vault is ever written without an entry for a host, the missing
+        // entry has to mean less access, not more.
+        let s = KinoMcpServer::new(McpVault {
+            hosts: vec![host()],
+            snippets: vec![],
+            policies: HashMap::new(),
+            global_rules: vec![],
+        });
+        assert!(text(&exec(&s, "uptime")).contains("\"reason\": \"default_deny\""));
+    }
+
+    #[test]
+    fn a_refusal_does_not_hand_over_the_rule_list() {
+        let s = server(McpMode::ReadOnly, "allow systemctl status *\ndeny rm -rf *");
+        let body = text(&exec(&s, "cat /etc/shadow"));
+        assert!(!body.contains("systemctl status"), "leaked a rule: {body}");
+        assert!(!body.contains("rm -rf"), "leaked a rule: {body}");
+    }
+
+    #[test]
+    fn listing_hosts_works_in_every_mode_and_names_the_access() {
+        let s = server(McpMode::ReadOnly, "");
+        let r = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(s.list_hosts())
+            .unwrap();
+        let body = text(&r);
+        assert!(!body.contains("policy_denied"), "{body}");
+        assert!(body.contains("\"access\": \"read_only\""), "{body}");
+    }
+}
