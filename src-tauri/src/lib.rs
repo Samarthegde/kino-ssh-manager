@@ -863,6 +863,16 @@ fn export_ssh_key(content: String, path: String) -> Result<(), String> {
     std::fs::write(&path, content).map_err(|e| e.to_string())
 }
 
+/// Write text the user asked to save somewhere they chose.
+///
+/// `export_ssh_key` does the same thing, but naming matters at a command
+/// boundary: an audit export is not a key, and a reviewer should not have to
+/// work out that it borrowed the key path.
+#[tauri::command]
+fn write_text_file(content: String, path: String) -> Result<(), String> {
+    std::fs::write(&path, content).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn read_key_file(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("Cannot read key file: {}", e))
@@ -1843,6 +1853,7 @@ pub fn run() {
             export_host_encrypted,
             export_ssh_key,
             read_key_file,
+            write_text_file,
             save_session_log,
             save_image_png,
             report_terminal_renderer,

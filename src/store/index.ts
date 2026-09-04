@@ -224,6 +224,44 @@ export interface HostAudit {
   findings: AuditFinding[];
 }
 
+/** What a server said it can do. Mirrors `Offered` in algo_probe.rs. */
+export interface SshOffered {
+  banner: string;
+  kex: string[];
+  host_key: string[];
+  cipher: string[];
+  mac: string[];
+  compression: string[];
+}
+
+export interface SshFinding {
+  severity: "critical" | "high" | "medium" | "low";
+  title: string;
+  remediation: string;
+}
+
+/** How good the negotiated set would be. */
+export type SshGrade = "pq" | "classical" | "weak";
+
+export interface SshAssessment {
+  grade: SshGrade;
+  kex: string | null;
+  host_key: string | null;
+  cipher: string | null;
+  mac: string | null;
+  findings: SshFinding[];
+}
+
+export interface HostProbe {
+  id: string;
+  /** "ok" | "unknown" (not probed, and why) | "unreachable" */
+  status: string;
+  offered: SshOffered | null;
+  assessment: SshAssessment | null;
+  detail: string | null;
+  checked_at: number;
+}
+
 export interface AuditReport {
   hosts: HostAudit[];
   generated_at: number;
@@ -508,6 +546,10 @@ interface VaultStore {
   ) => Promise<CronPreview>;
   /** Inspect every stored key. Entirely local - no host is contacted. */
   auditKeys: () => Promise<AuditReport>;
+  /** Ask each host what cryptography it would use. Opens no session and reads
+   *  no credential, so it works with the vault locked. */
+  probeHostAlgorithms: (hosts: Host[]) => Promise<HostProbe[]>;
+  writeTextFile: (content: string, path: string) => Promise<void>;
   /**
    * Replace a host's key with a fresh ed25519 one. Progress arrives on
    * `rotate-<hostId>` as plain strings; see SecurityPanel.
@@ -1684,6 +1726,8 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
     invoke<CronPreview>("cron_preview", { schedule, hostNow, hostOffsetMin }),
 
   auditKeys: () => invoke<AuditReport>("audit_keys"),
+  probeHostAlgorithms: (hosts) => invoke<HostProbe[]>("probe_host_algorithms", { hosts }),
+  writeTextFile: (content, path) => invoke<void>("write_text_file", { content, path }),
   rotateKey: async (hostId) => {
     const outcome = await invoke<RotateOutcome>("rotate_key", { hostId });
     // Rotation rewrites the host in the vault, so the copy in the store - the

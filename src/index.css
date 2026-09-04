@@ -3436,6 +3436,56 @@ textarea.mono {
 
 .copilot-payload span { margin-right: auto; }
 
+/* ── Transport audit ─────────────────────────────────────────────────────────
+ * Reuses the key audit's row, finding and severity styles - both answer "what
+ * is wrong with this host, and what do I do about it" - and adds only the two
+ * things it needs: the tabs, and a grade that is legible without colour.
+ */
+.audit-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px 20px 0;
+}
+
+.audit-tab {
+  padding: 5px 12px;
+  border: 1px solid var(--muted);
+  border-bottom: 0;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--subtle);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.audit-tab.on {
+  background: var(--overlay);
+  color: var(--text);
+}
+
+/* The word is the signal; the colour only reinforces it. A grade must survive
+   colour-vision deficiency and the reduced-effects mode. */
+.tp-grade {
+  padding: 1px 8px;
+  border: 1px solid var(--muted);
+  border-radius: 999px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--subtle);
+}
+
+.tp-grade.weak { border-color: var(--red); color: var(--red); }
+.tp-grade.classical { border-color: var(--yellow); color: var(--yellow); }
+.tp-grade.pq { border-color: var(--green); color: var(--green); }
+
+.audit-exported {
+  margin: 6px 20px 0;
+  font-size: 12px;
+  color: var(--subtle);
+}
+
 /* Not an error - nothing failed. A statement of what did not leave the machine. */
 .copilot-redacted {
   margin: 6px 0 0;
@@ -6401,6 +6451,9 @@ textarea.mono,
 .audit-host.sev-high { border-left-color: var(--red); }
 .audit-host.sev-medium { border-left-color: var(--ink-accent); }
 .audit-host.sev-low { border-left-color: var(--ink-verdigris); }
+.audit-host.tp-weak { border-left-color: var(--red); }
+.audit-host.tp-classical { border-left-color: var(--yellow); }
+.audit-host.tp-pq { border-left-color: var(--green); }
 .audit-host.busy { background: color-mix(in srgb, var(--ink-paper) 5%, transparent); }
 
 .audit-host-head {

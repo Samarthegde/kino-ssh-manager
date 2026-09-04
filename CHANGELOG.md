@@ -119,6 +119,30 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
   with the fact that a persuasive injected instruction can still produce a
   plausible command you approve.
 
+- **A transport audit, under Security - Transport.** OpenSSH 9.9 and 10 default
+  to a post-quantum key exchange and warn when they cannot negotiate one, and
+  OpenSSH 10 dropped DSA outright. Kino was already negotiating the hybrid
+  exchange wherever a server supported it, and never said so.
+
+  It now asks each host directly: exchange version banners, read the algorithms
+  it offers, hang up. No credentials are read and no session is opened, so the
+  scan works with the vault locked and leaves a connection in the host's log
+  rather than a login. Hosts behind a relay or a jump host are not probed and
+  say so, instead of being guessed at.
+
+  Every host is graded weakest-first - weak, classical, post-quantum - with the
+  algorithms a connection would actually use, and each finding names the fix on
+  that host, quoting the version it is running rather than talking about
+  versions in general. Export the table as CSV or JSON, which is the thing you
+  hand to somebody who asked.
+
+  It judges what a host *offers*, not only what would be chosen. A server whose
+  only key exchange is SHA-1, or whose only host key is DSA, cannot be reached
+  by Kino at all - so looking at the negotiated algorithm alone would have said
+  nothing about exactly the host worth finding. And where a host offers a
+  post-quantum exchange Kino does not implement, it says so and whose gap it is,
+  rather than reporting the host as having none.
+
 ## [0.9.0] - 2026-09-01
 
 ### Added
