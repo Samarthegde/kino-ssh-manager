@@ -595,6 +595,13 @@ interface VaultStore {
   /** Overwrite and delete a key file. Every precondition is re-checked in the
    *  backend, so this can refuse even when the UI offered it. */
   evictKeyFromDisk: (path: string, overrideConfig: boolean) => Promise<string>;
+  /** Write a vault key back out to a file, created private from the start.
+   *  Refuses to overwrite anything, so it can never destroy a key. */
+  exportKeyToDisk: (
+    hostId: string,
+    path: string,
+    includePublic: boolean
+  ) => Promise<string>;
   /** Ask each host what cryptography it would use. Opens no session and reads
    *  no credential, so it works with the vault locked. */
   probeHostAlgorithms: (hosts: Host[]) => Promise<HostProbe[]>;
@@ -1780,6 +1787,8 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
     invoke<ImportOutcome>("import_key_from_disk", { path, hostId, name }),
   evictKeyFromDisk: (path, overrideConfig) =>
     invoke<string>("evict_key_from_disk", { path, overrideConfig }),
+  exportKeyToDisk: (hostId, path, includePublic) =>
+    invoke<string>("export_key_to_disk", { hostId, path, includePublic }),
   probeHostAlgorithms: (hosts) => invoke<HostProbe[]>("probe_host_algorithms", { hosts }),
   writeTextFile: (content, path) => invoke<void>("write_text_file", { content, path }),
   rotateKey: async (hostId) => {

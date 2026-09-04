@@ -82,6 +82,7 @@ export function SecurityPanel({ onClose }: Props) {
     sweepKeys,
     importKeyFromDisk,
     evictKeyFromDisk,
+    exportKeyToDisk,
     writeTextFile,
     hosts,
   } = useVaultStore();
@@ -223,18 +224,30 @@ export function SecurityPanel({ onClose }: Props) {
               <button className="btn btn-sm" onClick={() => setConfirmId(null)}>✕</button>
             </span>
           ) : (
-            <button
-              className="btn btn-sm"
-              disabled={!!rotatingId || host.auth === "Agent"}
-              title={
-                host.auth === "Agent"
-                  ? "This host authenticates through your ssh-agent; Kino holds no key to rotate"
-                  : "Replace this host's key with a fresh ed25519 one"
-              }
-              onClick={() => setConfirmId(host.host_id)}
-            >
-              Rotate key
-            </button>
+            <>
+              {host.key && (
+                <button
+                  className="btn btn-sm"
+                  disabled={!!rotatingId}
+                  title="Write this key back out as a file, created readable only by you"
+                  onClick={() => void exportKey(host)}
+                >
+                  Export
+                </button>
+              )}
+              <button
+                className="btn btn-sm"
+                disabled={!!rotatingId || host.auth === "Agent"}
+                title={
+                  host.auth === "Agent"
+                    ? "This host authenticates through your ssh-agent; Kino holds no key to rotate"
+                    : "Replace this host's key with a fresh ed25519 one"
+                }
+                onClick={() => setConfirmId(host.host_id)}
+              >
+                Rotate key
+              </button>
+            </>
           )}
         </div>
 
@@ -282,6 +295,24 @@ export function SecurityPanel({ onClose }: Props) {
       setError(String(e));
     } finally {
       setSweeping(false);
+    }
+  }
+
+  /** Write a vault key back out as a file. The counterpart to eviction: it is
+   *  what stops "remove from disk" being a one-way door. */
+  async function exportKey(host: HostAudit) {
+    const path = await save({
+      title: `Export ${host.host_name}'s key`,
+      defaultPath: `${host.host_name.replace(/[^A-Za-z0-9._-]/g, "_")}_id_ed25519`,
+      filters: [{ name: "Private key", extensions: ["", "pem", "key"] }],
+    });
+    if (!path) return;
+    setError(null);
+    try {
+      setExported(await exportKeyToDisk(host.host_id, path as string, true));
+      window.setTimeout(() => setExported(""), 6000);
+    } catch (e) {
+      setError(String(e));
     }
   }
 

@@ -729,7 +729,100 @@ pub fn evict_key_from_disk(
 
     overwrite_and_remove(Path::new(&path))?;
     Ok(format!(
-        "{file_name} was overwritten and deleted. Its copy in the vault is the only one now."
+        "{file_name} was overwritten and deleted. The vault's copy is the only one now - \
+         write it back from Vault keys if you need the file again."
+    ))
+}
+
+/// Create a file that is private from the moment it exists.
+///
+/// The obvious version - write it, then `chmod 600` - leaves a window in which
+/// the key sits on disk readable by everyone on the machine. It is a short
+/// window, and a key only has to be read once. So the mode goes on in the
+/// `open` call, before any bytes are written.
+///
+/// On Windows the file inherits the directory's ACL; there is no mode to set,
+/// and pretending otherwise would be worse than saying so.
+fn create_private(path: &Path) -> Result<std::fs::File, String> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            format!(
+                "{} already exists. Kino will not overwrite a key file - move it aside first.",
+                path.display()
+            )
+        } else {
+            format!("Cannot create {}: {e}", path.display())
+        }
+    })
+}
+
+/// Write a vault key back out to disk.
+///
+/// This is what makes removing a key from disk a decision rather than a
+/// one-way door: whatever was evicted can be written back when `ssh` on the
+/// command line turns out to need it. It refuses to overwrite anything, so it
+/// cannot be the thing that destroys a key.
+#[tauri::command]
+pub fn export_key_to_disk(
+    state: tauri::State<'_, crate::AppState>,
+    host_id: String,
+    path: String,
+    include_public: bool,
+) -> Result<String, String> {
+    use std::io::Write;
+
+    let (private, public, name) = {
+        let hosts = state.hosts.lock().unwrap();
+        let host = hosts
+            .iter()
+            .find(|h| h.id == host_id)
+            .ok_or("That host is no longer in the vault")?;
+        let private = host
+            .private_key
+            .clone()
+            .filter(|k| !k.trim().is_empty())
+            .ok_or_else(|| format!("'{}' has no private key stored", host.name))?;
+        (private, host.public_key.clone(), host.name.clone())
+    };
+
+    let target = Path::new(&path);
+    let mut file = create_private(target)?;
+    file.write_all(private.as_bytes())
+        .map_err(|e| format!("Could not write the key: {e}"))?;
+    if !private.ends_with('\n') {
+        let _ = file.write_all(b"\n");
+    }
+    file.sync_all()
+        .map_err(|e| format!("Could not flush the key to disk: {e}"))?;
+
+    let mut wrote = 1;
+    if include_public {
+        if let Some(pub_text) = public.filter(|p| !p.trim().is_empty()) {
+            let pub_path = target.with_extension("pub");
+            // A public key is not a secret, so an existing one is not worth
+            // failing the whole export over.
+            if let Ok(mut f) = std::fs::File::create(&pub_path) {
+                let _ = f.write_all(pub_text.trim_end().as_bytes());
+                let _ = f.write_all(b"\n");
+                wrote += 1;
+            }
+        }
+    }
+
+    Ok(format!(
+        "Wrote {} file{} for '{}' to {}{}",
+        wrote,
+        if wrote == 1 { "" } else { "s" },
+        name,
+        path,
+        if cfg!(unix) { " (mode 600)" } else { "" }
     ))
 }
 
@@ -824,6 +917,35 @@ mod tests {
     fn removing_something_that_is_not_there_is_an_error_not_a_panic() {
         let dir = tempfile::tempdir().unwrap();
         assert!(overwrite_and_remove(&dir.path().join("gone")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_exported_key_is_private_from_the_moment_it_exists() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("id_ed25519");
+        let file = create_private(&path).unwrap();
+        // Checked before a single byte is written: writing first and chmodding
+        // after would leave the key readable in between.
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "created as {mode:o}");
+        drop(file);
+    }
+
+    #[test]
+    fn exporting_never_overwrites_an_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("id_ed25519");
+        std::fs::write(&path, b"something already here").unwrap();
+
+        let err = create_private(&path).unwrap_err();
+        assert!(err.contains("already exists"), "{err}");
+        // And the original is untouched.
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "something already here"
+        );
     }
 
     // ── The rules that stand between a key and its deletion ────────────────
