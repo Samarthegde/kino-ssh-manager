@@ -794,6 +794,38 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_bytes_are_gone_before_the_file_is() {
+        // A hard link survives the unlink, so it can be read afterwards to see
+        // what was actually written. Asserting "the file is gone" alone would
+        // pass even if the overwrite silently did nothing.
+        let dir = tempfile::tempdir().unwrap();
+        let key = dir.path().join("id_ed25519");
+        let witness = dir.path().join("same_inode");
+        std::fs::write(&key, b"-----BEGIN OPENSSH PRIVATE KEY-----\nsecret\n").unwrap();
+        std::fs::hard_link(&key, &witness).unwrap();
+
+        overwrite_and_remove(&key).unwrap();
+
+        assert!(!key.exists(), "the file should be gone");
+        let left = std::fs::read(&witness).unwrap();
+        assert!(
+            left.iter().all(|b| *b == 0),
+            "bytes survived the overwrite: {:?}",
+            String::from_utf8_lossy(&left)
+        );
+        assert!(
+            !left.is_empty(),
+            "the file should have been overwritten, not truncated"
+        );
+    }
+
+    #[test]
+    fn removing_something_that_is_not_there_is_an_error_not_a_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(overwrite_and_remove(&dir.path().join("gone")).is_err());
+    }
+
     // ── The rules that stand between a key and its deletion ────────────────
     //
     // These are the only tests here that guard something irreversible, so they
@@ -843,6 +875,43 @@ mod tests {
                 "({parsed}, {saved}, {refd}, {over}) should refuse"
             );
         }
+    }
+
+    /// The destructive path, on the real filesystem, in the real directory -
+    /// same permissions, same mount, same everything the code will meet in
+    /// use. It creates its own key and destroys only that; nothing already in
+    /// `~/.ssh` is touched.
+    ///
+    ///     cargo test --lib key_sweep -- --ignored --nocapture
+    #[test]
+    #[ignore = "writes and deletes a throwaway key inside the real ~/.ssh"]
+    fn removes_a_key_from_the_real_ssh_directory() {
+        let dir = ssh_dir().expect("no home directory");
+        let key = dir.join("kino_selftest_key");
+        let witness = dir.join("kino_selftest_witness");
+        let _ = std::fs::remove_file(&key);
+        let _ = std::fs::remove_file(&witness);
+
+        std::fs::write(&key, b"-----BEGIN OPENSSH PRIVATE KEY-----\npretend\n").unwrap();
+        std::fs::hard_link(&key, &witness).unwrap();
+        println!("created {}", key.display());
+
+        overwrite_and_remove(&key).unwrap();
+
+        assert!(!key.exists(), "{} should be gone", key.display());
+        let left = std::fs::read(&witness).unwrap();
+        assert!(left.iter().all(|b| *b == 0), "bytes survived: {left:?}");
+        println!("deleted it; {} bytes were zeroed first", left.len());
+
+        std::fs::remove_file(&witness).unwrap();
+        // And the sweep no longer reports it.
+        let mut found = Vec::new();
+        scan_dir(&dir, &mut found, 1);
+        assert!(
+            !found.iter().any(|k| k.path.contains("kino_selftest")),
+            "the sweep still lists the deleted key"
+        );
+        println!("the sweep no longer lists it");
     }
 
     #[test]
