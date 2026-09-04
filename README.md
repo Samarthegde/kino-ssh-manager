@@ -59,12 +59,132 @@ Enable the feature under **Settings - Kino Agent** (it is off by default). See t
 [kino-relay](https://github.com/Samarthegde/kino-relay) repositories for
 installation and self-hosting.
 
+## MCP server
+
+Kino ships a second, headless binary - `kino-mcp` - that exposes hosts to an AI
+assistant over the [Model Context Protocol](https://modelcontextprotocol.io).
+The assistant can list your hosts, run commands, read and write files, and run
+saved snippets, **on the hosts you explicitly tick and no others**.
+
+### 1. Get the binary
+
+Every release attaches it, next to the installers on the
+[releases page](https://github.com/Samarthegde/kino-ssh-manager/releases):
+
+| Platform | Asset |
+| --- | --- |
+| Linux | `kino-mcp-linux-x86_64` |
+| Windows | `kino-mcp-windows-x86_64.exe` |
+
+Download it, make it executable, and put it somewhere on your `PATH`:
+
+```bash
+chmod +x kino-mcp-linux-x86_64
+sudo mv kino-mcp-linux-x86_64 /usr/local/bin/kino-mcp
+```
+
+It is not inside the `.deb`/`.rpm`/`.AppImage`/`.msi` - it's a separate download,
+because it's a server you run rather than an app you launch.
+
+Building from source works too, if you'd rather:
+
+```bash
+cargo build --release --manifest-path src-tauri/Cargo.toml --bin kino-mcp
+# -> src-tauri/target/release/kino-mcp
+```
+
+### 2. Configure it in Kino
+
+**Settings → Shortcuts & Tools → MCP Server**
+
+- **Set an MCP password.** This is *not* your master password. It encrypts a
+  separate file, `mcp_vault.enc`, holding only the hosts you expose - which is
+  how the headless binary reads them without ever being given the master
+  password.
+- **Tick the hosts to expose.** Everything unticked is absent from that file
+  entirely, so the assistant cannot see it, name it, or reach it.
+
+Kino rewrites `mcp_vault.enc` whenever a host, a snippet or the exposure list
+changes, so a rotated key or a removed host takes effect immediately.
+
+### 3. Point a client at it
+
+The server speaks MCP over stdio. For Claude Desktop or Claude Code, add:
+
+```json
+{
+  "mcpServers": {
+    "kino": {
+      "command": "kino-mcp",
+      "env": { "KINO_MCP_PASSWORD": "your-mcp-password" }
+    }
+  }
+}
+```
+
+Use the absolute path if the binary isn't on `PATH`. The panel in Kino shows
+this snippet with a copy button.
+
+### What it exposes
+
+| Tool | What it does |
+| --- | --- |
+| `list_hosts` | Name, hostname, port, user, group and OS of each exposed host |
+| `get_host` | Connection details for one host |
+| `ssh_exec` | Runs a shell command; returns stdout, stderr and the exit code |
+| `sftp_list` | `ls -la` of a remote directory, as text |
+| `sftp_read` | Contents of a remote text file |
+| `sftp_write` | Writes a file, creating or replacing it |
+| `list_snippets` / `run_snippet` | Lists and runs saved command snippets |
+
+### Worth knowing
+
+- **A newly exposed host is read-only.** It will read files and listings, refuse
+  to write, and run a command only if one of your rules names it. Two other
+  modes exist per host: **guarded**, where anything unnamed needs a person to
+  approve it, and **full**, which is the unrestricted shell and takes a separate
+  confirmation naming the host.
+- **Rules are matched against the command as written.** They are `allow`,
+  `deny` or `ask` plus a pattern, the first match wins, and a host's own rules
+  are read before the global ones. This is not shell parsing and must not be
+  mistaken for it: a deny rule catches `rm -rf /`, and catches nothing that
+  assembles itself at runtime. The read-only default is the boundary that
+  actually holds, because it refuses what it was not told to permit.
+- **Guarded mode currently refuses rather than asks.** The approval prompt is
+  not built yet, so a call that would need approval is declined with a message
+  saying so. Use rules, or full access, until it lands.
+- **Host keys are still enforced.** `kino-mcp` refuses any host whose key hasn't
+  already been trusted in the GUI - it will not trust-on-first-use. Connect once
+  from Kino before expecting MCP to reach a new host.
+- **The password comes from the environment.** `KINO_MCP_PASSWORD` is readable
+  by other processes running as you, so this protects the vault file at rest,
+  not against someone already on your machine as you.
+- Each tool call opens its own SSH connection, so a host behind a slow handshake
+  will feel slow per call.
+
+### If it doesn't start
+
+`kino-mcp` writes diagnostics to stderr (stdout is the JSON-RPC stream), and
+most MCP clients surface that in their logs. Run it directly to see them:
+
+```bash
+KINO_MCP_PASSWORD=your-mcp-password kino-mcp
+```
+
+- *"KINO_MCP_PASSWORD environment variable is not set"* - the client config is
+  missing the `env` block.
+- *"Cannot read MCP vault"* - no MCP password has been set in Kino yet, so the
+  file doesn't exist.
+- *"Wrong MCP password or corrupt MCP vault"* - you're using the master password,
+  or the MCP password was changed in Kino since.
+
 ## Security model
 
 - The vault (`vault.enc`) is an AES-256-GCM ciphertext; the key is derived from your master password with Argon2 and a random 16-byte salt stored alongside the ciphertext.
 - History and the snippet library are stored as sibling encrypted files under the same key.
 - Cloud sync uploads only the encrypted blobs - the server (GitHub) never sees plaintext or your master password.
 - Notes and harvested shell history live in sibling encrypted blobs (`notes.enc`, `shell-history.enc`) under the same key as the vault - never on a `Host`, which is what profile export serialises to plaintext JSON.
+- The MCP server reads only `mcp_vault.enc` - the hosts you explicitly exposed, encrypted under a separate MCP password. Your master password is never passed to it, and the rest of the vault is not in the file at all. Host-key pinning is enforced there too: a host the GUI hasn't trusted is refused rather than trusted on first use.
 - The key audit runs entirely on your machine, against the keys already in the vault. No host is contacted to produce the report, and nothing is sent anywhere.
 - Key rotation never removes a key it hasn't first proved it can do without: the new key is verified on its own connection before the old one is touched, and the rewrite of `authorized_keys` is refused if the new key isn't present in the result.
 - See [SECURITY.md](SECURITY.md) for the threat model, what is and isn't protected, and how to report vulnerabilities.
@@ -74,17 +194,29 @@ installation and self-hosting.
 ### Prerequisites
 - [Rust](https://rustup.rs/) (stable) and the [Tauri 2 prerequisites](https://tauri.app/start/prerequisites/) for your OS
 - Node.js 18+
+- On Linux, the tray icon needs an AppIndicator library at runtime (`libayatana-appindicator3`, packaged as `libappindicator3-dev` for building). Without it Kino still runs, but minimising to the notification area has nowhere to go.
 
-### Develop
+### Run it
 ```bash
 npm install
 npm run tauri dev
 ```
+First launch asks you to create a vault. The master password has no recovery - if you lose it, the vault is gone.
 
-### Build
+### Build installers
 ```bash
 npm run tauri build
 ```
+Output lands in `src-tauri/target/release/bundle/` - `.deb`, `.rpm` and `.AppImage` on Linux, `.msi` and `.exe` on Windows.
+
+### A throwaway vault, for demos and testing
+Kino keeps everything under the platform's local data directory, which on Linux follows `XDG_DATA_HOME`. Pointing that elsewhere gives you a completely separate, empty vault, leaving your real one untouched:
+
+```bash
+XDG_DATA_HOME=/tmp/kino-demo npm run tauri dev
+```
+
+Useful for screenshots, for trying a feature against invented hosts, or for reproducing a first-run experience. Delete `/tmp/kino-demo` when you're done.
 
 ## Tech stack
 

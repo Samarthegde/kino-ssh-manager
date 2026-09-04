@@ -681,12 +681,35 @@ async fn authenticate(
     Ok(())
 }
 
+/// stdout, stderr and the exit status of a one-off command.
+pub struct OnceOutput {
+    pub stdout: String,
+    pub stderr: String,
+    /// `None` when the server closed the channel without reporting a status.
+    pub code: Option<u32>,
+}
+
 /// Open a fresh connection, run a single command, and return its stdout.
 ///
-/// Used by one-shot operations (e.g. installing a public key) that shouldn't
-/// require - or disturb - a live terminal session. Host-key pinning is enforced
-/// exactly as it is for interactive sessions.
+/// A non-zero exit becomes an `Err` carrying stderr - convenient for the
+/// callers that only care whether it worked. Use `exec_once_full` when the
+/// caller needs to see a failure's output rather than a message about it.
 pub async fn exec_once(host: &Host, command: &str) -> Result<String, String> {
+    let out = exec_once_full(host, command).await?;
+    match out.code {
+        Some(0) | None => Ok(out.stdout),
+        Some(c) => {
+            let msg = out.stderr.trim();
+            Err(if msg.is_empty() {
+                format!("Command failed with exit code {}", c)
+            } else {
+                msg.to_string()
+            })
+        }
+    }
+}
+
+pub async fn exec_once_full(host: &Host, command: &str) -> Result<OnceOutput, String> {
     let config = Arc::new(client::Config {
         keepalive_interval: Some(Duration::from_secs(15)),
         keepalive_max: 3,
@@ -737,18 +760,11 @@ pub async fn exec_once(host: &Host, command: &str) -> Result<String, String> {
         return Err("Command timed out".to_string());
     }
 
-    match code {
-        Some(0) | None => Ok(String::from_utf8_lossy(&stdout).to_string()),
-        Some(c) => {
-            let msg = String::from_utf8_lossy(&stderr);
-            let msg = msg.trim();
-            Err(if msg.is_empty() {
-                format!("Command failed with exit code {}", c)
-            } else {
-                msg.to_string()
-            })
-        }
-    }
+    Ok(OnceOutput {
+        stdout: String::from_utf8_lossy(&stdout).to_string(),
+        stderr: String::from_utf8_lossy(&stderr).to_string(),
+        code,
+    })
 }
 
 pub async fn connect(

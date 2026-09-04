@@ -13,6 +13,7 @@ import { AiSettingsModal } from "./AiSettingsModal";
 import { KeybindingsModal } from "./KeybindingsModal";
 import { SecurityPanel } from "./SecurityPanel";
 import { NotesModal } from "./NotesModal";
+import { McpSettingsModal } from "./McpSettingsModal";
 import { Select } from "./Select";
 
 interface Props {
@@ -164,6 +165,7 @@ export function SettingsMenu({ onLock }: Props) {
   const currentTermBg = currentTerm.background;
 
   const [open, setOpen] = useState(false);
+  const [showMcp, setShowMcp] = useState(false);
   const [section, setSection] = useState<Section>("general");
   const [exportingConfig, setExportingConfig] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -669,6 +671,12 @@ export function SettingsMenu({ onLock }: Props) {
                     buttonLabel="Browse…"
                     onClick={() => setShowRecordings(true)}
                   />
+                  <ActionItem
+                    label="MCP Server"
+                    desc="Configure the Model Context Protocol headless server for AI assistants."
+                    buttonLabel="Configure…"
+                    onClick={() => setShowMcp(true)}
+                  />
                 </Group>
               )}
             </div>
@@ -686,6 +694,7 @@ export function SettingsMenu({ onLock }: Props) {
       {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
       {showAudit && <SecurityPanel onClose={() => setShowAudit(false)} />}
       {showNotes && <NotesModal onClose={() => setShowNotes(false)} />}
+      {showMcp && <McpSettingsModal onClose={() => setShowMcp(false)} />}
         </>,
         document.body
       )}

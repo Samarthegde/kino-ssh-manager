@@ -252,6 +252,31 @@ export interface CloudConfigInput {
   account_key: string;
 }
 
+/** How much of an exposed host an assistant may reach. Mirrors `McpMode`. */
+export type McpMode = "read_only" | "guarded" | "full";
+
+/** Mirrors `HostPolicyView` - the form the editor works in. */
+export interface McpHostPolicy {
+  mode: McpMode;
+  rules_text: string;
+}
+
+/** Mirrors `McpConfigView` in mcp_config.rs. Carries no secrets. */
+export interface McpConfig {
+  /** Ids of the hosts the MCP server is allowed to reach. */
+  exposed_host_ids: string[];
+  /** Per-host access policy, keyed by host id. No entry means read-only. */
+  host_policies: Record<string, McpHostPolicy>;
+  /** The global rule block, in the text form the editor uses. */
+  global_rules_text: string;
+  /** True once an MCP password has been set. */
+  configured: boolean;
+  /** Absolute path of the exposed vault, shown so it can be backed up or removed. */
+  mcp_vault_path: string;
+  /** Name of the headless binary to point an MCP client at. */
+  binary_hint: string;
+}
+
 export interface CloudMachine {
   agent_id: string;
   name: string;
@@ -566,6 +591,14 @@ interface VaultStore {
   readRecording: (filename: string) => Promise<string>;
   deleteRecording: (filename: string) => Promise<void>;
   setRecordingState: (sessionId: string, isRecording: boolean) => void;
+
+  mcpGetConfig: () => Promise<McpConfig>;
+  mcpSetPassword: (password: string) => Promise<void>;
+  mcpSetExposedHosts: (hostIds: string[]) => Promise<void>;
+  /** Rules arrive as typed text; the backend parses them, so a bad pattern is
+   *  refused here rather than silently matching nothing later. */
+  mcpSetHostPolicy: (hostId: string, mode: McpMode, rulesText: string) => Promise<void>;
+  mcpSetGlobalRules: (rulesText: string) => Promise<void>;
 }
 
 const AUTO_SYNC_KEY = "ssh-mgr:autosync";
@@ -1823,6 +1856,20 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
       else next.delete(sessionId);
       return { recordingSessions: next };
     });
+  },
+
+  mcpSetHostPolicy: (hostId, mode, rulesText) =>
+    invoke<void>("mcp_set_host_policy", { hostId, mode, rulesText }),
+  mcpSetGlobalRules: (rulesText) =>
+    invoke<void>("mcp_set_global_rules", { rulesText }),
+  mcpGetConfig: async () => {
+    return await invoke<McpConfig>("mcp_get_config");
+  },
+  mcpSetPassword: async (password: string) => {
+    await invoke("mcp_set_password", { password });
+  },
+  mcpSetExposedHosts: async (hostIds: string[]) => {
+    await invoke("mcp_set_exposed_hosts", { hostIds });
   },
 }));
 

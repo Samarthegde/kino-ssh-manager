@@ -5841,6 +5841,262 @@ textarea.mono,
   margin-left: auto;
 }
 
+/* ── MCP server ──────────────────────────────────────────────────────────────*/
+
+.mcp-modal {
+  width: min(680px, 96vw);
+  max-width: none;
+  height: min(720px, 92vh);
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.mcp-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-top: 12px;
+}
+
+.mcp-intro {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.7;
+  color: color-mix(in srgb, var(--ink-paper) 72%, transparent);
+  margin: 0 0 10px;
+}
+
+/* Handing an assistant a shell is the whole feature; it should not be a
+   footnote. Marigold rather than red - a caution, not a failure. */
+.mcp-warn {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.8;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--ink-paper) 78%, transparent);
+  border-left: 2px solid var(--yellow);
+  background: color-mix(in srgb, var(--ink-paper) 4%, transparent);
+  padding: 8px 11px;
+  margin-bottom: 16px;
+}
+
+.mcp-section {
+  border-top: 1px solid var(--rule);
+  padding-top: 13px;
+  margin-bottom: 16px;
+}
+
+.mcp-section-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--ink-accent);
+  margin: 0 0 7px;
+}
+
+.mcp-badge {
+  font-size: 8.5px;
+  letter-spacing: 0.16em;
+  padding: 1px 6px;
+  border: 1px solid var(--rule);
+  color: color-mix(in srgb, var(--ink-paper) 50%, transparent);
+}
+
+.mcp-hint {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  line-height: 1.85;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--ink-paper) 45%, transparent);
+  margin: 0 0 9px;
+}
+
+.mcp-hint code {
+  font-family: var(--font-mono);
+  color: color-mix(in srgb, var(--ink-paper) 70%, transparent);
+}
+
+.mcp-input {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 8px 10px;
+  margin-bottom: 7px;
+}
+
+.mcp-hosts {
+  border: 1px solid var(--rule);
+  max-height: 220px;
+  overflow: auto;
+}
+
+.mcp-host {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px 11px;
+  border-bottom: 1px solid color-mix(in srgb, var(--rule) 55%, transparent);
+  border-left: 2px solid transparent;
+  transition: background-color 140ms ease, border-left-color 140ms ease;
+}
+
+.mcp-host-tick {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+}
+
+.mcp-host:last-child { border-bottom: 0; }
+.mcp-host:hover { background: color-mix(in srgb, var(--ink-paper) 5%, transparent); }
+
+/* An exposed host is marked, not merely ticked - the list is scanned for what
+   is reachable, and a checkbox alone is easy to miss. */
+.mcp-host.on {
+  border-left-color: var(--ink-accent);
+  background: color-mix(in srgb, var(--ink-paper) 6%, transparent);
+}
+
+/* The base `input` rule is width:100%; a bare checkbox would stretch. */
+.mcp-host input[type="checkbox"] {
+  width: auto;
+  padding: 0;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: var(--ink-accent);
+}
+
+.mcp-host-name {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--ink-paper);
+}
+
+.mcp-host-addr {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: color-mix(in srgb, var(--ink-paper) 40%, transparent);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+/* Mode, rules button and a one-line statement of what the mode permits. The
+   blurb is not a tooltip on purpose: what an assistant may do to your servers
+   should be readable without hovering anything. */
+.mcp-host-policy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-left: 25px;
+}
+
+.mcp-mode {
+  width: auto;
+  min-width: 130px;
+  margin: 0;
+}
+
+.mcp-mode-blurb {
+  flex: 1 1 220px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--subtle);
+}
+
+/* Anything past read-only is worth seeing while scanning the list, and not by
+   colour alone - the tag carries its own words. */
+.mcp-mode-tag {
+  margin-left: auto;
+  padding: 1px 7px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--subtle);
+}
+
+.mcp-mode-tag.full {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.mcp-rules {
+  padding-left: 25px;
+}
+
+.mcp-rules .mcp-hint { margin: 0 0 6px; }
+
+.mcp-rules-text {
+  width: 100%;
+  font-size: 12px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.mcp-confirm-full {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.mcp-confirm-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.mcp-empty {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--ink-paper) 34%, transparent);
+  padding: 14px 12px;
+  margin: 0;
+}
+
+.mcp-config {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.7;
+  color: color-mix(in srgb, var(--ink-paper) 68%, transparent);
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  padding: 11px 13px;
+  margin: 0 0 8px;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.mcp-config-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.mcp-config-actions .mcp-hint { margin: 0; flex: 1; }
+
+.mcp-foot {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex-shrink: 0;
+  border-top: 1px solid var(--rule);
+  padding-top: 12px;
+  margin-top: 10px;
+}
+
+.mcp-foot .mcp-hint { margin: 0; align-self: center; }
+
 /* ── Notes ───────────────────────────────────────────────────────────────────*/
 
 .notes-modal {

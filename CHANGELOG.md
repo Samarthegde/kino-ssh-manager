@@ -4,6 +4,51 @@ All notable changes to Kino SSH Manager are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **An MCP server, so an AI assistant can work on hosts you choose.** A headless
+  `kino-mcp` binary serves Model Context Protocol tools over stdio: list hosts,
+  run a command, list a directory, read and write files, and run a saved
+  snippet. Configure it under **Settings → Shortcuts & Tools → MCP Server**.
+
+  The point of the design is what the assistant *cannot* see. It reads a
+  separate file, `mcp_vault.enc`, holding only the hosts you tick and the
+  snippets those hosts reference - encrypted under a **separate MCP password**,
+  so the headless binary never needs, and never receives, your master password.
+  Everything else in your vault is invisible to it. That file is rewritten
+  whenever a host, a snippet or the exposure list changes, so a rotated key or a
+  deleted host propagates immediately.
+
+  Host-key verification still applies: the MCP server refuses any host whose key
+  hasn't already been trusted in Kino, so it can't be steered onto an impostor.
+
+  Every exposed host carries an **access mode**, and a newly ticked one is
+  **read-only**: reads are fine, writes are refused outright, and a command runs
+  only if a rule you wrote names it. **Guarded** makes everything reachable but
+  requires approval for anything unnamed - and since the approval prompt isn't
+  built yet, such a call is refused with a message saying so. **Full** is the
+  unrestricted shell, and choosing it takes a second confirmation naming the
+  host.
+
+  Rules are `allow`, `deny` or `ask` plus a pattern (`*` for anything, `re:`
+  for a regex), one per line, first match wins, a host's own before the global
+  ones. They are matched against the command as written - which catches
+  mistakes, not somebody determined to get around them. The read-only default
+  is the part that actually holds, because it refuses what it wasn't told to
+  permit, and no rule can talk it into writing.
+
+  Enforcement lives in `kino-mcp` itself, not in the app that configures it:
+  the policy travels inside `mcp_vault.enc` alongside the hosts, so the headless
+  binary decides for itself and a refusal costs the host nothing - the check
+  runs before any connection is opened. A refused call comes back as structured
+  JSON naming the reason, the mode and the rule, without handing the assistant
+  the rule list to pick at.
+
+  `kino-mcp` is attached to each release as a separate download
+  (`kino-mcp-linux-x86_64`, `kino-mcp-windows-x86_64.exe`) rather than bundled
+  into the installers - it's a server you run, not an app you launch.
+
 ## [0.9.0] - 2026-09-01
 
 ### Added
