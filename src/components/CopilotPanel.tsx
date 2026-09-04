@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { AiConfigView, AiMessage, AiPreview, Host, RedactionHit, useVaultStore } from "../store";
+import {
+  AiConfigView,
+  AiMessage,
+  AiPreview,
+  DangerMatch,
+  Host,
+  RedactionHit,
+  useVaultStore,
+} from "../store";
 import { getTerminalOutputTail } from "../terminalBuffer";
 import { pasteToSession } from "../terminalRegistry";
 import { hostTarget } from "../utils";
@@ -66,6 +74,10 @@ function untrusted(label: string, text: string): string {
   return [`${label}:`, `<${UNTRUSTED_TAG}>`, sanitizeHostText(text), `</${UNTRUSTED_TAG}>`].join("\n");
 }
 
+/** Matches the terminal's own production hold, because it is the same pause
+ *  for the same reason. */
+const PRODUCTION_HOLD_SECONDS = 5;
+
 const REDACTION_LABELS: Record<string, [string, string]> = {
   private_key: ["private key", "private keys"],
   aws_access_key: ["AWS access key", "AWS access keys"],
@@ -117,12 +129,17 @@ function RunConfirm({
   code,
   target,
   detail,
+  danger,
+  production,
   onConfirm,
   onCancel,
 }: {
   code: string;
   target: string;
   detail: string | null;
+  /** Set when the command matches the danger list. */
+  danger: DangerMatch | null;
+  production: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -134,20 +151,44 @@ function RunConfirm({
     return () => window.removeEventListener("keydown", onKey);
   }, [onCancel]);
 
+  // The two checks compose rather than replacing each other: this dialog
+  // already stood between a model-authored command and the host, and on a
+  // production host a dangerous one additionally has to wait.
+  //
+  // It is done here, on the text, rather than left to the terminal's guard.
+  // That guard reads the command off the screen, which is right for something
+  // typed - but a pasted command only appears on screen once the shell echoes
+  // it back over SSH, and the Enter that follows a paste does not wait for
+  // that. Checking the string we already hold has no such race.
+  const holdFor = danger && production ? PRODUCTION_HOLD_SECONDS : 0;
+  const [wait, setWait] = useState(holdFor);
+  useEffect(() => {
+    if (holdFor === 0) return;
+    const t = setInterval(() => setWait((w) => (w <= 1 ? 0 : w - 1)), 1000);
+    return () => clearInterval(t);
+  }, [holdFor]);
+
   const lines = code.split("\n").length;
 
   return (
     <div className="modal-overlay copilot-run-overlay" onClick={onCancel}>
       <div className="modal copilot-run-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>Run on {target}?</h2>
+          <h2>{danger && production ? `Run this on production?` : `Run on ${target}?`}</h2>
           <button className="icon-btn" onClick={onCancel}>✕</button>
         </div>
 
         <div className="connect-body">
+          {danger && production && <p className="danger-host">{target}</p>}
           <p className="hint" style={{ margin: 0 }}>
             The copilot wrote this, not you. Read it before it runs
             {detail ? <> on <strong>{detail}</strong></> : null}.
+            {danger && (
+              <>
+                {" "}
+                <code>{danger.matched}</code> {danger.explains}.
+              </>
+            )}
           </p>
 
           <div className="copilot-run-block">
@@ -160,7 +201,9 @@ function RunConfirm({
 
         <div className="modal-footer">
           <button className="btn" onClick={onCancel} autoFocus>Cancel</button>
-          <button className="btn btn-danger" onClick={onConfirm}>Run on {target}</button>
+          <button className="btn btn-danger" disabled={wait > 0} onClick={onConfirm}>
+            {wait > 0 ? `Wait ${wait}…` : `Run on ${target}`}
+          </button>
         </div>
       </div>
     </div>
@@ -272,7 +315,7 @@ function CodeBlock({
 }
 
 export function CopilotPanel({ sessionId, host, local, title, initialPrompt, onClose, onOpenSettings }: Props) {
-  const { aiGetConfig, aiSend, aiPreview, aiCancel } = useVaultStore();
+  const { aiGetConfig, aiSend, aiPreview, aiCancel, checkCommandDanger } = useVaultStore();
   const [config, setConfig] = useState<AiConfigView | null>(null);
   const [loadingConfig, setLoadingConfig] = useState(true);
   const [messages, setMessages] = useState<AiMessage[]>([]);
@@ -284,6 +327,7 @@ export function CopilotPanel({ sessionId, host, local, title, initialPrompt, onC
   const [busy, setBusy] = useState(false);
   /** The command awaiting confirmation before it is sent to the session. */
   const [pendingRun, setPendingRun] = useState<string | null>(null);
+  const [pendingDanger, setPendingDanger] = useState<DangerMatch | null>(null);
   /** What the backend held back from the last request, if anything. */
   const [redacted, setRedacted] = useState<RedactionHit[]>([]);
   /** What the *next* send would carry. Computed by the backend, not guessed. */
@@ -451,6 +495,19 @@ export function CopilotPanel({ sessionId, host, local, title, initialPrompt, onC
   const runTarget = host ? host.name : "this local shell";
   const runDetail = host ? `${host.username}@${hostTarget(host)}` : null;
 
+  /** Open the confirmation, having first asked whether this is one of the
+   *  commands a production host holds back. */
+  async function askToRun(code: string) {
+    setPendingDanger(null);
+    setPendingRun(code);
+    if (host?.environment !== "production") return;
+    try {
+      setPendingDanger(await checkCommandDanger(code));
+    } catch {
+      // A failed check must not block the dialog; it just does not add a hold.
+    }
+  }
+
   /** Put a suggestion on the command line, without sending it. */
   function insert(code: string) {
     pasteToSession(sessionId, code, false);
@@ -535,7 +592,7 @@ export function CopilotPanel({ sessionId, host, local, title, initialPrompt, onC
                                 lang={seg.lang}
                                 canRun={canRun}
                                 onInsert={() => insert(seg.body)}
-                                onRun={() => setPendingRun(seg.body)}
+                                onRun={() => void askToRun(seg.body)}
                               />
                             ) : (
                               <p key={j}>{seg.body.trim()}</p>
@@ -568,7 +625,7 @@ export function CopilotPanel({ sessionId, host, local, title, initialPrompt, onC
                             lang={seg.lang}
                             canRun={canRun}
                             onInsert={() => insert(seg.body)}
-                            onRun={() => setPendingRun(seg.body)}
+                            onRun={() => void askToRun(seg.body)}
                           />
                         ) : (
                           <p key={j}>{seg.body.trim()}</p>
@@ -653,6 +710,8 @@ export function CopilotPanel({ sessionId, host, local, title, initialPrompt, onC
           code={pendingRun}
           target={runTarget}
           detail={runDetail}
+          danger={pendingDanger}
+          production={host?.environment === "production"}
           onConfirm={() => runConfirmed(pendingRun)}
           onCancel={() => setPendingRun(null)}
         />

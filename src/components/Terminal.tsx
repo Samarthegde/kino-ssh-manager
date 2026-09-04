@@ -36,6 +36,10 @@ const MAX_RECONNECT_ATTEMPTS = 6;
  *  Long enough to read the hostname, short enough not to be theatre. */
 const PRODUCTION_COUNTDOWN_SECONDS = 5;
 
+/** Beyond this, a paste into production is a script rather than a command, and
+ *  worth looking at before it lands. */
+const PRODUCTION_PASTE_LIMIT = 500;
+
 const writeCommandFor = (kind: "ssh" | "local") =>
   kind === "local" ? "local_write" : "ssh_write";
 
@@ -89,6 +93,13 @@ export function Terminal({ sessionId, kind, active, tabId, host, onExplain }: Pr
   useEffect(() => { activeRef.current = active; }, [active]);
   // Same pattern again: onData is installed once, so it reads the host through
   // a ref - otherwise marking a host production mid-session would not take.
+  /** So the "skipped production" notice appears once per broadcast, not once
+   *  per keystroke. Reset when broadcast is turned off. */
+  const warnedBroadcastRef = useRef(false);
+  const broadcastOn = useVaultStore((s) => s.broadcastInput);
+  useEffect(() => {
+    if (!broadcastOn) warnedBroadcastRef.current = false;
+  }, [broadcastOn]);
   const hostRef = useRef(host);
   useEffect(() => { hostRef.current = host; }, [host]);
 
@@ -118,6 +129,15 @@ export function Terminal({ sessionId, kind, active, tabId, host, onExplain }: Pr
     }, 1000);
     return () => clearInterval(t);
   }, [danger]);
+
+  /** A paste too large to have been typed, held for a look. */
+  const [bigPaste, setBigPaste] = useState<{ text: string; bytes: number[] } | null>(null);
+
+  function sendHeldPaste() {
+    if (!bigPaste) return;
+    invoke(writeCommandFor(kind), { sessionId, data: bigPaste.bytes }).catch(() => {});
+    setBigPaste(null);
+  }
 
   function sendHeldCommand() {
     if (!danger) return;
@@ -346,6 +366,16 @@ export function Terminal({ sessionId, kind, active, tabId, host, onExplain }: Pr
       const bytes = Array.from(new TextEncoder().encode(data));
       const st = useVaultStore.getState();
 
+      // A large paste into production. Bracketed-paste markers add a few bytes
+      // and change nothing about the judgement, so the raw length is fine.
+      if (
+        hostRef.current?.environment === "production" &&
+        data.length > PRODUCTION_PASTE_LIMIT
+      ) {
+        setBigPaste({ text: data, bytes });
+        return;
+      }
+
       // Production guard. Only on Enter, only on a host marked production, so
       // ordinary sessions pay nothing at all - not a check, not a round trip.
       //
@@ -385,8 +415,24 @@ export function Terminal({ sessionId, kind, active, tabId, host, onExplain }: Pr
           .map((p) => st.activeTabIds[p])
           .map((tid) => st.tabs.find((t) => t.id === tid && t.connected))
           .filter((t): t is Tab => !!t);
-        if (targets.length > 0) {
-          targets.forEach((t) => {
+        // Broadcast never reaches a production host. Typing into several
+        // machines at once is exactly the situation where you have lost track
+        // of which ones they are, so the safe default is to leave those out
+        // and say so rather than ask mid-keystroke.
+        const production = targets.filter(
+          (t) => t.host?.environment === "production"
+        );
+        const safe = targets.filter((t) => !production.includes(t));
+        if (production.length > 0 && !warnedBroadcastRef.current) {
+          warnedBroadcastRef.current = true;
+          toast(
+            `Broadcast skipped ${production.length} production host${
+              production.length === 1 ? "" : "s"
+            }`
+          );
+        }
+        if (safe.length > 0) {
+          safe.forEach((t) => {
             const cmd = t.kind === "local" ? "local_write" : "ssh_write";
             invoke(cmd, { sessionId: t.sessionId, data: bytes }).catch(() => {});
           });
@@ -643,6 +689,40 @@ export function Terminal({ sessionId, kind, active, tabId, host, onExplain }: Pr
       {/* Not colour alone: the word survives colour-vision deficiency, and it
           survives the reduced motion and effects mode stripping the frame. */}
       {isProduction && <span className="production-badge">PRODUCTION</span>}
+
+      {bigPaste && (
+        <div className="modal-overlay danger-overlay" onClick={() => setBigPaste(null)}>
+          <div className="modal danger-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>Paste {bigPaste.text.length} characters into production?</h2>
+              <button className="icon-btn" onClick={() => setBigPaste(null)}>✕</button>
+            </div>
+            <div className="connect-body">
+              <p className="danger-host">{host?.name}</p>
+              <p className="hint" style={{ margin: 0 }}>
+                {bigPaste.text.split("\n").length} lines. Shells run a pasted block as it
+                arrives, so this is worth a look before it lands.
+              </p>
+              {/* First and last line: enough to recognise what this is without
+                  turning the dialog into a file viewer. */}
+              <pre className="danger-line mono">
+                {bigPaste.text.split("\n")[0]}
+                {bigPaste.text.split("\n").length > 2 && "\n  …\n"}
+                {bigPaste.text.split("\n").length > 1 &&
+                  bigPaste.text.split("\n").filter((l) => l.trim()).slice(-1)[0]}
+              </pre>
+            </div>
+            <div className="modal-footer">
+              <button className="btn" onClick={() => setBigPaste(null)} autoFocus>
+                Cancel
+              </button>
+              <button className="btn btn-danger" onClick={sendHeldPaste}>
+                Paste into {host?.name}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {danger && (
         <div className="modal-overlay danger-overlay" onClick={() => setDanger(null)}>
