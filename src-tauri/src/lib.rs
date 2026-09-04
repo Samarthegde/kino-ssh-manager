@@ -110,6 +110,10 @@ fn lock_vault(state: State<'_, AppState>) {
     state.snippets.lock().unwrap().clear();
     state.notes.lock().unwrap().clear();
     state.shell_history.lock().unwrap().clear();
+
+    // Terminate all open sessions.
+    state.sessions.lock().unwrap().clear();
+    state.local_sessions.lock().unwrap().clear();
 }
 
 /// Re-key the vault: verify the current master password, then re-encrypt the
