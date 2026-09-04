@@ -49,6 +49,76 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
   (`kino-mcp-linux-x86_64`, `kino-mcp-windows-x86_64.exe`) rather than bundled
   into the installers - it's a server you run, not an app you launch.
 
+### Changed
+- **A copilot suggestion no longer runs on a single click.** The **Run** button
+  under a code block pasted the command *and* pressed Enter, so the whole
+  distance between "the model proposed this" and "the server ran it" was one
+  click on a button labelled *Paste and run in this terminal*.
+
+  There are two buttons now. **Insert** puts the command on the command line and
+  stops there, and it's the primary action. **Run…** opens a confirmation showing
+  the command verbatim, the account and host it would run on, and how many lines
+  it is. Cancel holds focus and Escape closes it, so the reflex keystroke is the
+  safe one.
+
+  The reason is that the copilot's suggestions are shaped by what the host
+  printed - a MOTD, a log line, a filename in `ls` output - and on a host someone
+  else controls, they decide what that text says. The confirmation doesn't make a planted
+  suggestion harmless. It makes running one a decision instead of a reflex.
+- **Terminal output reaching the copilot is now fenced and labelled as data.**
+  Output attached with the *Attach terminal output* tick was already wrapped in
+  a tag, but nothing told the model what the tag meant - and the other way in,
+  selecting text and asking the copilot to explain it, sent the selection raw,
+  as an ordinary message, indistinguishable from something you had typed.
+
+  Both paths now go through one fence. The text is stripped of ANSI escapes and
+  the remaining control characters, a literal `</terminal_output>` printed by
+  the host is defanged so it cannot close the block early, and the system prompt
+  says outright that anything inside the tags is data captured from a machine
+  and never an instruction - and asks the copilot to tell you when it finds one
+  in there addressed to it.
+
+  Notes saved against a host are fenced the same way. They arrive with imported
+  `.sshm` profiles, so they are not necessarily words you wrote, and they were
+  being spoken in the system prompt's own voice.
+
+  None of this makes a planted instruction impossible to write. It makes the
+  boundary between what you said and what a machine printed one the copilot can
+  actually see.
+- **Secrets are stripped out before a request reaches OpenRouter.** Attaching
+  terminal output is one tick, and what was on screen a minute ago is easy to
+  forget - a key you `cat`ed, an `export AWS_SECRET_ACCESS_KEY=`, a `curl -H
+  "Authorization: Bearer ..."`. OpenRouter is a third party and had been getting
+  all of it.
+
+  A redaction pass now runs over the whole prompt: private key blocks (including
+  one the 6 000-character tail cut off mid-key, which is the common case), AWS
+  access keys, bearer tokens, JWTs, and `NAME=value` assignments where the name
+  looks like a credential. An assignment keeps its name - `DB_PASSWORD=` stays
+  legible, only the value goes - so the transcript still reads.
+
+  It runs in Rust at the command boundary, not in the panel that happens to build
+  the prompt today: a redaction the frontend performs is one a future caller
+  forgets. After a send the panel says what was held back - "1 private key, 2
+  assigned secrets" - and offers to ask again including them, for the times the
+  secret is the thing you wanted help with.
+
+  It is pattern matching, so a secret that doesn't look like one still goes
+  through. It lowers the cost of forgetting; it is not a guarantee.
+- **You can see exactly what gets sent.** The prompt is assembled from things
+  you never typed - a system message, a host context line, six thousand
+  characters of scrollback - so "trust us, we redacted it" isn't good enough
+  when the answer is knowable. The composer now states how much text the next
+  send carries, and **Inspect** shows it character for character, turn by turn.
+
+  The preview is produced by the same redaction the request runs through, so it
+  cannot drift from what actually leaves the machine.
+- **A threat model for the copilot**, in `docs/copilot-threat-model.md`: what
+  crosses which boundary, the five paths by which text you didn't write reaches
+  the model, and an honest list of what none of it protects against - starting
+  with the fact that a persuasive injected instruction can still produce a
+  plausible command you approve.
+
 ## [0.9.0] - 2026-09-01
 
 ### Added

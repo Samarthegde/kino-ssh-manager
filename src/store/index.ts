@@ -328,6 +328,22 @@ export interface AiMessage {
   content: string;
 }
 
+/** One kind of secret the backend kept out of a request, and how many. Carries
+ *  no sample of what matched - showing it would put the secret back on screen. */
+export interface RedactionHit {
+  kind: string;
+  count: number;
+}
+
+/** Exactly what a send would transmit, redaction already applied. */
+export interface AiPreview {
+  /** UTF-8 bytes of prompt text: the system message plus every turn. */
+  bytes: number;
+  system: string;
+  messages: AiMessage[];
+  redacted: RedactionHit[];
+}
+
 export type HostKeyVerdict =
   | { status: "trusted" }
   | { status: "new"; fingerprint: string }
@@ -505,8 +521,22 @@ interface VaultStore {
   cloudRemoveMachine: (agentId: string) => Promise<void>;
   aiSetConfig: (config: AiConfigInput) => Promise<AiConfigView>;
   aiListModels: () => Promise<AiModelInfo[]>;
-  /** Streams the reply over `ai-delta-<requestId>` events; see CopilotPanel. */
-  aiSend: (requestId: string, system: string, messages: AiMessage[]) => Promise<void>;
+  /** Streams the reply over `ai-delta-<requestId>` events; see CopilotPanel.
+   *  Resolves with what redaction removed on the way out. `allowSecrets` is the
+   *  per-send override; omitting it redacts, which is the safe default. */
+  aiSend: (
+    requestId: string,
+    system: string,
+    messages: AiMessage[],
+    allowSecrets?: boolean
+  ) => Promise<RedactionHit[]>;
+  /** What a send would carry, without sending it. Reads nothing from the vault,
+   *  so it is safe to call on every keystroke and works while locked. */
+  aiPreview: (
+    system: string,
+    messages: AiMessage[],
+    allowSecrets?: boolean
+  ) => Promise<AiPreview>;
   aiCancel: (requestId: string) => Promise<void>;
   startForward: (sessionId: string, forward: PortForward, host: Host) => Promise<void>;
   stopForward: (sessionId: string, forwardId: string) => Promise<void>;
@@ -1670,8 +1700,10 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
   cloudRemoveMachine: (agentId) => invoke<void>("cloud_remove_machine", { agentId }),
   aiSetConfig: (config) => invoke<AiConfigView>("ai_set_config", { config }),
   aiListModels: () => invoke<AiModelInfo[]>("ai_list_models"),
-  aiSend: (requestId, system, messages) =>
-    invoke<void>("ai_send", { requestId, system, messages }),
+  aiSend: (requestId, system, messages, allowSecrets) =>
+    invoke<RedactionHit[]>("ai_send", { requestId, system, messages, allowSecrets }),
+  aiPreview: (system, messages, allowSecrets) =>
+    invoke<AiPreview>("ai_preview", { system, messages, allowSecrets }),
   aiCancel: (requestId) => invoke<void>("ai_cancel", { requestId }),
 
   getHistory: () => invoke<HistoryEvent[]>("get_history"),

@@ -19,6 +19,7 @@ mod metrics;
 mod notes;
 mod processes;
 mod recorder;
+mod redact;
 mod sftp_session;
 mod shell_history;
 mod snippets;
@@ -1914,6 +1915,7 @@ pub fn run() {
             ai::ai_set_config,
             ai::ai_list_models,
             ai::ai_send,
+            ai::ai_preview,
             ai::ai_cancel,
             update::check_for_update,
             start_recording,

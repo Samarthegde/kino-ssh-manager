@@ -269,8 +269,78 @@ fn parse_chunk(v: &serde_json::Value) -> Chunk {
     Chunk::Ignore
 }
 
+/// Take the secrets out of a prompt, unless the caller explicitly asked not to.
+///
+/// This sits at the command boundary rather than in whichever panel assembled
+/// the prompt: a redaction the frontend performs is one a future caller
+/// forgets. `ai_send` and `ai_preview` both go through here, which is what
+/// makes the preview trustworthy - the inspector shows the same bytes the
+/// request carries, because the same function produced them.
+fn scrub(
+    system: String,
+    messages: Vec<AiMessage>,
+    allow_secrets: Option<bool>,
+) -> (String, Vec<AiMessage>, Vec<crate::redact::Hit>) {
+    if allow_secrets.unwrap_or(false) {
+        return (system, messages, Vec::new());
+    }
+    let mut redacted: Vec<crate::redact::Hit> = Vec::new();
+    let (system, hits) = crate::redact::redact(&system);
+    crate::redact::merge(&mut redacted, hits);
+    let messages = messages
+        .into_iter()
+        .map(|m| {
+            let (content, hits) = crate::redact::redact(&m.content);
+            crate::redact::merge(&mut redacted, hits);
+            AiMessage {
+                role: m.role,
+                content,
+            }
+        })
+        .collect();
+    (system, messages, redacted)
+}
+
+/// Exactly what a send would put on the wire, without sending it.
+#[derive(Serialize)]
+pub struct AiPreview {
+    /// UTF-8 bytes of prompt text - the system message plus every turn. Not the
+    /// whole HTTP body: the model id and the sampling knobs are a fixed
+    /// overhead nobody needs a number for.
+    pub bytes: usize,
+    pub system: String,
+    pub messages: Vec<AiMessage>,
+    pub redacted: Vec<crate::redact::Hit>,
+}
+
+/// Show the user what a send would transmit, character for character.
+///
+/// Deliberately takes no vault key and reads nothing from disk: it transforms
+/// the arguments it is handed and returns them. That is why it is safe to call
+/// on every keystroke, and why it works with the vault locked.
+#[tauri::command]
+pub fn ai_preview(
+    system: String,
+    messages: Vec<AiMessage>,
+    allow_secrets: Option<bool>,
+) -> AiPreview {
+    let (system, messages, redacted) = scrub(system, messages, allow_secrets);
+    let bytes = system.len() + messages.iter().map(|m| m.content.len()).sum::<usize>();
+    AiPreview {
+        bytes,
+        system,
+        messages,
+        redacted,
+    }
+}
+
 /// Stream a completion. Emits `ai-delta-<id>` (text), `ai-thinking-<id>`,
 /// `ai-done-<id>`, and `ai-error-<id>`.
+///
+/// Returns what redaction removed on the way out, so the panel can tell the
+/// user what did *not* reach OpenRouter. `allow_secrets` is the per-send
+/// override: absent or false means redact, which is what every caller that
+/// doesn't think about it gets.
 #[tauri::command]
 pub async fn ai_send(
     app_handle: AppHandle,
@@ -278,10 +348,13 @@ pub async fn ai_send(
     request_id: String,
     system: String,
     messages: Vec<AiMessage>,
-) -> Result<(), String> {
+    allow_secrets: Option<bool>,
+) -> Result<Vec<crate::redact::Hit>, String> {
     let key = { *state.vault_key.lock().unwrap() }.ok_or("Vault is locked")?;
     let config =
         load_config(&key).ok_or("The AI copilot isn't set up yet - add a key under Settings.")?;
+
+    let (system, messages, redacted) = scrub(system, messages, allow_secrets);
 
     // Resolve credentials before spawning so auth errors surface immediately.
     let auth = resolve_auth(&config)?;
@@ -366,7 +439,7 @@ pub async fn ai_send(
         finish("ai-done", String::new());
     });
 
-    Ok(())
+    Ok(redacted)
 }
 
 /// Ask OpenRouter which models exist, so the UI never depends on a hardcoded
@@ -445,6 +518,58 @@ pub fn ai_cancel(state: tauri::State<'_, crate::AppState>, request_id: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn msg(content: &str) -> AiMessage {
+        AiMessage {
+            role: "user".into(),
+            content: content.into(),
+        }
+    }
+
+    /// The preview is only worth showing if it cannot drift from the request.
+    /// Both go through `scrub`; this asserts they stay that way.
+    #[test]
+    fn preview_shows_exactly_what_a_send_would_carry() {
+        let system = "context AKIAIOSFODNN7EXAMPLE".to_string();
+        let messages = vec![msg("export DB_PASSWORD=hunter2"), msg("plain question")];
+
+        let (want_system, want_messages, want_hits) = scrub(system.clone(), messages.clone(), None);
+        let got = ai_preview(system, messages, None);
+
+        assert_eq!(got.system, want_system);
+        assert_eq!(
+            got.messages.iter().map(|m| &m.content).collect::<Vec<_>>(),
+            want_messages.iter().map(|m| &m.content).collect::<Vec<_>>()
+        );
+        assert_eq!(got.redacted, want_hits);
+        assert!(!got.system.contains("AKIAIOSFODNN7EXAMPLE"));
+        assert!(!got.messages[0].content.contains("hunter2"));
+    }
+
+    #[test]
+    fn preview_counts_the_bytes_it_shows() {
+        let got = ai_preview("abc".into(), vec![msg("defg")], None);
+        assert_eq!(got.bytes, 7);
+        // Multi-byte characters are counted as the bytes they take on the wire.
+        let got = ai_preview("é".into(), vec![], None);
+        assert_eq!(got.bytes, 2);
+    }
+
+    #[test]
+    fn the_override_leaves_the_prompt_untouched() {
+        let secret = "export DB_PASSWORD=hunter2";
+        let got = ai_preview(String::new(), vec![msg(secret)], Some(true));
+        assert_eq!(got.messages[0].content, secret);
+        assert!(got.redacted.is_empty());
+    }
+
+    #[test]
+    fn absent_override_still_redacts() {
+        // `None` is what every caller that never thought about it sends.
+        let got = ai_preview(String::new(), vec![msg("export TOKEN=abc123")], None);
+        assert!(!got.messages[0].content.contains("abc123"));
+        assert_eq!(got.redacted.len(), 1);
+    }
 
     fn cfg(key: &str) -> AiConfig {
         let mut api_keys = HashMap::new();

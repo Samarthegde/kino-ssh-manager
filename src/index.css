@@ -3377,6 +3377,79 @@ textarea.mono {
   white-space: pre;
 }
 
+/* The confirmation standing between a copilot suggestion and the host. A long
+   command scrolls inside its own block so the dialog itself never has to. */
+.copilot-run-modal { width: 560px; max-width: 92vw; }
+
+.copilot-run-block {
+  border: 1px solid var(--muted);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.copilot-run-label {
+  display: block;
+  padding: 5px 10px;
+  background: var(--overlay);
+  border-bottom: 1px solid var(--muted);
+  font-size: 11px;
+  color: var(--subtle);
+}
+
+.copilot-run-code {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: 40vh;
+  overflow: auto;
+  background: var(--bg);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre;
+}
+
+/* The payload inspector reuses the run dialog's block/label/code rules - both
+   are "here is some text verbatim, read it before you commit" - and adds only
+   the room to hold several turns. */
+.copilot-inspect-modal { width: 760px; max-width: 92vw; }
+
+.copilot-inspect-body {
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 62vh;
+  overflow-y: auto;
+}
+
+.copilot-inspect-body .copilot-run-code { max-height: none; }
+
+/* Stated where the decision to send is made, not buried in settings. */
+.copilot-payload {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  color: var(--subtle);
+}
+
+.copilot-payload span { margin-right: auto; }
+
+/* Not an error - nothing failed. A statement of what did not leave the machine. */
+.copilot-redacted {
+  margin: 6px 0 0;
+  padding: 7px 10px;
+  border: 1px solid var(--muted);
+  border-left: 3px solid var(--yellow);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--subtle);
+}
+
+.copilot-redacted .btn { margin-left: 4px; vertical-align: baseline; }
+
 .copilot-input { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--muted); }
 .copilot-input textarea { width: 100%; resize: vertical; font-size: 13.5px; }
 .copilot-actions { display: flex; gap: 8px; justify-content: flex-end; }
@@ -6962,6 +7035,31 @@ textarea.mono,
 
 .copilot-code pre { font-family: var(--font-mono); background: var(--bg); }
 
+.copilot-run-block {
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--ink-accent);
+}
+
+.copilot-run-label {
+  background: color-mix(in srgb, var(--ink-paper) 5%, transparent);
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ink-accent);
+}
+
+.copilot-run-code { font-family: var(--font-mono); background: var(--bg); }
+
+.copilot-payload {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
 .copilot-model-badge {
   font-family: var(--font-mono);
   font-size: 9px;
@@ -7195,6 +7293,12 @@ textarea.mono,
 
 /* Opened from inside the Docker modal, so it has to clear its own parent. */
 .docker-logs-overlay {
+  z-index: calc(var(--z-modal) + 10);
+}
+
+/* Same again: both of these are opened from inside the copilot modal. */
+.copilot-run-overlay,
+.copilot-inspect-overlay {
   z-index: calc(var(--z-modal) + 10);
 }
 
