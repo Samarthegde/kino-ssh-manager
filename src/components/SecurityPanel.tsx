@@ -5,8 +5,10 @@ import {
   AuditReport,
   HostAudit,
   HostProbe,
+  KeyOnDisk,
   RotateOutcome,
   SshGrade,
+  SweepReport,
   useVaultStore,
 } from "../store";
 
@@ -73,8 +75,9 @@ function shortFingerprint(fp: string): string {
  * once is a very bad afternoon.
  */
 export function SecurityPanel({ onClose }: Props) {
-  const { auditKeys, rotateKey, probeHostAlgorithms, writeTextFile, hosts } = useVaultStore();
-  const [view, setView] = useState<"keys" | "transport">("keys");
+  const { auditKeys, rotateKey, probeHostAlgorithms, sweepKeys, writeTextFile, hosts } =
+    useVaultStore();
+  const [view, setView] = useState<"keys" | "disk" | "transport">("keys");
   const [report, setReport] = useState<AuditReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -96,6 +99,9 @@ export function SecurityPanel({ onClose }: Props) {
   const [scanning, setScanning] = useState(false);
   const [openProbe, setOpenProbe] = useState<string | null>(null);
   const [exported, setExported] = useState("");
+  const [sweep, setSweep] = useState<SweepReport | null>(null);
+  const [sweeping, setSweeping] = useState(false);
+  const [openKey, setOpenKey] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -254,6 +260,117 @@ export function SecurityPanel({ onClose }: Props) {
     );
   }
 
+  async function runSweep() {
+    setSweeping(true);
+    setError(null);
+    try {
+      setSweep(await sweepKeys([]));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSweeping(false);
+    }
+  }
+
+  /** The worst thing said about a key, which is what its row is coloured by. */
+  function worstOnDisk(k: KeyOnDisk): string | null {
+    const order = ["critical", "high", "medium", "low"];
+    return (
+      order.find((sev) => k.findings.some((f) => f.severity === sev)) ?? null
+    );
+  }
+
+  function renderDisk() {
+    if (!sweep) {
+      return (
+        <div className="docker-empty">
+          <p>Looks for private keys in your ~/.ssh directory and one level below it.</p>
+          <p className="hint">
+            It reads and describes them - it never asks for a passphrase, never decrypts
+            anything, and copies nothing anywhere. Works with the vault locked, though it can
+            only tell you which keys Kino already holds while it is open.
+          </p>
+        </div>
+      );
+    }
+    if (sweep.keys.length === 0) {
+      return (
+        <div className="docker-empty">
+          No private keys found in {sweep.scanned.join(", ") || "~/.ssh"}.
+        </div>
+      );
+    }
+
+    return (
+      <>
+        {sweep.findings.map((f) => (
+          <div key={f.id} className={`audit-finding sev-${f.severity}`}>
+            <p className="audit-finding-title">
+              <span className="audit-sev">{f.severity}</span>
+              {f.title}
+            </p>
+            <p className="audit-finding-detail">{f.detail}</p>
+          </div>
+        ))}
+
+        {sweep.keys.map((k) => {
+          const sev = worstOnDisk(k);
+          const open = openKey === k.path;
+          const name = k.path.split(/[\\/]/).pop() ?? k.path;
+          return (
+            <div key={k.path} className={`audit-host ${sev ? `sev-${sev}` : "sev-none"}`}>
+              <div className="audit-host-head">
+                <button
+                  className="audit-host-toggle"
+                  onClick={() => setOpenKey(open ? null : k.path)}
+                  aria-expanded={open}
+                >
+                  <span className="audit-host-name">{name}</span>
+                  <span className="audit-host-key">
+                    {k.algorithm ?? k.format}
+                    {k.bits ? ` ${k.bits}` : ""}
+                    {" · "}
+                    {k.encrypted ? "passphrase" : "no passphrase"}
+                    {k.mode !== null && ` · ${(k.mode & 0o777).toString(8)}`}
+                  </span>
+                  {k.findings.length > 0 && (
+                    <span className="audit-count">
+                      {k.findings.length} {k.findings.length === 1 ? "note" : "notes"}
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              {open && (
+                <div className="audit-detail">
+                  <p className="audit-fingerprint">
+                    {k.path}
+                    {k.comment && <span className="audit-tag">{k.comment}</span>}
+                  </p>
+                  {k.findings.map((f) => (
+                    <div key={f.id} className={`audit-finding sev-${f.severity}`}>
+                      <p className="audit-finding-title">
+                        <span className="audit-sev">{f.severity}</span>
+                        {f.title}
+                      </p>
+                      <p className="audit-finding-detail">{f.detail}</p>
+                    </div>
+                  ))}
+                  {k.findings.length === 0 && (
+                    <p className="audit-finding-detail">
+                      Nothing to report: it has a passphrase, sensible permissions, and Kino
+                      already holds it.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </>
+    );
+  }
+
   async function scan() {
     setScanning(true);
     setError(null);
@@ -402,7 +519,13 @@ export function SecurityPanel({ onClose }: Props) {
             className={`audit-tab ${view === "keys" ? "on" : ""}`}
             onClick={() => setView("keys")}
           >
-            Keys
+            Vault keys
+          </button>
+          <button
+            className={`audit-tab ${view === "disk" ? "on" : ""}`}
+            onClick={() => setView("disk")}
+          >
+            On disk
           </button>
           <button
             className={`audit-tab ${view === "transport" ? "on" : ""}`}
@@ -413,7 +536,27 @@ export function SecurityPanel({ onClose }: Props) {
         </div>
 
         <div className="audit-toolbar">
-          {view === "transport" ? (
+          {view === "disk" ? (
+            <>
+              {sweep && (
+                <div className="audit-summary">
+                  {sweep.critical > 0 && (
+                    <span className="audit-chip sev-high">{sweep.critical} critical</span>
+                  )}
+                  {sweep.high > 0 && (
+                    <span className="audit-chip sev-medium">{sweep.high} high</span>
+                  )}
+                  <span className="audit-scope">
+                    {sweep.keys.length} key{sweep.keys.length === 1 ? "" : "s"} in{" "}
+                    {sweep.scanned.join(", ")} · read locally, nothing was copied
+                  </span>
+                </div>
+              )}
+              <button className="btn btn-sm" onClick={() => void runSweep()} disabled={sweeping}>
+                {sweeping ? "Looking…" : sweep ? "Scan again" : "Scan ~/.ssh"}
+              </button>
+            </>
+          ) : view === "transport" ? (
             <>
               {probes && (
                 <div className="audit-summary">
@@ -474,7 +617,13 @@ export function SecurityPanel({ onClose }: Props) {
         {error && <p className="form-error">{error}</p>}
 
         <div className="audit-body">
-          {view === "transport" ? (
+          {view === "disk" ? (
+            sweeping && !sweep ? (
+              <div className="docker-empty">Looking through ~/.ssh…</div>
+            ) : (
+              renderDisk()
+            )
+          ) : view === "transport" ? (
             scanning && !probes ? (
               <div className="docker-empty">Asking each host…</div>
             ) : (
@@ -508,7 +657,9 @@ export function SecurityPanel({ onClose }: Props) {
         </div>
 
         <p className="audit-footnote">
-          {view === "transport"
+          {view === "disk"
+            ? "Keys are read and described, never decrypted and never copied. A key with no passphrase is protected only by the filesystem, and anything running as you can read it - which is what a compromised package in your project would do first."
+            : view === "transport"
             ? "Kino compares what each host offers against the algorithms it will itself negotiate, so a finding is about a connection you would actually make. Hosts reached through a relay or a jump host are not probed, and say so rather than being guessed at."
             : "Rotation generates an ed25519 key, installs it, opens a second connection that can only authenticate with the new key, and only then removes the old one. If any step before that fails, the host is left exactly as it was."}
         </p>

@@ -262,6 +262,33 @@ export interface HostProbe {
   checked_at: number;
 }
 
+/** A private key found on this machine. Mirrors `KeyOnDisk`. */
+export interface KeyOnDisk {
+  path: string;
+  /** "openssh" | "pem" | "pkcs8" | "ppk" */
+  format: string;
+  /** `null` for formats that cannot be read without a converter, e.g. PPK. */
+  algorithm: string | null;
+  bits: number | null;
+  fingerprint: string | null;
+  encrypted: boolean;
+  comment: string | null;
+  /** Unix permission bits. `null` on Windows, where the model is an ACL. */
+  mode: number | null;
+  modified: number | null;
+  findings: AuditFinding[];
+}
+
+export interface SweepReport {
+  keys: KeyOnDisk[];
+  /** The directories that were looked at, so the scope is visible. */
+  scanned: string[];
+  /** Problems that are not about one key, e.g. global agent forwarding. */
+  findings: AuditFinding[];
+  critical: number;
+  high: number;
+}
+
 export interface AuditReport {
   hosts: HostAudit[];
   generated_at: number;
@@ -546,6 +573,9 @@ interface VaultStore {
   ) => Promise<CronPreview>;
   /** Inspect every stored key. Entirely local - no host is contacted. */
   auditKeys: () => Promise<AuditReport>;
+  /** Find private keys on this machine. Detection only - it reads and
+   *  describes, and works with the vault locked. */
+  sweepKeys: (extraDirs: string[]) => Promise<SweepReport>;
   /** Ask each host what cryptography it would use. Opens no session and reads
    *  no credential, so it works with the vault locked. */
   probeHostAlgorithms: (hosts: Host[]) => Promise<HostProbe[]>;
@@ -1726,6 +1756,7 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
     invoke<CronPreview>("cron_preview", { schedule, hostNow, hostOffsetMin }),
 
   auditKeys: () => invoke<AuditReport>("audit_keys"),
+  sweepKeys: (extraDirs) => invoke<SweepReport>("sweep_keys", { extraDirs }),
   probeHostAlgorithms: (hosts) => invoke<HostProbe[]>("probe_host_algorithms", { hosts }),
   writeTextFile: (content, path) => invoke<void>("write_text_file", { content, path }),
   rotateKey: async (hostId) => {
