@@ -1,4 +1,5 @@
 mod ai;
+mod algo_probe;
 pub mod archaeology;
 mod audit;
 mod cloud;
@@ -1911,6 +1912,7 @@ pub fn run() {
             audit::audit_keys,
             audit::rotate_key,
             health::check_hosts_health,
+            algo_probe::probe_host_algorithms,
             ai::ai_get_config,
             ai::ai_set_config,
             ai::ai_list_models,
