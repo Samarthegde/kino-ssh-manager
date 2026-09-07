@@ -36,7 +36,10 @@ Use GitHub's private vulnerability reporting: go to the repository's **Security*
 
 Every release asset is signed with the project's minisign key, whose public half is in [`minisign.pub`](minisign.pub) and in `src-tauri/tauri.conf.json`. Releases also carry a `SHA256SUMS` covering every asset, and `SHA256SUMS.sig`. Per-asset signatures prove each file; the signed `SHA256SUMS` proves the *set*, which per-asset signatures cannot.
 
+Tauri base64-wraps the signatures it writes, so decode one before handing it to `minisign`, which expects `<file>.minisig` beside the file:
+
 ```bash
+base64 -d SHA256SUMS.sig > SHA256SUMS.minisig
 minisign -Vm SHA256SUMS -p minisign.pub && sha256sum -c SHA256SUMS --ignore-missing
 ```
 
