@@ -20,6 +20,7 @@ pub mod mcp_config;
 pub mod mcp_policy;
 mod metrics;
 mod notes;
+mod patches;
 mod processes;
 mod recorder;
 mod redact;
@@ -1917,6 +1918,7 @@ pub fn run() {
             docker::docker_shell,
             metrics::metrics_start,
             metrics::metrics_stop,
+            patches::check_patches,
             processes::processes_list,
             processes::process_kill,
             cron::cron_list,
