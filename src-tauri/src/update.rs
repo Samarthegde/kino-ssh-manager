@@ -52,6 +52,140 @@ fn is_newer(latest: &str, current: &str) -> bool {
     false
 }
 
+/// The minisign key id the updater will verify against.
+///
+/// Read out of the running app's own config rather than hardcoded, so it
+/// cannot drift from the key that actually gates an install. Shown to the user
+/// before they apply an update: "signed by E417F3D9D4D9C4E1" is checkable
+/// against the key published in the repo, where "signature valid" alone asks
+/// them to take our word for which key.
+#[tauri::command]
+pub fn updater_key_id(app: tauri::AppHandle) -> Option<String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let pubkey = app
+        .config()
+        .plugins
+        .0
+        .get("updater")?
+        .get("pubkey")?
+        .as_str()?
+        .to_string();
+    let decoded = String::from_utf8(STANDARD.decode(pubkey).ok()?).ok()?;
+    // `untrusted comment: minisign public key: E417F3D9D4D9C4E1`
+    decoded
+        .lines()
+        .next()?
+        .rsplit(':')
+        .next()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// What the `kino-mcp` binary on this machine is, against what the release
+/// says it should be.
+#[derive(Serialize, Default)]
+pub struct McpBinaryCheck {
+    /// The asset name for this platform, so the user knows what to download.
+    pub asset: String,
+    /// SHA-256 from the release's signed SHA256SUMS. `None` when the release
+    /// predates checksums, or could not be reached.
+    pub expected: Option<String>,
+    /// Where `kino-mcp` was found on PATH, if it was.
+    pub path: Option<String>,
+    /// SHA-256 of that file.
+    pub actual: Option<String>,
+    /// Only `Some` when both halves are known - never a guess.
+    pub matches: Option<bool>,
+    /// Why a half is missing, in words worth showing.
+    pub detail: Option<String>,
+}
+
+fn mcp_asset_name() -> &'static str {
+    if cfg!(windows) {
+        "kino-mcp-windows-x86_64.exe"
+    } else {
+        "kino-mcp-linux-x86_64"
+    }
+}
+
+/// Find `kino-mcp` the way a shell would.
+fn mcp_on_path() -> Option<std::path::PathBuf> {
+    let exe = if cfg!(windows) {
+        "kino-mcp.exe"
+    } else {
+        "kino-mcp"
+    };
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|dir| dir.join(exe))
+            .find(|p| p.is_file())
+    })
+}
+
+fn sha256_of(path: &std::path::Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path).ok()?;
+    Some(format!("{:x}", Sha256::digest(&bytes)))
+}
+
+/// Compare the installed `kino-mcp` against the release it claims to be from.
+///
+/// `kino-mcp` is a separate download that the user places on their PATH
+/// themselves, so nothing in the app has ever confirmed it is the file this
+/// version shipped. It can reach every host exposed to it, which makes that
+/// worth answering rather than assuming.
+///
+/// Both halves can legitimately be missing - the binary may not be installed,
+/// and a release older than SHA256SUMS has nothing to compare against - so
+/// `matches` stays `None` unless both are known.
+#[tauri::command]
+pub fn check_mcp_binary() -> McpBinaryCheck {
+    let asset = mcp_asset_name().to_string();
+    let version = env!("CARGO_PKG_VERSION");
+    let mut out = McpBinaryCheck {
+        asset: asset.clone(),
+        ..Default::default()
+    };
+
+    if let Some(path) = mcp_on_path() {
+        out.actual = sha256_of(&path);
+        out.path = Some(path.to_string_lossy().into_owned());
+    } else {
+        out.detail = Some("kino-mcp was not found on your PATH.".into());
+    }
+
+    let url = format!("https://github.com/{REPO}/releases/download/v{version}/SHA256SUMS");
+    let fetched = ureq::get(&url)
+        .set("User-Agent", "kino-ssh-manager")
+        .call()
+        .ok()
+        .and_then(|r| r.into_string().ok());
+    match fetched {
+        Some(body) => {
+            out.expected = body
+                .lines()
+                .find(|l| l.ends_with(&asset))
+                .and_then(|l| l.split_whitespace().next())
+                .map(str::to_string);
+            if out.expected.is_none() {
+                out.detail = Some(format!("v{version}'s SHA256SUMS does not list {asset}."));
+            }
+        }
+        None => {
+            out.detail = Some(format!(
+                "Could not fetch SHA256SUMS for v{version} - it may predate signed checksums, \
+                 or you may be offline."
+            ));
+        }
+    }
+
+    out.matches = match (&out.expected, &out.actual) {
+        (Some(e), Some(a)) => Some(e.eq_ignore_ascii_case(a)),
+        _ => None,
+    };
+    out
+}
+
 #[tauri::command]
 pub fn check_for_update() -> Result<UpdateInfo, String> {
     let current = env!("CARGO_PKG_VERSION").to_string();

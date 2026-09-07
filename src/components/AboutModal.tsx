@@ -12,13 +12,20 @@ interface Props {
 }
 
 /** Where the in-app install currently is. */
-type InstallPhase = "idle" | "working" | "downloading" | "installed" | "failed";
+type InstallPhase = "idle" | "working" | "downloading" | "verified" | "installed" | "failed";
 
 export function AboutModal({ onClose }: Props) {
-  const { updateInfo, checkForUpdate } = useVaultStore();
+  const { updateInfo, checkForUpdate, updaterKeyId } = useVaultStore();
   const [version, setVersion] = useState("");
   const [renderer, setRenderer] = useState("");
   const [checking, setChecking] = useState(false);
+  /** Set once a package has been downloaded and its signature checked. */
+  const [verified, setVerified] = useState<{ version: string; bytes: number } | null>(null);
+  const [pending, setPending] = useState<Awaited<ReturnType<typeof check>>>(null);
+  const [keyId, setKeyId] = useState<string | null>(null);
+  useEffect(() => {
+    updaterKeyId().then(setKeyId).catch(() => setKeyId(null));
+  }, [updaterKeyId]);
 
   const [phase, setPhase] = useState<InstallPhase>("idle");
   const [progress, setProgress] = useState({ received: 0, total: 0 });
@@ -42,10 +49,24 @@ export function AboutModal({ onClose }: Props) {
    * published manifest, unsupported install target) we surface the reason and
    * fall back to the release page rather than leaving a dead button.
    */
-  async function installUpdate() {
+  /**
+   * Download, then say what was checked, then install - three steps rather
+   * than one.
+   *
+   * `downloadAndInstall` does all of it in a single call, which means the
+   * moment the signature is verified is also the moment the installer runs.
+   * Splitting them puts a stop between "this package is signed by the key in
+   * the app's config" and "this package is now on your disk", and lets the
+   * user see the first before deciding on the second.
+   *
+   * There is no path from a failed verification to an install. The plugin
+   * throws, and the only button offered afterwards opens the release page.
+   */
+  async function downloadUpdate() {
     setPhase("working");
     setInstallError("");
     setProgress({ received: 0, total: 0 });
+    setVerified(null);
     try {
       const update = await check();
       if (!update) {
@@ -54,17 +75,38 @@ export function AboutModal({ onClose }: Props) {
         return;
       }
       let received = 0;
-      await update.downloadAndInstall((event) => {
+      let total = 0;
+      await update.download((event) => {
         if (event.event === "Started") {
           setPhase("downloading");
-          setProgress({ received: 0, total: event.data.contentLength ?? 0 });
+          total = event.data.contentLength ?? 0;
+          setProgress({ received: 0, total });
         } else if (event.event === "Progress") {
           received += event.data.chunkLength;
           setProgress((p) => ({ ...p, received }));
-        } else if (event.event === "Finished") {
-          setPhase("working");
         }
       });
+      // Reaching here means the signature checked out: `download` verifies it
+      // and throws otherwise.
+      setPending(update);
+      setVerified({ version: update.version, bytes: received || total });
+      setPhase("verified");
+    } catch (e) {
+      setPhase("failed");
+      const text = String(e);
+      setInstallError(
+        /signature|verif/i.test(text)
+          ? `The downloaded package is not signed by this app's update key, so it was not installed. ${text}`
+          : text
+      );
+    }
+  }
+
+  async function applyUpdate() {
+    if (!pending) return;
+    setPhase("working");
+    try {
+      await pending.install();
       setPhase("installed");
     } catch (e) {
       setPhase("failed");
@@ -103,7 +145,38 @@ export function AboutModal({ onClose }: Props) {
 
           {updateInfo?.available ? (
             <div className="about-update available">
-              {phase === "installed" ? (
+              {phase === "verified" && verified ? (
+                <div className="update-verified">
+                  <p className="update-verified-head">Checked before installing</p>
+                  <ul>
+                    <li>
+                      Signed by update key <code>{keyId ?? "unknown"}</code>
+                    </li>
+                    <li>
+                      v{verified.version}
+                      {verified.bytes > 0 && ` · ${(verified.bytes / 1_048_576).toFixed(1)} MB`}
+                    </li>
+                  </ul>
+                  <p className="hint">
+                    That key is published as <code>minisign.pub</code> in the repository, so you
+                    can compare it without trusting this window.
+                  </p>
+                  <div className="update-verified-actions">
+                    <button
+                      className="btn btn-sm"
+                      onClick={() => {
+                        setPhase("idle");
+                        setVerified(null);
+                      }}
+                    >
+                      Not now
+                    </button>
+                    <button className="btn btn-sm btn-primary" onClick={applyUpdate}>
+                      Install v{verified.version}
+                    </button>
+                  </div>
+                </div>
+              ) : phase === "installed" ? (
                 <>
                   <span>v{updateInfo.latest} installed - restart to finish</span>
                   <button className="btn btn-sm btn-primary" onClick={() => relaunch().catch(() => {})}>
@@ -125,8 +198,8 @@ export function AboutModal({ onClose }: Props) {
               ) : (
                 <>
                   <span>Update available - v{updateInfo.latest}</span>
-                  <button className="btn btn-sm btn-primary" onClick={installUpdate}>
-                    Install update
+                  <button className="btn btn-sm btn-primary" onClick={downloadUpdate}>
+                    Download update
                   </button>
                   <button className="btn btn-sm" onClick={() => openUrl(updateInfo.url).catch(() => {})}>
                     Release notes

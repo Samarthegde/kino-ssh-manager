@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { McpConfig, McpMode, useVaultStore } from "../store";
+import { McpBinaryCheck, McpConfig, McpMode, useVaultStore } from "../store";
 
 interface Props {
   onClose: () => void;
@@ -37,8 +37,13 @@ export function McpSettingsModal({ onClose }: Props) {
     mcpSetExposedHosts,
     mcpSetHostPolicy,
     mcpSetGlobalRules,
+    checkMcpBinary,
     hosts,
   } = useVaultStore();
+  const [binary, setBinary] = useState<McpBinaryCheck | null>(null);
+  useEffect(() => {
+    checkMcpBinary().then(setBinary).catch(() => setBinary(null));
+  }, [checkMcpBinary]);
 
   const [config, setConfig] = useState<McpConfig | null>(null);
   const [password, setPassword] = useState("");
@@ -325,6 +330,39 @@ export function McpSettingsModal({ onClose }: Props) {
               onChange={(e) => setGlobalRules(e.target.value)}
               placeholder={"deny rm -rf *\ndeny shutdown*"}
             />
+          </section>
+
+          <section className="mcp-section">
+            <p className="mcp-section-title">
+              The binary
+              {binary?.matches === true && <span className="mcp-badge">verified</span>}
+            </p>
+            {binary?.matches === true ? (
+              <p className="mcp-hint">
+                The <code>kino-mcp</code> at <code>{binary.path}</code> is the one this version
+                published. Nothing has replaced it.
+              </p>
+            ) : binary?.matches === false ? (
+              <div className="mcp-warn">
+                The <code>kino-mcp</code> on your PATH is <strong>not</strong> the file this
+                version published. Either it is left over from another version, or something
+                replaced it. It can reach every host you expose, so check it before using it.
+                <br />
+                <code>{binary.path}</code>
+              </div>
+            ) : (
+              <p className="mcp-hint">
+                {binary?.detail ?? "Checking…"} The expected SHA-256 for{" "}
+                <code>{binary?.asset}</code> is published in each release's signed{" "}
+                <code>SHA256SUMS</code>.
+              </p>
+            )}
+            {binary?.expected && (
+              <pre className="mcp-config">
+                expected {binary.expected}
+                {binary.actual ? `\nfound    ${binary.actual}` : ""}
+              </pre>
+            )}
           </section>
 
           <section className="mcp-section">

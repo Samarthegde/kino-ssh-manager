@@ -345,6 +345,16 @@ export interface McpHostPolicy {
   rules_text: string;
 }
 
+/** Mirrors `McpBinaryCheck`. `matches` is null unless both halves are known. */
+export interface McpBinaryCheck {
+  asset: string;
+  expected: string | null;
+  path: string | null;
+  actual: string | null;
+  matches: boolean | null;
+  detail: string | null;
+}
+
 /** Mirrors `McpConfigView` in mcp_config.rs. Carries no secrets. */
 export interface McpConfig {
   /** Ids of the hosts the MCP server is allowed to reach. */
@@ -720,6 +730,12 @@ interface VaultStore {
   metricsStop: (streamId: string) => Promise<void>;
   updateInfo: UpdateInfo | null;
   checkForUpdate: () => Promise<void>;
+  /** The minisign key id the updater verifies against, read from the running
+   *  config so it cannot drift from the key that actually gates an install. */
+  updaterKeyId: () => Promise<string | null>;
+  /** What the kino-mcp on this PATH is, against what the release says it
+   *  should be. Both halves can legitimately be unknown. */
+  checkMcpBinary: () => Promise<McpBinaryCheck>;
   changeMasterPassword: (currentPassword: string, newPassword: string) => Promise<void>;
   verifyHostKey: (host: Host) => Promise<HostKeyVerdict>;
   trustHostKey: (host: Host, fingerprint: string) => Promise<void>;
@@ -1461,6 +1477,8 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
     return sessionId;
   },
 
+  updaterKeyId: () => invoke<string | null>("updater_key_id"),
+  checkMcpBinary: () => invoke<McpBinaryCheck>("check_mcp_binary"),
   checkForUpdate: async () => {
     try {
       const info = await invoke<UpdateInfo>("check_for_update");
