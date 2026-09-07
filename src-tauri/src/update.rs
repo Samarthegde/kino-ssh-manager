@@ -1,8 +1,14 @@
 //! Lightweight update check against the GitHub Releases API.
 //!
-//! No auto-install or signing - we just compare the latest published release
-//! tag to the running version and let the UI link to the release page. Done in
-//! Rust (via `ureq`) to avoid webview CORS/CSP restrictions.
+//! This module only *compares versions*. It is not the thing that decides
+//! whether an update may be installed: `tauri_plugin_updater` does that, and it
+//! verifies a minisign signature against the public key in `tauri.conf.json`
+//! before applying anything. Keeping the two apart matters - a version number
+//! fetched over HTTPS says what is newest, and says nothing at all about who
+//! built it.
+//!
+//! Done in Rust (via `ureq`) rather than the webview to avoid CORS/CSP
+//! restrictions.
 
 use serde::Serialize;
 
