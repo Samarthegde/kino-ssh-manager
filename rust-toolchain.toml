@@ -1,0 +1,6 @@
+# Pinned so a release build is reproducible from the repo alone, and so a
+# toolchain bump is a commit somebody reviews rather than something that
+# happens to whoever builds next.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]

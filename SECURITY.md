@@ -32,6 +32,25 @@ Use GitHub's private vulnerability reporting: go to the repository's **Security*
 - **A weak master password.** Argon2 slows brute force but cannot rescue a trivially guessable password. Use a strong, unique one - there is no recovery if you forget it.
 - **The remote hosts you connect to.** Once you connect, the remote server can see whatever you type/transfer.
 
+## Verifying what you downloaded
+
+Every release asset is signed with the project's minisign key, whose public half is in [`minisign.pub`](minisign.pub) and in `src-tauri/tauri.conf.json`. Releases also carry a `SHA256SUMS` covering every asset, and `SHA256SUMS.sig`. Per-asset signatures prove each file; the signed `SHA256SUMS` proves the *set*, which per-asset signatures cannot.
+
+Tauri base64-wraps the signatures it writes, so decode one before handing it to `minisign`, which expects `<file>.minisig` beside the file:
+
+```bash
+base64 -d SHA256SUMS.sig > SHA256SUMS.minisig
+minisign -Vm SHA256SUMS -p minisign.pub && sha256sum -c SHA256SUMS --ignore-missing
+```
+
+GitHub Actions also attests each asset, which says which workflow at which commit produced it - something a signature alone cannot:
+
+```bash
+gh attestation verify <file> --repo Samarthegde/kino-ssh-manager
+```
+
+The in-app updater verifies a signature before applying anything, and refuses rather than offering to continue. `kino-mcp` is a separate download and worth checking by hand: it can reach every host you expose to it.
+
 ## The AI copilot
 
 The copilot is optional and off by default. When it is on, terminal output - which a compromised host controls - reaches a third-party model, and the model proposes commands. That surface has its own document: [docs/copilot-threat-model.md](docs/copilot-threat-model.md), covering the injection paths, the redaction pass that runs before anything is sent, and the residual risks none of it removes.

@@ -65,6 +65,11 @@ jobs:
     needs: create-release
     permissions:
       contents: write
+      # Provenance is signed with a short-lived OIDC token rather than a stored
+      # secret, so the attestation says which workflow at which commit produced
+      # the file - something a signature alone cannot.
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -149,6 +154,21 @@ jobs:
           cp "$src" "$name"
           echo "name=$name" >> "$GITHUB_OUTPUT"
 
+      # The installers have been signed since they existed; this binary was
+      # not, and it is the one the README tells people to chmod +x into
+      # /usr/local/bin. Same key, so a user who trusts one trusts the other.
+      - name: Sign the MCP server
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npx tauri signer sign "${{ steps.mcp.outputs.name }}"
+
+      - name: Attest what this workflow built
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ steps.mcp.outputs.name }}
+
       - name: Attach it to the release
         uses: actions/github-script@v7
         env:
@@ -166,17 +186,99 @@ jobs:
             const existing = await github.rest.repos.listReleaseAssets({
               owner, repo, release_id, per_page: 100,
             });
-            for (const asset of existing.data.filter((a) => a.name === name)) {
+            const names = new Set([name, `${name}.sig`]);
+            for (const asset of existing.data.filter((a) => names.has(a.name))) {
               core.info(`Replacing existing asset ${asset.id}`);
               await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: asset.id });
             }
 
-            const data = fs.readFileSync(name);
-            await github.rest.repos.uploadReleaseAsset({
-              owner, repo, release_id, name, data,
-              headers: {
-                'content-type': 'application/octet-stream',
-                'content-length': data.length,
-              },
+            // The signature travels with the binary. A signature published
+            // separately, or later, is one nobody checks.
+            for (const asset of [name, `${name}.sig`]) {
+              const data = fs.readFileSync(asset);
+              await github.rest.repos.uploadReleaseAsset({
+                owner, repo, release_id, name: asset, data,
+                headers: {
+                  'content-type': 'application/octet-stream',
+                  'content-length': data.length,
+                },
+              });
+              core.info(`Uploaded ${asset} (${data.length} bytes)`);
+            }
+
+  # One list of everything the release contains, signed once. Per-asset
+  # signatures prove each file; this proves the *set* - that no extra asset was
+  # slipped in beside them, which per-asset signatures cannot say.
+  checksums:
+    name: Checksum and sign the release
+    needs: [create-release, build]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      # Only the CLI is needed, and only for `signer sign`.
+      - name: Install the Tauri CLI
+        run: npm ci --ignore-scripts
+
+      - name: Collect the published assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        run: |
+          mkdir -p dist && cd dist
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets" --paginate \
+            --jq '.[] | select(.name | test("SHA256SUMS") | not) | "\(.id)\t\(.name)"' \
+            > ../assets.tsv
+          while IFS=$'\t' read -r id name; do
+            [ -n "$id" ] || continue
+            gh api -H "Accept: application/octet-stream" \
+              "repos/${GITHUB_REPOSITORY}/releases/assets/${id}" > "$name"
+          done < ../assets.tsv
+          ls -la
+
+      - name: Write SHA256SUMS
+        run: |
+          cd dist
+          # Sorted, so two runs of the same release produce the same file.
+          sha256sum $(ls | sort) > ../SHA256SUMS
+          cat ../SHA256SUMS
+
+      - name: Sign it
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npx tauri signer sign SHA256SUMS
+
+      - name: Attach both to the release
+        uses: actions/github-script@v7
+        env:
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        with:
+          script: |
+            const fs = require('fs');
+            const release_id = Number(process.env.RELEASE_ID);
+            const { owner, repo } = context.repo;
+            const existing = await github.rest.repos.listReleaseAssets({
+              owner, repo, release_id, per_page: 100,
             });
-            core.info(`Uploaded ${name} (${data.length} bytes)`);
+            for (const name of ['SHA256SUMS', 'SHA256SUMS.sig']) {
+              for (const a of existing.data.filter((a) => a.name === name)) {
+                await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: a.id });
+              }
+              const data = fs.readFileSync(name);
+              await github.rest.repos.uploadReleaseAsset({
+                owner, repo, release_id, name, data,
+                headers: {
+                  'content-type': 'text/plain',
+                  'content-length': data.length,
+                },
+              });
+              core.info(`Uploaded ${name}`);
+            }

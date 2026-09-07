@@ -80,7 +80,21 @@ Every release attaches it, next to the installers on the
 | Linux | `kino-mcp-linux-x86_64` |
 | Windows | `kino-mcp-windows-x86_64.exe` |
 
-Download it, make it executable, and put it somewhere on your `PATH`:
+Every release also carries `kino-mcp-<platform>.sig`, a `SHA256SUMS` covering
+every asset, and its signature. Check before you run it - this binary can reach
+the hosts you expose to it:
+
+```bash
+# What GitHub Actions says it built, and from which commit
+gh attestation verify kino-mcp-linux-x86_64 --repo Samarthegde/kino-ssh-manager
+
+# Or against the project's signing key. Tauri base64-wraps its signatures, so
+# decode it first - minisign reads `<file>.minisig` sitting next to the file.
+base64 -d kino-mcp-linux-x86_64.sig > kino-mcp-linux-x86_64.minisig
+minisign -Vm kino-mcp-linux-x86_64 -p minisign.pub
+```
+
+Then make it executable and put it somewhere on your `PATH`:
 
 ```bash
 chmod +x kino-mcp-linux-x86_64
