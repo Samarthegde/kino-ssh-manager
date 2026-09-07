@@ -124,3 +124,59 @@ jobs:
           args: ${{ matrix.args }}
           # Publishes the latest.json manifest the updater endpoint points at.
           includeUpdaterJson: true
+
+      # The MCP server is a second binary in the same crate. The installers
+      # don't carry it - it isn't a Tauri sidecar - and tauri-action uploads
+      # only bundles, so without this the sole way to get `kino-mcp` is to
+      # compile it with a full Rust toolchain. That is not a reasonable ask of
+      # someone who installed a .deb.
+      - name: Build the MCP server
+        shell: bash
+        run: cargo build --release --manifest-path src-tauri/Cargo.toml --bin kino-mcp
+
+      - name: Name it for this platform
+        id: mcp
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            src="src-tauri/target/release/kino-mcp.exe"
+            name="kino-mcp-windows-x86_64.exe"
+          else
+            src="src-tauri/target/release/kino-mcp"
+            name="kino-mcp-linux-x86_64"
+          fi
+          test -f "$src" || { echo "::error::$src was not produced"; exit 1; }
+          cp "$src" "$name"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Attach it to the release
+        uses: actions/github-script@v7
+        env:
+          ASSET: ${{ steps.mcp.outputs.name }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        with:
+          script: |
+            const fs = require('fs');
+            const name = process.env.ASSET;
+            const release_id = Number(process.env.RELEASE_ID);
+            const { owner, repo } = context.repo;
+
+            // Re-running a tag would otherwise fail with "already_exists";
+            // replace the asset rather than refuse to upload.
+            const existing = await github.rest.repos.listReleaseAssets({
+              owner, repo, release_id, per_page: 100,
+            });
+            for (const asset of existing.data.filter((a) => a.name === name)) {
+              core.info(`Replacing existing asset ${asset.id}`);
+              await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: asset.id });
+            }
+
+            const data = fs.readFileSync(name);
+            await github.rest.repos.uploadReleaseAsset({
+              owner, repo, release_id, name, data,
+              headers: {
+                'content-type': 'application/octet-stream',
+                'content-length': data.length,
+              },
+            });
+            core.info(`Uploaded ${name} (${data.length} bytes)`);

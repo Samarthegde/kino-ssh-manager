@@ -5,10 +5,18 @@ description = "Kino SSH Manager - Secure SSH credential manager"
 authors = ["Kino SSH Manager contributors"]
 license = "GPL-3.0-only"
 edition = "2021"
+# The crate builds two binaries, so a bare `cargo run` - which is what
+# `tauri dev` issues - is ambiguous and fails. The app is the one to run;
+# `kino-mcp` is a server you start yourself.
+default-run = "ssh-manager"
 
 [lib]
 name = "ssh_manager_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "kino-mcp"
+path = "src/bin/mcp.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -40,6 +48,10 @@ futures-util = "0.3"
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
 tauri-plugin-notification = "2.3.3"
+rmcp = { version = "3", features = ["server", "macros", "transport-io", "schemars"] }
+schemars = "1"
+# Already in the tree via tauri-utils; a direct dep costs no extra build.
+regex = "1"
 
 [dev-dependencies]
 tempfile = "3"

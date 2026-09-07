@@ -61,6 +61,10 @@ export interface Host {
   key_added_at?: number | null;
   /** Topic URL for ntfy.sh (or similar) to receive heartbeat failure notifications. */
   ntfy_topic?: string | null;
+  /** "production" | "staging" | "development". Separate from `color`, which is
+   *  decoration - a colour that means "this can take the site down" depends on
+   *  the theme to be understood. */
+  environment?: string | null;
 }
 
 export interface Note {
@@ -196,6 +200,12 @@ export interface CronPreview {
   next_runs: number[];
 }
 
+/** What a command line matched in the danger list, and what it does. */
+export interface DangerMatch {
+  matched: string;
+  explains: string;
+}
+
 export interface AuditFinding {
   /** Stable id: "weak-rsa", "reused-key", "stale-key", … */
   id: string;
@@ -224,6 +234,80 @@ export interface HostAudit {
   findings: AuditFinding[];
 }
 
+/** What a server said it can do. Mirrors `Offered` in algo_probe.rs. */
+export interface SshOffered {
+  banner: string;
+  kex: string[];
+  host_key: string[];
+  cipher: string[];
+  mac: string[];
+  compression: string[];
+}
+
+export interface SshFinding {
+  severity: "critical" | "high" | "medium" | "low";
+  title: string;
+  remediation: string;
+}
+
+/** How good the negotiated set would be. */
+export type SshGrade = "pq" | "classical" | "weak";
+
+export interface SshAssessment {
+  grade: SshGrade;
+  kex: string | null;
+  host_key: string | null;
+  cipher: string | null;
+  mac: string | null;
+  findings: SshFinding[];
+}
+
+export interface HostProbe {
+  id: string;
+  /** "ok" | "unknown" (not probed, and why) | "unreachable" */
+  status: string;
+  offered: SshOffered | null;
+  assessment: SshAssessment | null;
+  detail: string | null;
+  checked_at: number;
+}
+
+/** A private key found on this machine. Mirrors `KeyOnDisk`. */
+export interface KeyOnDisk {
+  path: string;
+  /** "openssh" | "pem" | "pkcs8" | "ppk" */
+  format: string;
+  /** `null` for formats that cannot be read without a converter, e.g. PPK. */
+  algorithm: string | null;
+  bits: number | null;
+  fingerprint: string | null;
+  encrypted: boolean;
+  comment: string | null;
+  /** Unix permission bits. `null` on Windows, where the model is an ACL. */
+  mode: number | null;
+  modified: number | null;
+  findings: AuditFinding[];
+}
+
+export interface ImportOutcome {
+  host_id: string;
+  host_name: string;
+  fingerprint: string;
+  /** The key was read back out of the saved vault file, not just added on
+   *  screen. Removal from disk is refused until this is true. */
+  verified_in_saved_vault: boolean;
+}
+
+export interface SweepReport {
+  keys: KeyOnDisk[];
+  /** The directories that were looked at, so the scope is visible. */
+  scanned: string[];
+  /** Problems that are not about one key, e.g. global agent forwarding. */
+  findings: AuditFinding[];
+  critical: number;
+  high: number;
+}
+
 export interface AuditReport {
   hosts: HostAudit[];
   generated_at: number;
@@ -250,6 +334,31 @@ export interface CloudConfigInput {
   control_url: string;
   /** Empty keeps the stored key (it is never echoed back to the UI). */
   account_key: string;
+}
+
+/** How much of an exposed host an assistant may reach. Mirrors `McpMode`. */
+export type McpMode = "read_only" | "guarded" | "full";
+
+/** Mirrors `HostPolicyView` - the form the editor works in. */
+export interface McpHostPolicy {
+  mode: McpMode;
+  rules_text: string;
+}
+
+/** Mirrors `McpConfigView` in mcp_config.rs. Carries no secrets. */
+export interface McpConfig {
+  /** Ids of the hosts the MCP server is allowed to reach. */
+  exposed_host_ids: string[];
+  /** Per-host access policy, keyed by host id. No entry means read-only. */
+  host_policies: Record<string, McpHostPolicy>;
+  /** The global rule block, in the text form the editor uses. */
+  global_rules_text: string;
+  /** True once an MCP password has been set. */
+  configured: boolean;
+  /** Absolute path of the exposed vault, shown so it can be backed up or removed. */
+  mcp_vault_path: string;
+  /** Name of the headless binary to point an MCP client at. */
+  binary_hint: string;
 }
 
 export interface CloudMachine {
@@ -301,6 +410,22 @@ export interface AiModelInfo {
 export interface AiMessage {
   role: "user" | "assistant";
   content: string;
+}
+
+/** One kind of secret the backend kept out of a request, and how many. Carries
+ *  no sample of what matched - showing it would put the secret back on screen. */
+export interface RedactionHit {
+  kind: string;
+  count: number;
+}
+
+/** Exactly what a send would transmit, redaction already applied. */
+export interface AiPreview {
+  /** UTF-8 bytes of prompt text: the system message plus every turn. */
+  bytes: number;
+  system: string;
+  messages: AiMessage[];
+  redacted: RedactionHit[];
 }
 
 export type HostKeyVerdict =
@@ -466,7 +591,34 @@ interface VaultStore {
     hostOffsetMin: number
   ) => Promise<CronPreview>;
   /** Inspect every stored key. Entirely local - no host is contacted. */
+  /** Is this command line worth stopping for? Called once per Enter, and only
+   *  in a session marked production. */
+  checkCommandDanger: (line: string) => Promise<DangerMatch | null>;
   auditKeys: () => Promise<AuditReport>;
+  /** Find private keys on this machine. Detection only - it reads and
+   *  describes, and works with the vault locked. */
+  sweepKeys: (extraDirs: string[]) => Promise<SweepReport>;
+  /** Copy a key on disk into the vault. Resolves with proof it was read back
+   *  out of the *saved* vault - removal is refused until that is true. */
+  importKeyFromDisk: (
+    path: string,
+    hostId: string | null,
+    name: string
+  ) => Promise<ImportOutcome>;
+  /** Overwrite and delete a key file. Every precondition is re-checked in the
+   *  backend, so this can refuse even when the UI offered it. */
+  evictKeyFromDisk: (path: string, overrideConfig: boolean) => Promise<string>;
+  /** Write a vault key back out to a file, created private from the start.
+   *  Refuses to overwrite anything, so it can never destroy a key. */
+  exportKeyToDisk: (
+    hostId: string,
+    path: string,
+    includePublic: boolean
+  ) => Promise<string>;
+  /** Ask each host what cryptography it would use. Opens no session and reads
+   *  no credential, so it works with the vault locked. */
+  probeHostAlgorithms: (hosts: Host[]) => Promise<HostProbe[]>;
+  writeTextFile: (content: string, path: string) => Promise<void>;
   /**
    * Replace a host's key with a fresh ed25519 one. Progress arrives on
    * `rotate-<hostId>` as plain strings; see SecurityPanel.
@@ -480,8 +632,22 @@ interface VaultStore {
   cloudRemoveMachine: (agentId: string) => Promise<void>;
   aiSetConfig: (config: AiConfigInput) => Promise<AiConfigView>;
   aiListModels: () => Promise<AiModelInfo[]>;
-  /** Streams the reply over `ai-delta-<requestId>` events; see CopilotPanel. */
-  aiSend: (requestId: string, system: string, messages: AiMessage[]) => Promise<void>;
+  /** Streams the reply over `ai-delta-<requestId>` events; see CopilotPanel.
+   *  Resolves with what redaction removed on the way out. `allowSecrets` is the
+   *  per-send override; omitting it redacts, which is the safe default. */
+  aiSend: (
+    requestId: string,
+    system: string,
+    messages: AiMessage[],
+    allowSecrets?: boolean
+  ) => Promise<RedactionHit[]>;
+  /** What a send would carry, without sending it. Reads nothing from the vault,
+   *  so it is safe to call on every keystroke and works while locked. */
+  aiPreview: (
+    system: string,
+    messages: AiMessage[],
+    allowSecrets?: boolean
+  ) => Promise<AiPreview>;
   aiCancel: (requestId: string) => Promise<void>;
   startForward: (sessionId: string, forward: PortForward, host: Host) => Promise<void>;
   stopForward: (sessionId: string, forwardId: string) => Promise<void>;
@@ -566,6 +732,14 @@ interface VaultStore {
   readRecording: (filename: string) => Promise<string>;
   deleteRecording: (filename: string) => Promise<void>;
   setRecordingState: (sessionId: string, isRecording: boolean) => void;
+
+  mcpGetConfig: () => Promise<McpConfig>;
+  mcpSetPassword: (password: string) => Promise<void>;
+  mcpSetExposedHosts: (hostIds: string[]) => Promise<void>;
+  /** Rules arrive as typed text; the backend parses them, so a bad pattern is
+   *  refused here rather than silently matching nothing later. */
+  mcpSetHostPolicy: (hostId: string, mode: McpMode, rulesText: string) => Promise<void>;
+  mcpSetGlobalRules: (rulesText: string) => Promise<void>;
 }
 
 const AUTO_SYNC_KEY = "ssh-mgr:autosync";
@@ -1620,7 +1794,17 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
   cronPreview: (schedule, hostNow, hostOffsetMin) =>
     invoke<CronPreview>("cron_preview", { schedule, hostNow, hostOffsetMin }),
 
+  checkCommandDanger: (line) => invoke<DangerMatch | null>("check_command_danger", { line }),
   auditKeys: () => invoke<AuditReport>("audit_keys"),
+  sweepKeys: (extraDirs) => invoke<SweepReport>("sweep_keys", { extraDirs }),
+  importKeyFromDisk: (path, hostId, name) =>
+    invoke<ImportOutcome>("import_key_from_disk", { path, hostId, name }),
+  evictKeyFromDisk: (path, overrideConfig) =>
+    invoke<string>("evict_key_from_disk", { path, overrideConfig }),
+  exportKeyToDisk: (hostId, path, includePublic) =>
+    invoke<string>("export_key_to_disk", { hostId, path, includePublic }),
+  probeHostAlgorithms: (hosts) => invoke<HostProbe[]>("probe_host_algorithms", { hosts }),
+  writeTextFile: (content, path) => invoke<void>("write_text_file", { content, path }),
   rotateKey: async (hostId) => {
     const outcome = await invoke<RotateOutcome>("rotate_key", { hostId });
     // Rotation rewrites the host in the vault, so the copy in the store - the
@@ -1637,8 +1821,10 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
   cloudRemoveMachine: (agentId) => invoke<void>("cloud_remove_machine", { agentId }),
   aiSetConfig: (config) => invoke<AiConfigView>("ai_set_config", { config }),
   aiListModels: () => invoke<AiModelInfo[]>("ai_list_models"),
-  aiSend: (requestId, system, messages) =>
-    invoke<void>("ai_send", { requestId, system, messages }),
+  aiSend: (requestId, system, messages, allowSecrets) =>
+    invoke<RedactionHit[]>("ai_send", { requestId, system, messages, allowSecrets }),
+  aiPreview: (system, messages, allowSecrets) =>
+    invoke<AiPreview>("ai_preview", { system, messages, allowSecrets }),
   aiCancel: (requestId) => invoke<void>("ai_cancel", { requestId }),
 
   getHistory: () => invoke<HistoryEvent[]>("get_history"),
@@ -1823,6 +2009,20 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
       else next.delete(sessionId);
       return { recordingSessions: next };
     });
+  },
+
+  mcpSetHostPolicy: (hostId, mode, rulesText) =>
+    invoke<void>("mcp_set_host_policy", { hostId, mode, rulesText }),
+  mcpSetGlobalRules: (rulesText) =>
+    invoke<void>("mcp_set_global_rules", { rulesText }),
+  mcpGetConfig: async () => {
+    return await invoke<McpConfig>("mcp_get_config");
+  },
+  mcpSetPassword: async (password: string) => {
+    await invoke("mcp_set_password", { password });
+  },
+  mcpSetExposedHosts: async (hostIds: string[]) => {
+    await invoke("mcp_set_exposed_hosts", { hostIds });
   },
 }));
 

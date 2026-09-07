@@ -4,6 +4,145 @@ All notable changes to Kino SSH Manager are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **An MCP server, so an AI assistant can work on hosts you choose.** A headless
+  `kino-mcp` binary serves Model Context Protocol tools over stdio: list hosts,
+  run a command, list a directory, read and write files, and run a saved
+  snippet. Configure it under **Settings → Shortcuts & Tools → MCP Server**.
+
+  The point of the design is what the assistant *cannot* see. It reads a
+  separate file, `mcp_vault.enc`, holding only the hosts you tick and the
+  snippets those hosts reference - encrypted under a **separate MCP password**,
+  so the headless binary never needs, and never receives, your master password.
+  Everything else in your vault is invisible to it. That file is rewritten
+  whenever a host, a snippet or the exposure list changes, so a rotated key or a
+  deleted host propagates immediately.
+
+  Host-key verification still applies: the MCP server refuses any host whose key
+  hasn't already been trusted in Kino, so it can't be steered onto an impostor.
+
+  Every exposed host carries an **access mode**, and a newly ticked one is
+  **read-only**: reads are fine, writes are refused outright, and a command runs
+  only if a rule you wrote names it. **Guarded** makes everything reachable but
+  requires approval for anything unnamed - and since the approval prompt isn't
+  built yet, such a call is refused with a message saying so. **Full** is the
+  unrestricted shell, and choosing it takes a second confirmation naming the
+  host.
+
+  Rules are `allow`, `deny` or `ask` plus a pattern (`*` for anything, `re:`
+  for a regex), one per line, first match wins, a host's own before the global
+  ones. They are matched against the command as written - which catches
+  mistakes, not somebody determined to get around them. The read-only default
+  is the part that actually holds, because it refuses what it wasn't told to
+  permit, and no rule can talk it into writing.
+
+  Enforcement lives in `kino-mcp` itself, not in the app that configures it:
+  the policy travels inside `mcp_vault.enc` alongside the hosts, so the headless
+  binary decides for itself and a refusal costs the host nothing - the check
+  runs before any connection is opened. A refused call comes back as structured
+  JSON naming the reason, the mode and the rule, without handing the assistant
+  the rule list to pick at.
+
+  `kino-mcp` is attached to each release as a separate download
+  (`kino-mcp-linux-x86_64`, `kino-mcp-windows-x86_64.exe`) rather than bundled
+  into the installers - it's a server you run, not an app you launch.
+
+### Changed
+- **A copilot suggestion no longer runs on a single click.** The **Run** button
+  under a code block pasted the command *and* pressed Enter, so the whole
+  distance between "the model proposed this" and "the server ran it" was one
+  click on a button labelled *Paste and run in this terminal*.
+
+  There are two buttons now. **Insert** puts the command on the command line and
+  stops there, and it's the primary action. **Run…** opens a confirmation showing
+  the command verbatim, the account and host it would run on, and how many lines
+  it is. Cancel holds focus and Escape closes it, so the reflex keystroke is the
+  safe one.
+
+  The reason is that the copilot's suggestions are shaped by what the host
+  printed - a MOTD, a log line, a filename in `ls` output - and on a host someone
+  else controls, they decide what that text says. The confirmation doesn't make a planted
+  suggestion harmless. It makes running one a decision instead of a reflex.
+- **Terminal output reaching the copilot is now fenced and labelled as data.**
+  Output attached with the *Attach terminal output* tick was already wrapped in
+  a tag, but nothing told the model what the tag meant - and the other way in,
+  selecting text and asking the copilot to explain it, sent the selection raw,
+  as an ordinary message, indistinguishable from something you had typed.
+
+  Both paths now go through one fence. The text is stripped of ANSI escapes and
+  the remaining control characters, a literal `</terminal_output>` printed by
+  the host is defanged so it cannot close the block early, and the system prompt
+  says outright that anything inside the tags is data captured from a machine
+  and never an instruction - and asks the copilot to tell you when it finds one
+  in there addressed to it.
+
+  Notes saved against a host are fenced the same way. They arrive with imported
+  `.sshm` profiles, so they are not necessarily words you wrote, and they were
+  being spoken in the system prompt's own voice.
+
+  None of this makes a planted instruction impossible to write. It makes the
+  boundary between what you said and what a machine printed one the copilot can
+  actually see.
+- **Secrets are stripped out before a request reaches OpenRouter.** Attaching
+  terminal output is one tick, and what was on screen a minute ago is easy to
+  forget - a key you `cat`ed, an `export AWS_SECRET_ACCESS_KEY=`, a `curl -H
+  "Authorization: Bearer ..."`. OpenRouter is a third party and had been getting
+  all of it.
+
+  A redaction pass now runs over the whole prompt: private key blocks (including
+  one the 6 000-character tail cut off mid-key, which is the common case), AWS
+  access keys, bearer tokens, JWTs, and `NAME=value` assignments where the name
+  looks like a credential. An assignment keeps its name - `DB_PASSWORD=` stays
+  legible, only the value goes - so the transcript still reads.
+
+  It runs in Rust at the command boundary, not in the panel that happens to build
+  the prompt today: a redaction the frontend performs is one a future caller
+  forgets. After a send the panel says what was held back - "1 private key, 2
+  assigned secrets" - and offers to ask again including them, for the times the
+  secret is the thing you wanted help with.
+
+  It is pattern matching, so a secret that doesn't look like one still goes
+  through. It lowers the cost of forgetting; it is not a guarantee.
+- **You can see exactly what gets sent.** The prompt is assembled from things
+  you never typed - a system message, a host context line, six thousand
+  characters of scrollback - so "trust us, we redacted it" isn't good enough
+  when the answer is knowable. The composer now states how much text the next
+  send carries, and **Inspect** shows it character for character, turn by turn.
+
+  The preview is produced by the same redaction the request runs through, so it
+  cannot drift from what actually leaves the machine.
+- **A threat model for the copilot**, in `docs/copilot-threat-model.md`: what
+  crosses which boundary, the five paths by which text you didn't write reaches
+  the model, and an honest list of what none of it protects against - starting
+  with the fact that a persuasive injected instruction can still produce a
+  plausible command you approve.
+
+- **A transport audit, under Security - Transport.** OpenSSH 9.9 and 10 default
+  to a post-quantum key exchange and warn when they cannot negotiate one, and
+  OpenSSH 10 dropped DSA outright. Kino was already negotiating the hybrid
+  exchange wherever a server supported it, and never said so.
+
+  It now asks each host directly: exchange version banners, read the algorithms
+  it offers, hang up. No credentials are read and no session is opened, so the
+  scan works with the vault locked and leaves a connection in the host's log
+  rather than a login. Hosts behind a relay or a jump host are not probed and
+  say so, instead of being guessed at.
+
+  Every host is graded weakest-first - weak, classical, post-quantum - with the
+  algorithms a connection would actually use, and each finding names the fix on
+  that host, quoting the version it is running rather than talking about
+  versions in general. Export the table as CSV or JSON, which is the thing you
+  hand to somebody who asked.
+
+  It judges what a host *offers*, not only what would be chosen. A server whose
+  only key exchange is SHA-1, or whose only host key is DSA, cannot be reached
+  by Kino at all - so looking at the negotiated algorithm alone would have said
+  nothing about exactly the host worth finding. And where a host offers a
+  post-quantum exchange Kino does not implement, it says so and whose gap it is,
+  rather than reporting the host as having none.
+
 ## [0.9.0] - 2026-09-01
 
 ### Added

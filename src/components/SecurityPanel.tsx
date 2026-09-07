@@ -1,12 +1,48 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { AuditReport, HostAudit, RotateOutcome, useVaultStore } from "../store";
+import { save } from "@tauri-apps/plugin-dialog";
+import {
+  AuditReport,
+  HostAudit,
+  HostProbe,
+  KeyOnDisk,
+  RotateOutcome,
+  SshGrade,
+  SweepReport,
+  useVaultStore,
+} from "../store";
 
 interface Props {
   onClose: () => void;
 }
 
 const SEVERITY_ORDER = { high: 0, medium: 1, low: 2 } as const;
+
+/** Weakest first. A fleet audit is read top-down and then stopped. */
+const GRADE_ORDER: Record<SshGrade, number> = { weak: 0, classical: 1, pq: 2 };
+
+const GRADE_LABEL: Record<SshGrade, string> = {
+  weak: "Weak",
+  classical: "Classical",
+  pq: "Post-quantum",
+};
+
+/** Old enough that the host may have been patched since. */
+const STALE_AFTER_SECONDS = 30 * 86_400;
+
+function ago(unix: number, now: number): string {
+  const secs = Math.max(0, now - unix);
+  if (secs < 90) return "just now";
+  if (secs < 5400) return `${Math.round(secs / 60)} min ago`;
+  if (secs < 172_800) return `${Math.round(secs / 3600)} h ago`;
+  return `${Math.round(secs / 86_400)} days ago`;
+}
+
+/** One CSV field, quoted only when it has to be. */
+function csvField(v: string | null | undefined): string {
+  const s = v ?? "";
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
 
 function worst(host: HostAudit): keyof typeof SEVERITY_ORDER | null {
   return host.findings.length === 0
@@ -39,7 +75,18 @@ function shortFingerprint(fp: string): string {
  * once is a very bad afternoon.
  */
 export function SecurityPanel({ onClose }: Props) {
-  const { auditKeys, rotateKey } = useVaultStore();
+  const {
+    auditKeys,
+    rotateKey,
+    probeHostAlgorithms,
+    sweepKeys,
+    importKeyFromDisk,
+    evictKeyFromDisk,
+    exportKeyToDisk,
+    writeTextFile,
+    hosts,
+  } = useVaultStore();
+  const [view, setView] = useState<"keys" | "disk" | "transport">("keys");
   const [report, setReport] = useState<AuditReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -49,6 +96,26 @@ export function SecurityPanel({ onClose }: Props) {
   const [progress, setProgress] = useState<string>("");
   const [outcome, setOutcome] = useState<{ id: string; result: RotateOutcome } | null>(null);
   const [showClean, setShowClean] = useState(false);
+
+  // Probe results live for as long as the panel is open and no longer.
+  //
+  // Persisting them would mean a new encrypted sibling file, and with it the
+  // whole lifecycle every other blob has - sync, re-key, zeroize on lock,
+  // exclusion from profile export. That is a lot of surface to protect data
+  // that regenerates in five seconds, and a stale crypto audit is worth less
+  // than a fresh one anyway. So: scan when asked, label the age, throw away.
+  const [probes, setProbes] = useState<HostProbe[] | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [openProbe, setOpenProbe] = useState<string | null>(null);
+  const [exported, setExported] = useState("");
+  const [sweep, setSweep] = useState<SweepReport | null>(null);
+  const [sweeping, setSweeping] = useState(false);
+  const [openKey, setOpenKey] = useState<string | null>(null);
+  /** Keys imported and read back out of the saved vault, this session.
+   *  Removal is only offered for these, and the backend checks again anyway. */
+  const [imported, setImported] = useState<Record<string, string>>({});
+  const [confirmEvict, setConfirmEvict] = useState<string | null>(null);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -157,18 +224,30 @@ export function SecurityPanel({ onClose }: Props) {
               <button className="btn btn-sm" onClick={() => setConfirmId(null)}>✕</button>
             </span>
           ) : (
-            <button
-              className="btn btn-sm"
-              disabled={!!rotatingId || host.auth === "Agent"}
-              title={
-                host.auth === "Agent"
-                  ? "This host authenticates through your ssh-agent; Kino holds no key to rotate"
-                  : "Replace this host's key with a fresh ed25519 one"
-              }
-              onClick={() => setConfirmId(host.host_id)}
-            >
-              Rotate key
-            </button>
+            <>
+              {host.key && (
+                <button
+                  className="btn btn-sm"
+                  disabled={!!rotatingId}
+                  title="Write this key back out as a file, created readable only by you"
+                  onClick={() => void exportKey(host)}
+                >
+                  Export
+                </button>
+              )}
+              <button
+                className="btn btn-sm"
+                disabled={!!rotatingId || host.auth === "Agent"}
+                title={
+                  host.auth === "Agent"
+                    ? "This host authenticates through your ssh-agent; Kino holds no key to rotate"
+                    : "Replace this host's key with a fresh ed25519 one"
+                }
+                onClick={() => setConfirmId(host.host_id)}
+              >
+                Rotate key
+              </button>
+            </>
           )}
         </div>
 
@@ -207,15 +286,444 @@ export function SecurityPanel({ onClose }: Props) {
     );
   }
 
+  async function runSweep() {
+    setSweeping(true);
+    setError(null);
+    try {
+      setSweep(await sweepKeys([]));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSweeping(false);
+    }
+  }
+
+  /** Write a vault key back out as a file. The counterpart to eviction: it is
+   *  what stops "remove from disk" being a one-way door. */
+  async function exportKey(host: HostAudit) {
+    const path = await save({
+      title: `Export ${host.host_name}'s key`,
+      defaultPath: `${host.host_name.replace(/[^A-Za-z0-9._-]/g, "_")}_id_ed25519`,
+      filters: [{ name: "Private key", extensions: ["", "pem", "key"] }],
+    });
+    if (!path) return;
+    setError(null);
+    try {
+      setExported(await exportKeyToDisk(host.host_id, path as string, true));
+      window.setTimeout(() => setExported(""), 6000);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function importKey(k: KeyOnDisk) {
+    setBusyKey(k.path);
+    setError(null);
+    try {
+      const name = k.path.split(/[\\/]/).pop() ?? k.path;
+      const outcome = await importKeyFromDisk(k.path, null, name);
+      if (!outcome.verified_in_saved_vault) {
+        setError(
+          "The key was added but could not be read back out of the saved vault, so it will not be offered for removal."
+        );
+        return;
+      }
+      setImported((prev) => ({ ...prev, [k.path]: outcome.host_name }));
+      await runSweep();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  async function evictKey(path: string, overrideConfig: boolean) {
+    setBusyKey(path);
+    setError(null);
+    try {
+      setExported(await evictKeyFromDisk(path, overrideConfig));
+      setConfirmEvict(null);
+      await runSweep();
+    } catch (e) {
+      setError(String(e));
+      setConfirmEvict(null);
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  /** The worst thing said about a key, which is what its row is coloured by. */
+  function worstOnDisk(k: KeyOnDisk): string | null {
+    const order = ["critical", "high", "medium", "low"];
+    return (
+      order.find((sev) => k.findings.some((f) => f.severity === sev)) ?? null
+    );
+  }
+
+  function renderDisk() {
+    if (!sweep) {
+      return (
+        <div className="docker-empty">
+          <p>Looks for private keys in your ~/.ssh directory and one level below it.</p>
+          <p className="hint">
+            It reads and describes them - it never asks for a passphrase, never decrypts
+            anything, and copies nothing anywhere. Works with the vault locked, though it can
+            only tell you which keys Kino already holds while it is open.
+          </p>
+        </div>
+      );
+    }
+    if (sweep.keys.length === 0) {
+      return (
+        <div className="docker-empty">
+          No private keys found in {sweep.scanned.join(", ") || "~/.ssh"}.
+        </div>
+      );
+    }
+
+    return (
+      <>
+        {sweep.findings.map((f) => (
+          <div key={f.id} className={`audit-finding sev-${f.severity}`}>
+            <p className="audit-finding-title">
+              <span className="audit-sev">{f.severity}</span>
+              {f.title}
+            </p>
+            <p className="audit-finding-detail">{f.detail}</p>
+          </div>
+        ))}
+
+        {sweep.keys.map((k) => {
+          const sev = worstOnDisk(k);
+          const open = openKey === k.path;
+          const name = k.path.split(/[\\/]/).pop() ?? k.path;
+          return (
+            <div key={k.path} className={`audit-host ${sev ? `sev-${sev}` : "sev-none"}`}>
+              <div className="audit-host-head">
+                <button
+                  className="audit-host-toggle"
+                  onClick={() => setOpenKey(open ? null : k.path)}
+                  aria-expanded={open}
+                >
+                  <span className="audit-host-name">{name}</span>
+                  <span className="audit-host-key">
+                    {k.algorithm ?? k.format}
+                    {k.bits ? ` ${k.bits}` : ""}
+                    {" · "}
+                    {k.encrypted ? "passphrase" : "no passphrase"}
+                    {k.mode !== null && ` · ${(k.mode & 0o777).toString(8)}`}
+                  </span>
+                  {k.findings.length > 0 && (
+                    <span className="audit-count">
+                      {k.findings.length} {k.findings.length === 1 ? "note" : "notes"}
+                    </span>
+                  )}
+                </button>
+
+                {busyKey === k.path ? (
+                  <span className="audit-progress">Working…</span>
+                ) : imported[k.path] ? (
+                  <button
+                    className="btn btn-sm btn-danger"
+                    onClick={() => setConfirmEvict(k.path)}
+                    title="Overwrite and delete this file. The vault keeps its copy."
+                  >
+                    Remove from disk
+                  </button>
+                ) : (
+                  <button
+                    className="btn btn-sm"
+                    disabled={!!busyKey || k.algorithm === null}
+                    title={
+                      k.algorithm === null
+                        ? "Kino cannot read this key format, so it cannot take a copy"
+                        : "Copy this key into the vault, where it is encrypted at rest"
+                    }
+                    onClick={() => void importKey(k)}
+                  >
+                    Import to vault
+                  </button>
+                )}
+              </div>
+
+              {confirmEvict === k.path && (
+                <div className="audit-finding sev-high evict-confirm">
+                  <p className="audit-finding-title">
+                    <span className="audit-sev">delete</span>
+                    Overwrite and delete this file?
+                  </p>
+                  <p className="audit-finding-detail">
+                    <code>{k.path}</code>
+                    <br />
+                    It is now in the vault as <strong>{imported[k.path]}</strong>. The bytes are
+                    overwritten before the file is unlinked, but on a copy-on-write or
+                    journalling filesystem, on flash, or on a snapshotted volume, the old blocks
+                    may still exist somewhere Kino cannot reach. Treat this as tidying up, not as
+                    erasure.
+                  </p>
+                  <div className="evict-actions">
+                    <button className="btn btn-sm" onClick={() => setConfirmEvict(null)} autoFocus>
+                      Cancel
+                    </button>
+                    <button
+                      className="btn btn-sm btn-danger"
+                      onClick={() => void evictKey(k.path, true)}
+                    >
+                      Delete {k.path.split(/[\\/]/).pop()}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {open && (
+                <div className="audit-detail">
+                  <p className="audit-fingerprint">
+                    {k.path}
+                    {k.comment && <span className="audit-tag">{k.comment}</span>}
+                  </p>
+                  {k.findings.map((f) => (
+                    <div key={f.id} className={`audit-finding sev-${f.severity}`}>
+                      <p className="audit-finding-title">
+                        <span className="audit-sev">{f.severity}</span>
+                        {f.title}
+                      </p>
+                      <p className="audit-finding-detail">{f.detail}</p>
+                    </div>
+                  ))}
+                  {k.findings.length === 0 && (
+                    <p className="audit-finding-detail">
+                      Nothing to report: it has a passphrase, sensible permissions, and Kino
+                      already holds it.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </>
+    );
+  }
+
+  async function scan() {
+    setScanning(true);
+    setError(null);
+    try {
+      setProbes(await probeHostAlgorithms(hosts));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  const nowSecs = Math.floor(Date.now() / 1000);
+
+  /** Weakest first, then unreachable, then the ones that were not probed. */
+  const rankedProbes = useMemo(() => {
+    if (!probes) return [];
+    const rank = (p: HostProbe) =>
+      p.assessment ? GRADE_ORDER[p.assessment.grade] : p.status === "unreachable" ? 3 : 4;
+    return [...probes].sort((a, b) => rank(a) - rank(b));
+  }, [probes]);
+
+  function hostName(id: string): string {
+    return hosts.find((h) => h.id === id)?.name ?? id;
+  }
+
+  async function exportProbes(format: "csv" | "json") {
+    if (!probes) return;
+    const stamp = new Date().toISOString().slice(0, 10);
+    const path = await save({
+      title: "Export transport audit",
+      defaultPath: `kino-transport-audit-${stamp}.${format}`,
+      filters: [{ name: format.toUpperCase(), extensions: [format] }],
+    });
+    if (!path) return;
+
+    let body: string;
+    if (format === "json") {
+      body = JSON.stringify(
+        probes.map((p) => ({ host: hostName(p.id), ...p })),
+        null,
+        2
+      );
+    } else {
+      const rows = [
+        ["host", "status", "grade", "kex", "host_key", "cipher", "mac", "banner", "findings"],
+        ...rankedProbes.map((p) => [
+          hostName(p.id),
+          p.status,
+          p.assessment?.grade ?? "",
+          p.assessment?.kex ?? "",
+          p.assessment?.host_key ?? "",
+          p.assessment?.cipher ?? "",
+          p.assessment?.mac ?? "",
+          p.offered?.banner ?? p.detail ?? "",
+          (p.assessment?.findings ?? []).map((f) => `${f.severity}: ${f.title}`).join("; "),
+        ]),
+      ];
+      body = rows.map((r) => r.map(csvField).join(",")).join("\n");
+    }
+    await writeTextFile(body, path as string);
+    setExported(`Saved to ${path}`);
+    window.setTimeout(() => setExported(""), 4000);
+  }
+
+  function renderTransport() {
+    if (!probes) {
+      return (
+        <div className="docker-empty">
+          <p>
+            Asks each host which key exchange, host key and cipher it offers, then says what a
+            connection would actually use.
+          </p>
+          <p className="hint">
+            No credentials are read and no session is opened, so this works with the vault
+            locked. A host will log the connection, and no login.
+          </p>
+        </div>
+      );
+    }
+    if (probes.length === 0) return <div className="docker-empty">No hosts in the vault yet.</div>;
+
+    return rankedProbes.map((p) => {
+      const a = p.assessment;
+      const open = openProbe === p.id;
+      const stale = nowSecs - p.checked_at > STALE_AFTER_SECONDS;
+      return (
+        <div key={p.id} className={`audit-host tp-${a?.grade ?? p.status}`}>
+          <div className="audit-host-head">
+            <button className="audit-host-toggle" onClick={() => setOpenProbe(open ? null : p.id)}>
+              <span className="audit-host-name">{hostName(p.id)}</span>
+              <span className="audit-host-key">
+                {a ? `${a.kex ?? "no kex in common"} · ${a.host_key ?? "no host key in common"}` : p.detail}
+              </span>
+              <span className={`tp-grade ${a?.grade ?? p.status}`}>
+                {a ? GRADE_LABEL[a.grade] : p.status === "unreachable" ? "Unreachable" : "Not probed"}
+              </span>
+            </button>
+            <span className="audit-progress">
+              {ago(p.checked_at, nowSecs)}
+              {stale && " · stale"}
+            </span>
+          </div>
+
+          {open && (
+            <div className="audit-detail">
+              {p.offered && (
+                <p className="audit-fingerprint">
+                  {p.offered.banner}
+                  {a?.cipher && <span className="audit-tag">{a.cipher}</span>}
+                  {a?.mac && <span className="audit-tag">{a.mac}</span>}
+                </p>
+              )}
+              {(a?.findings ?? []).map((f, i) => (
+                <div key={i} className={`audit-finding sev-${f.severity}`}>
+                  <p className="audit-finding-title">
+                    <span className="audit-sev">{f.severity}</span>
+                    {f.title}
+                  </p>
+                  <p className="audit-finding-detail">{f.remediation}</p>
+                </div>
+              ))}
+              {a && a.findings.length === 0 && (
+                <p className="audit-finding-detail">
+                  Nothing to report. This host negotiates a post-quantum key exchange with Kino.
+                </p>
+              )}
+              {!a && <p className="audit-finding-detail">{p.detail}</p>}
+            </div>
+          )}
+        </div>
+      );
+    });
+  }
+
   return (
     <div className="modal-overlay" onClick={() => { if (!rotatingId) onClose(); }}>
       <div className="modal audit-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>Key audit</h2>
+          <h2>Security</h2>
           <button className="icon-btn" onClick={onClose} disabled={!!rotatingId}>✕</button>
         </div>
 
+        <div className="audit-tabs">
+          <button
+            className={`audit-tab ${view === "keys" ? "on" : ""}`}
+            onClick={() => setView("keys")}
+          >
+            Vault keys
+          </button>
+          <button
+            className={`audit-tab ${view === "disk" ? "on" : ""}`}
+            onClick={() => setView("disk")}
+          >
+            On disk
+          </button>
+          <button
+            className={`audit-tab ${view === "transport" ? "on" : ""}`}
+            onClick={() => setView("transport")}
+          >
+            Transport
+          </button>
+        </div>
+
         <div className="audit-toolbar">
+          {view === "disk" ? (
+            <>
+              {sweep && (
+                <div className="audit-summary">
+                  {sweep.critical > 0 && (
+                    <span className="audit-chip sev-high">{sweep.critical} critical</span>
+                  )}
+                  {sweep.high > 0 && (
+                    <span className="audit-chip sev-medium">{sweep.high} high</span>
+                  )}
+                  <span className="audit-scope">
+                    {sweep.keys.length} key{sweep.keys.length === 1 ? "" : "s"} in{" "}
+                    {sweep.scanned.join(", ")} · read locally, nothing was copied
+                  </span>
+                </div>
+              )}
+              <button className="btn btn-sm" onClick={() => void runSweep()} disabled={sweeping}>
+                {sweeping ? "Looking…" : sweep ? "Scan again" : "Scan ~/.ssh"}
+              </button>
+            </>
+          ) : view === "transport" ? (
+            <>
+              {probes && (
+                <div className="audit-summary">
+                  {(["weak", "classical", "pq"] as SshGrade[]).map((g) => {
+                    const n = probes.filter((p) => p.assessment?.grade === g).length;
+                    return n === 0 ? null : (
+                      <span key={g} className={`tp-grade ${g}`}>
+                        {n} {GRADE_LABEL[g].toLowerCase()}
+                      </span>
+                    );
+                  })}
+                  <span className="audit-scope">
+                    {probes.length} host{probes.length === 1 ? "" : "s"} · asked directly, nothing
+                    authenticated
+                  </span>
+                </div>
+              )}
+              {probes && (
+                <>
+                  <button className="btn btn-sm" onClick={() => void exportProbes("csv")}>
+                    CSV
+                  </button>
+                  <button className="btn btn-sm" onClick={() => void exportProbes("json")}>
+                    JSON
+                  </button>
+                </>
+              )}
+              <button className="btn btn-sm" onClick={() => void scan()} disabled={scanning}>
+                {scanning ? "Scanning…" : probes ? "Scan again" : "Scan hosts"}
+              </button>
+            </>
+          ) : (
+            <>
           {report && (
             <div className="audit-summary">
               <span className="audit-chip sev-high">{report.high} high</span>
@@ -234,12 +742,28 @@ export function SecurityPanel({ onClose }: Props) {
           >
             Re-run
           </button>
+            </>
+          )}
         </div>
+
+        {exported && <p className="audit-exported">{exported}</p>}
 
         {error && <p className="form-error">{error}</p>}
 
         <div className="audit-body">
-          {loading && !report ? (
+          {view === "disk" ? (
+            sweeping && !sweep ? (
+              <div className="docker-empty">Looking through ~/.ssh…</div>
+            ) : (
+              renderDisk()
+            )
+          ) : view === "transport" ? (
+            scanning && !probes ? (
+              <div className="docker-empty">Asking each host…</div>
+            ) : (
+              renderTransport()
+            )
+          ) : loading && !report ? (
             <div className="docker-empty">Reading keys…</div>
           ) : report?.hosts.length === 0 ? (
             <div className="docker-empty">No hosts in the vault yet.</div>
@@ -267,9 +791,11 @@ export function SecurityPanel({ onClose }: Props) {
         </div>
 
         <p className="audit-footnote">
-          Rotation generates an ed25519 key, installs it, opens a second connection that can only
-          authenticate with the new key, and only then removes the old one. If any step before that
-          fails, the host is left exactly as it was.
+          {view === "disk"
+            ? "Keys are read and described, never decrypted and never copied. A key with no passphrase is protected only by the filesystem, and anything running as you can read it - which is what a compromised package in your project would do first."
+            : view === "transport"
+            ? "Kino compares what each host offers against the algorithms it will itself negotiate, so a finding is about a connection you would actually make. Hosts reached through a relay or a jump host are not probed, and say so rather than being guessed at."
+            : "Rotation generates an ed25519 key, installs it, opens a second connection that can only authenticate with the new key, and only then removes the old one. If any step before that fails, the host is left exactly as it was."}
         </p>
       </div>
     </div>

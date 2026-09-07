@@ -1,21 +1,28 @@
 mod ai;
+mod algo_probe;
 pub mod archaeology;
 mod audit;
 mod cloud;
 mod coalesce;
 mod cron;
+mod danger;
 mod docker;
 mod exec;
 mod forwarding;
 mod health;
 mod history;
 mod host_keys;
+mod key_sweep;
 mod keygen;
 mod local_session;
+pub mod mcp;
+pub mod mcp_config;
+pub mod mcp_policy;
 mod metrics;
 mod notes;
 mod processes;
 mod recorder;
+mod redact;
 mod sftp_session;
 mod shell_history;
 mod snippets;
@@ -110,6 +117,10 @@ fn lock_vault(state: State<'_, AppState>) {
     state.snippets.lock().unwrap().clear();
     state.notes.lock().unwrap().clear();
     state.shell_history.lock().unwrap().clear();
+
+    // Terminate all open sessions.
+    state.sessions.lock().unwrap().clear();
+    state.local_sessions.lock().unwrap().clear();
 }
 
 /// Re-key the vault: verify the current master password, then re-encrypt the
@@ -216,6 +227,7 @@ fn save_host(state: State<'_, AppState>, mut host: Host) -> Result<Host, String>
         hosts.push(host.clone());
     }
     vault::save_vault(&hosts, key, salt)?;
+    let _ = sync_mcp_vault(&state);
     Ok(host)
 }
 
@@ -228,6 +240,7 @@ fn delete_host(state: State<'_, AppState>, id: String) -> Result<(), String> {
     let mut hosts = state.hosts.lock().unwrap();
     hosts.retain(|h| h.id != id);
     vault::save_vault(&hosts, key, salt)?;
+    let _ = sync_mcp_vault(&state);
     // Its archived shell history goes with it; leaving that behind would keep
     // the commands (and anything typed on a command line) after the host is gone.
     let mut hist = state.shell_history.lock().unwrap();
@@ -306,13 +319,14 @@ fn save_snippet(
     if snippet.id.is_empty() {
         snippet.id = Uuid::new_v4().to_string();
     }
-    let mut list = state.snippets.lock().unwrap();
-    if let Some(existing) = list.iter_mut().find(|s| s.id == snippet.id) {
+    let mut snips = state.snippets.lock().unwrap();
+    if let Some(existing) = snips.iter_mut().find(|s| s.id == snippet.id) {
         *existing = snippet.clone();
     } else {
-        list.push(snippet.clone());
+        snips.push(snippet.clone());
     }
-    snippets::save_snippets(&list, key, salt)?;
+    snippets::save_snippets(&snips, key, salt)?;
+    let _ = sync_mcp_vault(&state);
     Ok(snippet)
 }
 
@@ -322,9 +336,11 @@ fn delete_snippet(state: State<'_, AppState>, id: String) -> Result<(), String> 
     let key = key_guard.as_ref().ok_or("Vault is locked")?;
     let salt_guard = state.vault_salt.lock().unwrap();
     let salt = salt_guard.as_ref().ok_or("Vault is locked")?;
-    let mut list = state.snippets.lock().unwrap();
-    list.retain(|s| s.id != id);
-    snippets::save_snippets(&list, key, salt)?;
+    let mut snips = state.snippets.lock().unwrap();
+    snips.retain(|s| s.id != id);
+    snippets::save_snippets(&snips, key, salt)?;
+    let _ = sync_mcp_vault(&state);
+
     // Drop the now-dangling reference from any host that used this snippet.
     let mut hosts = state.hosts.lock().unwrap();
     let mut hosts_changed = false;
@@ -846,6 +862,16 @@ fn import_host_encrypted(path: String, password: String) -> Result<vault::Host, 
 
 #[tauri::command]
 fn export_ssh_key(content: String, path: String) -> Result<(), String> {
+    std::fs::write(&path, content).map_err(|e| e.to_string())
+}
+
+/// Write text the user asked to save somewhere they chose.
+///
+/// `export_ssh_key` does the same thing, but naming matters at a command
+/// boundary: an audit export is not a key, and a reviewer should not have to
+/// work out that it borrowed the key path.
+#[tauri::command]
+fn write_text_file(content: String, path: String) -> Result<(), String> {
     std::fs::write(&path, content).map_err(|e| e.to_string())
 }
 
@@ -1551,6 +1577,164 @@ fn list_active_forwards(state: State<'_, AppState>) -> Vec<String> {
         .collect()
 }
 
+// ── MCP commands ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn mcp_get_config(state: State<'_, AppState>) -> Result<mcp_config::McpConfigView, String> {
+    let key_guard = state.vault_key.lock().unwrap();
+    let key = key_guard.as_ref().ok_or("Vault is locked")?;
+    let config = mcp_config::load_config(key)?;
+    Ok(mcp_config::McpConfigView {
+        host_policies: config
+            .host_policies
+            .iter()
+            .map(|(id, p)| {
+                (
+                    id.clone(),
+                    mcp_config::HostPolicyView {
+                        mode: p.mode.as_str().to_string(),
+                        rules_text: mcp_policy::rules_to_text(&p.rules),
+                    },
+                )
+            })
+            .collect(),
+        global_rules_text: mcp_policy::rules_to_text(&config.global_rules),
+        exposed_host_ids: config.exposed_host_ids,
+        configured: config.configured,
+        mcp_vault_path: mcp_config::mcp_vault_path().to_string_lossy().into_owned(),
+        binary_hint: "kino-mcp".to_string(),
+    })
+}
+
+#[tauri::command]
+fn mcp_set_password(state: State<'_, AppState>, password: String) -> Result<(), String> {
+    if password.trim().is_empty() {
+        return Err("The MCP password cannot be empty".to_string());
+    }
+    {
+        let key_guard = state.vault_key.lock().unwrap();
+        let key = key_guard.as_ref().ok_or("Vault is locked")?;
+        let salt_guard = state.vault_salt.lock().unwrap();
+        let salt = salt_guard.as_ref().ok_or("Vault is locked")?;
+        let mut config = mcp_config::load_config(key)?;
+
+        // A fresh salt for the MCP vault's own key derivation. Changing the
+        // password re-derives and rewrites `mcp_vault.enc`, so anything holding
+        // the old password stops working, which is the point.
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let mut mcp_salt = [0u8; 16];
+        rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut mcp_salt);
+        config.mcp_salt_b64 = STANDARD.encode(mcp_salt);
+        config.configured = true;
+        config.password = Some(password);
+        mcp_config::save_config(&config, key, salt)?;
+    }
+    sync_mcp_vault(&state)
+}
+
+/// Set one host's access mode and rules.
+///
+/// The rules arrive as the text the user typed and are parsed here, so a
+/// pattern that doesn't compile is refused at the point of editing rather than
+/// silently matching nothing when an assistant later calls a tool.
+#[tauri::command]
+fn mcp_set_host_policy(
+    state: State<'_, AppState>,
+    host_id: String,
+    mode: String,
+    rules_text: String,
+) -> Result<(), String> {
+    let mode = match mode.as_str() {
+        "read_only" => mcp_policy::McpMode::ReadOnly,
+        "guarded" => mcp_policy::McpMode::Guarded,
+        "full" => mcp_policy::McpMode::Full,
+        other => return Err(format!("Unknown MCP mode: {other}")),
+    };
+    let rules = mcp_policy::parse_rules(&rules_text, "host")?;
+    {
+        let key_guard = state.vault_key.lock().unwrap();
+        let key = key_guard.as_ref().ok_or("Vault is locked")?;
+        let salt = state.vault_salt.lock().unwrap();
+        let salt = salt.as_ref().ok_or("Vault is locked")?;
+        let mut config = mcp_config::load_config(key)?;
+        config
+            .host_policies
+            .insert(host_id, mcp_policy::HostPolicy { mode, rules });
+        mcp_config::save_config(&config, key, salt)?;
+    }
+    sync_mcp_vault(&state)
+}
+
+/// Set the rules applied to every exposed host, after that host's own.
+#[tauri::command]
+fn mcp_set_global_rules(state: State<'_, AppState>, rules_text: String) -> Result<(), String> {
+    let rules = mcp_policy::parse_rules(&rules_text, "global")?;
+    {
+        let key_guard = state.vault_key.lock().unwrap();
+        let key = key_guard.as_ref().ok_or("Vault is locked")?;
+        let salt = state.vault_salt.lock().unwrap();
+        let salt = salt.as_ref().ok_or("Vault is locked")?;
+        let mut config = mcp_config::load_config(key)?;
+        config.global_rules = rules;
+        mcp_config::save_config(&config, key, salt)?;
+    }
+    sync_mcp_vault(&state)
+}
+
+#[tauri::command]
+fn mcp_set_exposed_hosts(state: State<'_, AppState>, host_ids: Vec<String>) -> Result<(), String> {
+    {
+        let key_guard = state.vault_key.lock().unwrap();
+        let key = key_guard.as_ref().ok_or("Vault is locked")?;
+        let salt_guard = state.vault_salt.lock().unwrap();
+        let salt = salt_guard.as_ref().ok_or("Vault is locked")?;
+        let mut config = mcp_config::load_config(key)?;
+        config.exposed_host_ids = host_ids;
+        mcp_config::save_config(&config, key, salt)?;
+    }
+    // Harmless before a password is set: the export is a no-op until then.
+    sync_mcp_vault(&state)
+}
+
+/// Rewrite `mcp_vault.enc` from the current hosts and the current exposure list.
+///
+/// Called after every change that could alter what the MCP server should see -
+/// a host saved or deleted, a snippet edited, the exposure list changed. The
+/// password comes from the master-encrypted config rather than memory, so this
+/// keeps working after a restart; without that the exposed vault silently kept
+/// serving whatever it held when the password was last typed, including
+/// credentials that had since been rotated or hosts that had been removed.
+fn sync_mcp_vault(state: &AppState) -> Result<(), String> {
+    let key_guard = state.vault_key.lock().unwrap();
+    let key = key_guard.as_ref().ok_or("Vault is locked")?;
+    let config = mcp_config::load_config(key)?;
+    let mcp_pwd = match config.password.as_deref() {
+        Some(p) if config.configured => p,
+        // No password set yet: there is nothing to write and nothing to leak.
+        _ => return Ok(()),
+    };
+
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let salt_vec = STANDARD
+        .decode(&config.mcp_salt_b64)
+        .map_err(|e| format!("Invalid MCP salt: {}", e))?;
+    let salt: [u8; 16] = salt_vec
+        .try_into()
+        .map_err(|_| "Invalid MCP salt length".to_string())?;
+
+    let hosts = state.hosts.lock().unwrap();
+    let snippets = state.snippets.lock().unwrap();
+    mcp_config::export_mcp_vault(
+        &hosts,
+        &snippets,
+        &config.exposed_host_ids,
+        &config.host_policies,
+        &config.global_rules,
+        mcp_pwd,
+        &salt,
+    )
+}
+
 // ── App entry ─────────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1671,6 +1855,7 @@ pub fn run() {
             export_host_encrypted,
             export_ssh_key,
             read_key_file,
+            write_text_file,
             save_session_log,
             save_image_png,
             report_terminal_renderer,
@@ -1738,12 +1923,19 @@ pub fn run() {
             cron::cron_save,
             cron::cron_preview,
             audit::audit_keys,
+            danger::check_command_danger,
+            key_sweep::sweep_keys,
+            key_sweep::import_key_from_disk,
+            key_sweep::evict_key_from_disk,
+            key_sweep::export_key_to_disk,
             audit::rotate_key,
             health::check_hosts_health,
+            algo_probe::probe_host_algorithms,
             ai::ai_get_config,
             ai::ai_set_config,
             ai::ai_list_models,
             ai::ai_send,
+            ai::ai_preview,
             ai::ai_cancel,
             update::check_for_update,
             start_recording,
@@ -1754,6 +1946,11 @@ pub fn run() {
             archaeology::fetch_shell_history,
             archaeology::get_shell_history,
             archaeology::clear_shell_history,
+            mcp_get_config,
+            mcp_set_host_policy,
+            mcp_set_global_rules,
+            mcp_set_password,
+            mcp_set_exposed_hosts,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -1795,6 +1992,7 @@ mod export_tests {
             jump: None,
             key_added_at: None,
             ntfy_topic: None,
+            environment: None,
         }
     }
 

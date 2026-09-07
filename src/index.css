@@ -3377,6 +3377,192 @@ textarea.mono {
   white-space: pre;
 }
 
+/* The confirmation standing between a copilot suggestion and the host. A long
+   command scrolls inside its own block so the dialog itself never has to. */
+.copilot-run-modal { width: 560px; max-width: 92vw; }
+
+.copilot-run-block {
+  border: 1px solid var(--muted);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.copilot-run-label {
+  display: block;
+  padding: 5px 10px;
+  background: var(--overlay);
+  border-bottom: 1px solid var(--muted);
+  font-size: 11px;
+  color: var(--subtle);
+}
+
+.copilot-run-code {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: 40vh;
+  overflow: auto;
+  background: var(--bg);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre;
+}
+
+/* The payload inspector reuses the run dialog's block/label/code rules - both
+   are "here is some text verbatim, read it before you commit" - and adds only
+   the room to hold several turns. */
+.copilot-inspect-modal { width: 760px; max-width: 92vw; }
+
+.copilot-inspect-body {
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 62vh;
+  overflow-y: auto;
+}
+
+.copilot-inspect-body .copilot-run-code { max-height: none; }
+
+/* Stated where the decision to send is made, not buried in settings. */
+.copilot-payload {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  color: var(--subtle);
+}
+
+.copilot-payload span { margin-right: auto; }
+
+/* ── Production guard ────────────────────────────────────────────────────────
+ * The frame goes on the terminal viewport, not the tab. A tab is small, it is
+ * one of several, and it is not where you are looking when you type.
+ */
+.terminal-wrap.is-production {
+  outline: 3px solid var(--red);
+  outline-offset: -3px;
+}
+
+.production-badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 3;
+  padding: 2px 8px;
+  background: var(--red);
+  color: var(--bg);
+  font-family: var(--font-mono, monospace);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  pointer-events: none;
+}
+
+.danger-overlay { z-index: calc(var(--z-modal) + 10); }
+.danger-modal { width: 520px; max-width: 92vw; }
+
+/* The hostname is the thing being got wrong, so it is the biggest thing here. */
+.danger-host {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.2;
+  font-weight: 600;
+  color: var(--red);
+  word-break: break-all;
+}
+
+.danger-line {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--muted);
+  border-left: 3px solid var(--red);
+  border-radius: 6px;
+  max-height: 30vh;
+  overflow: auto;
+  background: var(--bg);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ── Transport audit ─────────────────────────────────────────────────────────
+ * Reuses the key audit's row, finding and severity styles - both answer "what
+ * is wrong with this host, and what do I do about it" - and adds only the two
+ * things it needs: the tabs, and a grade that is legible without colour.
+ */
+.audit-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px 20px 0;
+}
+
+.audit-tab {
+  padding: 5px 12px;
+  border: 1px solid var(--muted);
+  border-bottom: 0;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--subtle);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.audit-tab.on {
+  background: var(--overlay);
+  color: var(--text);
+}
+
+/* The word is the signal; the colour only reinforces it. A grade must survive
+   colour-vision deficiency and the reduced-effects mode. */
+.tp-grade {
+  padding: 1px 8px;
+  border: 1px solid var(--muted);
+  border-radius: 999px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--subtle);
+}
+
+.tp-grade.weak { border-color: var(--red); color: var(--red); }
+.tp-grade.classical { border-color: var(--yellow); color: var(--yellow); }
+.tp-grade.pq { border-color: var(--green); color: var(--green); }
+
+/* The one destructive action in this panel, so it is a block that interrupts
+   the row rather than a button that sits quietly beside it. */
+.evict-confirm { margin: 8px 0 4px; }
+
+.evict-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.audit-exported {
+  margin: 6px 20px 0;
+  font-size: 12px;
+  color: var(--subtle);
+}
+
+/* Not an error - nothing failed. A statement of what did not leave the machine. */
+.copilot-redacted {
+  margin: 6px 0 0;
+  padding: 7px 10px;
+  border: 1px solid var(--muted);
+  border-left: 3px solid var(--yellow);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--subtle);
+}
+
+.copilot-redacted .btn { margin-left: 4px; vertical-align: baseline; }
+
 .copilot-input { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--muted); }
 .copilot-input textarea { width: 100%; resize: vertical; font-size: 13.5px; }
 .copilot-actions { display: flex; gap: 8px; justify-content: flex-end; }
@@ -5841,6 +6027,262 @@ textarea.mono,
   margin-left: auto;
 }
 
+/* ── MCP server ──────────────────────────────────────────────────────────────*/
+
+.mcp-modal {
+  width: min(680px, 96vw);
+  max-width: none;
+  height: min(720px, 92vh);
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.mcp-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-top: 12px;
+}
+
+.mcp-intro {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.7;
+  color: color-mix(in srgb, var(--ink-paper) 72%, transparent);
+  margin: 0 0 10px;
+}
+
+/* Handing an assistant a shell is the whole feature; it should not be a
+   footnote. Marigold rather than red - a caution, not a failure. */
+.mcp-warn {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.8;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--ink-paper) 78%, transparent);
+  border-left: 2px solid var(--yellow);
+  background: color-mix(in srgb, var(--ink-paper) 4%, transparent);
+  padding: 8px 11px;
+  margin-bottom: 16px;
+}
+
+.mcp-section {
+  border-top: 1px solid var(--rule);
+  padding-top: 13px;
+  margin-bottom: 16px;
+}
+
+.mcp-section-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--ink-accent);
+  margin: 0 0 7px;
+}
+
+.mcp-badge {
+  font-size: 8.5px;
+  letter-spacing: 0.16em;
+  padding: 1px 6px;
+  border: 1px solid var(--rule);
+  color: color-mix(in srgb, var(--ink-paper) 50%, transparent);
+}
+
+.mcp-hint {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  line-height: 1.85;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--ink-paper) 45%, transparent);
+  margin: 0 0 9px;
+}
+
+.mcp-hint code {
+  font-family: var(--font-mono);
+  color: color-mix(in srgb, var(--ink-paper) 70%, transparent);
+}
+
+.mcp-input {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 8px 10px;
+  margin-bottom: 7px;
+}
+
+.mcp-hosts {
+  border: 1px solid var(--rule);
+  max-height: 220px;
+  overflow: auto;
+}
+
+.mcp-host {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px 11px;
+  border-bottom: 1px solid color-mix(in srgb, var(--rule) 55%, transparent);
+  border-left: 2px solid transparent;
+  transition: background-color 140ms ease, border-left-color 140ms ease;
+}
+
+.mcp-host-tick {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+}
+
+.mcp-host:last-child { border-bottom: 0; }
+.mcp-host:hover { background: color-mix(in srgb, var(--ink-paper) 5%, transparent); }
+
+/* An exposed host is marked, not merely ticked - the list is scanned for what
+   is reachable, and a checkbox alone is easy to miss. */
+.mcp-host.on {
+  border-left-color: var(--ink-accent);
+  background: color-mix(in srgb, var(--ink-paper) 6%, transparent);
+}
+
+/* The base `input` rule is width:100%; a bare checkbox would stretch. */
+.mcp-host input[type="checkbox"] {
+  width: auto;
+  padding: 0;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: var(--ink-accent);
+}
+
+.mcp-host-name {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--ink-paper);
+}
+
+.mcp-host-addr {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: color-mix(in srgb, var(--ink-paper) 40%, transparent);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+/* Mode, rules button and a one-line statement of what the mode permits. The
+   blurb is not a tooltip on purpose: what an assistant may do to your servers
+   should be readable without hovering anything. */
+.mcp-host-policy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-left: 25px;
+}
+
+.mcp-mode {
+  width: auto;
+  min-width: 130px;
+  margin: 0;
+}
+
+.mcp-mode-blurb {
+  flex: 1 1 220px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--subtle);
+}
+
+/* Anything past read-only is worth seeing while scanning the list, and not by
+   colour alone - the tag carries its own words. */
+.mcp-mode-tag {
+  margin-left: auto;
+  padding: 1px 7px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--subtle);
+}
+
+.mcp-mode-tag.full {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.mcp-rules {
+  padding-left: 25px;
+}
+
+.mcp-rules .mcp-hint { margin: 0 0 6px; }
+
+.mcp-rules-text {
+  width: 100%;
+  font-size: 12px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.mcp-confirm-full {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.mcp-confirm-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.mcp-empty {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--ink-paper) 34%, transparent);
+  padding: 14px 12px;
+  margin: 0;
+}
+
+.mcp-config {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.7;
+  color: color-mix(in srgb, var(--ink-paper) 68%, transparent);
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  padding: 11px 13px;
+  margin: 0 0 8px;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.mcp-config-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.mcp-config-actions .mcp-hint { margin: 0; flex: 1; }
+
+.mcp-foot {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex-shrink: 0;
+  border-top: 1px solid var(--rule);
+  padding-top: 12px;
+  margin-top: 10px;
+}
+
+.mcp-foot .mcp-hint { margin: 0; align-self: center; }
+
 /* ── Notes ───────────────────────────────────────────────────────────────────*/
 
 .notes-modal {
@@ -6072,6 +6514,9 @@ textarea.mono,
 .audit-host.sev-high { border-left-color: var(--red); }
 .audit-host.sev-medium { border-left-color: var(--ink-accent); }
 .audit-host.sev-low { border-left-color: var(--ink-verdigris); }
+.audit-host.tp-weak { border-left-color: var(--red); }
+.audit-host.tp-classical { border-left-color: var(--yellow); }
+.audit-host.tp-pq { border-left-color: var(--green); }
 .audit-host.busy { background: color-mix(in srgb, var(--ink-paper) 5%, transparent); }
 
 .audit-host-head {
@@ -6706,6 +7151,31 @@ textarea.mono,
 
 .copilot-code pre { font-family: var(--font-mono); background: var(--bg); }
 
+.copilot-run-block {
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--ink-accent);
+}
+
+.copilot-run-label {
+  background: color-mix(in srgb, var(--ink-paper) 5%, transparent);
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ink-accent);
+}
+
+.copilot-run-code { font-family: var(--font-mono); background: var(--bg); }
+
+.copilot-payload {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
 .copilot-model-badge {
   font-family: var(--font-mono);
   font-size: 9px;
@@ -6939,6 +7409,12 @@ textarea.mono,
 
 /* Opened from inside the Docker modal, so it has to clear its own parent. */
 .docker-logs-overlay {
+  z-index: calc(var(--z-modal) + 10);
+}
+
+/* Same again: both of these are opened from inside the copilot modal. */
+.copilot-run-overlay,
+.copilot-inspect-overlay {
   z-index: calc(var(--z-modal) + 10);
 }
 

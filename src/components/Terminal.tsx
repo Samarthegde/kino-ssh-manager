@@ -9,7 +9,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal as XTerm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { Host, Tab, terminalFontStack, useVaultStore } from "../store";
+import { DangerMatch, Host, Tab, terminalFontStack, useVaultStore } from "../store";
 import { comboFromEvent } from "../keymap";
 import { toast } from "../utils";
 import { THEMES } from "../themes";
@@ -31,6 +31,17 @@ interface Props {
 
 /** Max consecutive auto-reconnect attempts before giving up. */
 const MAX_RECONNECT_ATTEMPTS = 6;
+
+/** How long the production confirmation makes you wait before it will act.
+ *  Long enough to read the hostname, short enough not to be theatre. */
+const PRODUCTION_COUNTDOWN_SECONDS = 5;
+
+/** Beyond this, a paste into production is a script rather than a command, and
+ *  worth looking at before it lands. */
+const PRODUCTION_PASTE_LIMIT = 500;
+
+const writeCommandFor = (kind: "ssh" | "local") =>
+  kind === "local" ? "local_write" : "ssh_write";
 
 /** "Copied 3 lines" / "Copied 42 characters" - enough to confirm what landed. */
 function amount(text: string): string {
@@ -80,6 +91,59 @@ export function Terminal({ sessionId, kind, active, tabId, host, onExplain }: Pr
   const reconnectTimerRef = useRef<number | null>(null);
   const activeRef = useRef(active);
   useEffect(() => { activeRef.current = active; }, [active]);
+  // Same pattern again: onData is installed once, so it reads the host through
+  // a ref - otherwise marking a host production mid-session would not take.
+  /** So the "skipped production" notice appears once per broadcast, not once
+   *  per keystroke. Reset when broadcast is turned off. */
+  const warnedBroadcastRef = useRef(false);
+  const broadcastOn = useVaultStore((s) => s.broadcastInput);
+  useEffect(() => {
+    if (!broadcastOn) warnedBroadcastRef.current = false;
+  }, [broadcastOn]);
+  const hostRef = useRef(host);
+  useEffect(() => { hostRef.current = host; }, [host]);
+
+  /** A command held back by the production guard, waiting to be confirmed. */
+  const [danger, setDanger] = useState<{
+    hit: DangerMatch;
+    line: string;
+    bytes: number[];
+  } | null>(null);
+  const [countdown, setCountdown] = useState(0);
+  const isProduction = host?.environment === "production";
+
+  // The countdown is the pause, not the permission: the button is disabled
+  // while it runs so the dialog cannot be dismissed by a reflex click landing
+  // where "Cancel" was a moment ago.
+  useEffect(() => {
+    if (!danger) return;
+    setCountdown(PRODUCTION_COUNTDOWN_SECONDS);
+    const t = setInterval(() => {
+      setCountdown((c) => {
+        if (c <= 1) {
+          clearInterval(t);
+          return 0;
+        }
+        return c - 1;
+      });
+    }, 1000);
+    return () => clearInterval(t);
+  }, [danger]);
+
+  /** A paste too large to have been typed, held for a look. */
+  const [bigPaste, setBigPaste] = useState<{ text: string; bytes: number[] } | null>(null);
+
+  function sendHeldPaste() {
+    if (!bigPaste) return;
+    invoke(writeCommandFor(kind), { sessionId, data: bigPaste.bytes }).catch(() => {});
+    setBigPaste(null);
+  }
+
+  function sendHeldCommand() {
+    if (!danger) return;
+    invoke(writeCommandFor(kind), { sessionId, data: danger.bytes }).catch(() => {});
+    setDanger(null);
+  }
 
   const clearReconnectTimer = () => {
     if (reconnectTimerRef.current !== null) {
@@ -301,14 +365,74 @@ export function Terminal({ sessionId, kind, active, tabId, host, onExplain }: Pr
     term.onData((data) => {
       const bytes = Array.from(new TextEncoder().encode(data));
       const st = useVaultStore.getState();
+
+      // A large paste into production. Bracketed-paste markers add a few bytes
+      // and change nothing about the judgement, so the raw length is fine.
+      if (
+        hostRef.current?.environment === "production" &&
+        data.length > PRODUCTION_PASTE_LIMIT
+      ) {
+        setBigPaste({ text: data, bytes });
+        return;
+      }
+
+      // Production guard. Only on Enter, only on a host marked production, so
+      // ordinary sessions pay nothing at all - not a check, not a round trip.
+      //
+      // The line is read off the *screen* rather than accumulated from
+      // keystrokes. Tracking keystrokes would miss the two ways a dangerous
+      // command most often arrives: recalled from history with Up, or finished
+      // by tab completion. Neither passes through onData as text, but both are
+      // sitting right there on the row the cursor is on.
+      if (
+        data.includes("\r") &&
+        hostRef.current?.environment === "production" &&
+        term.buffer.active.type === "normal"
+      ) {
+        const line = term.buffer.active
+          .getLine(term.buffer.active.baseY + term.buffer.active.cursorY)
+          ?.translateToString(true);
+        if (line && line.trim()) {
+          void useVaultStore
+            .getState()
+            .checkCommandDanger(line)
+            .then((hit) => {
+              if (hit) setDanger({ hit, line: line.trim(), bytes });
+              else invoke(writeCommand, { sessionId, data: bytes }).catch(() => {});
+            })
+            .catch(() => {
+              // A failed check must not swallow the keystroke: the guard is a
+              // courtesy, and breaking Enter would be worse than missing one.
+              invoke(writeCommand, { sessionId, data: bytes }).catch(() => {});
+            });
+          return;
+        }
+      }
+
       // Broadcast mode: fan keystrokes out to the active tab of every pane.
       if (st.broadcastInput && activeRef.current) {
         const targets = st.panes
           .map((p) => st.activeTabIds[p])
           .map((tid) => st.tabs.find((t) => t.id === tid && t.connected))
           .filter((t): t is Tab => !!t);
-        if (targets.length > 0) {
-          targets.forEach((t) => {
+        // Broadcast never reaches a production host. Typing into several
+        // machines at once is exactly the situation where you have lost track
+        // of which ones they are, so the safe default is to leave those out
+        // and say so rather than ask mid-keystroke.
+        const production = targets.filter(
+          (t) => t.host?.environment === "production"
+        );
+        const safe = targets.filter((t) => !production.includes(t));
+        if (production.length > 0 && !warnedBroadcastRef.current) {
+          warnedBroadcastRef.current = true;
+          toast(
+            `Broadcast skipped ${production.length} production host${
+              production.length === 1 ? "" : "s"
+            }`
+          );
+        }
+        if (safe.length > 0) {
+          safe.forEach((t) => {
             const cmd = t.kind === "local" ? "local_write" : "ssh_write";
             invoke(cmd, { sessionId: t.sessionId, data: bytes }).catch(() => {});
           });
@@ -557,7 +681,80 @@ export function Terminal({ sessionId, kind, active, tabId, host, onExplain }: Pr
   }
 
   return (
-    <div ref={wrapRef} className="terminal-wrap" style={{ display: active ? "block" : "none" }}>
+    <div
+      ref={wrapRef}
+      className={`terminal-wrap${isProduction ? " is-production" : ""}`}
+      style={{ display: active ? "block" : "none" }}
+    >
+      {/* Not colour alone: the word survives colour-vision deficiency, and it
+          survives the reduced motion and effects mode stripping the frame. */}
+      {isProduction && <span className="production-badge">PRODUCTION</span>}
+
+      {bigPaste && (
+        <div className="modal-overlay danger-overlay" onClick={() => setBigPaste(null)}>
+          <div className="modal danger-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>Paste {bigPaste.text.length} characters into production?</h2>
+              <button className="icon-btn" onClick={() => setBigPaste(null)}>✕</button>
+            </div>
+            <div className="connect-body">
+              <p className="danger-host">{host?.name}</p>
+              <p className="hint" style={{ margin: 0 }}>
+                {bigPaste.text.split("\n").length} lines. Shells run a pasted block as it
+                arrives, so this is worth a look before it lands.
+              </p>
+              {/* First and last line: enough to recognise what this is without
+                  turning the dialog into a file viewer. */}
+              <pre className="danger-line mono">
+                {bigPaste.text.split("\n")[0]}
+                {bigPaste.text.split("\n").length > 2 && "\n  …\n"}
+                {bigPaste.text.split("\n").length > 1 &&
+                  bigPaste.text.split("\n").filter((l) => l.trim()).slice(-1)[0]}
+              </pre>
+            </div>
+            <div className="modal-footer">
+              <button className="btn" onClick={() => setBigPaste(null)} autoFocus>
+                Cancel
+              </button>
+              <button className="btn btn-danger" onClick={sendHeldPaste}>
+                Paste into {host?.name}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {danger && (
+        <div className="modal-overlay danger-overlay" onClick={() => setDanger(null)}>
+          <div className="modal danger-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>Run this on production?</h2>
+              <button className="icon-btn" onClick={() => setDanger(null)}>✕</button>
+            </div>
+            <div className="connect-body">
+              {/* The host name is the thing being got wrong, so it is the
+                  largest thing in the dialog. */}
+              <p className="danger-host">{host?.name}</p>
+              <p className="hint" style={{ margin: 0 }}>
+                <code>{danger.hit.matched}</code> {danger.hit.explains}.
+              </p>
+              <pre className="danger-line mono">{danger.line}</pre>
+            </div>
+            <div className="modal-footer">
+              <button className="btn" onClick={() => setDanger(null)} autoFocus>
+                Cancel
+              </button>
+              <button
+                className="btn btn-danger"
+                disabled={countdown > 0}
+                onClick={sendHeldCommand}
+              >
+                {countdown > 0 ? `Wait ${countdown}…` : `Run on ${host?.name}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {selMenu && (
         <div
           className="term-sel-menu"

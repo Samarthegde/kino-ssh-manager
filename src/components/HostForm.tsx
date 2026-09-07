@@ -45,6 +45,7 @@ export function HostForm({ host, onClose }: Props) {
   const [notes, setNotes] = useState(host?.notes ?? "");
   const [ntfyTopic, setNtfyTopic] = useState(host?.ntfy_topic ?? "");
   const [group, setGroup] = useState(host?.group ?? "");
+  const [environment, setEnvironment] = useState(host?.environment ?? "");
   // Whether the group field is in "type a new name" mode vs. picking an existing one.
   const [creatingGroup, setCreatingGroup] = useState(false);
   const [os, setOs] = useState(host?.os ?? "");
@@ -290,6 +291,7 @@ export function HostForm({ host, onClose }: Props) {
         notes: notes.trim() || null,
         ntfy_topic: ntfyTopic.trim() || null,
         group: group.trim() || null,
+        environment: environment || null,
         os: os || null,
         connection_mode: connectionMode,
         agent_id: agentId || null,
@@ -881,6 +883,27 @@ export function HostForm({ host, onClose }: Props) {
                   <p className="hint">
                     Receive push notifications via ntfy when this host goes offline.
                     Requires health polling to be enabled in Settings.
+                  </p>
+                </div>
+
+                <div className="form-row">
+                  <label>Environment <span className="hint-inline">(optional)</span></label>
+                  <select
+                    className="settings-select"
+                    value={environment}
+                    onChange={(e) => setEnvironment(e.target.value)}
+                  >
+                    <option value="">Not set</option>
+                    <option value="development">Development</option>
+                    <option value="staging">Staging</option>
+                    <option value="production">Production</option>
+                  </select>
+                  <p className="hint">
+                    Marking a host <strong>production</strong> frames its terminal, labels the
+                    pane, and holds back commands like <code>rm -rf</code> or{" "}
+                    <code>systemctl stop</code> behind a confirmation naming this host. It
+                    catches the command meant for another window; it is not a guard against
+                    someone determined to run it.
                   </p>
                 </div>
 

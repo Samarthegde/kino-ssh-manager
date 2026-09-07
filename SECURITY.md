@@ -32,6 +32,12 @@ Use GitHub's private vulnerability reporting: go to the repository's **Security*
 - **A weak master password.** Argon2 slows brute force but cannot rescue a trivially guessable password. Use a strong, unique one - there is no recovery if you forget it.
 - **The remote hosts you connect to.** Once you connect, the remote server can see whatever you type/transfer.
 
+## The AI copilot
+
+The copilot is optional and off by default. When it is on, terminal output - which a compromised host controls - reaches a third-party model, and the model proposes commands. That surface has its own document: [docs/copilot-threat-model.md](docs/copilot-threat-model.md), covering the injection paths, the redaction pass that runs before anything is sent, and the residual risks none of it removes.
+
+In short: no model output ever runs without a confirmation showing the command verbatim, secrets are stripped from prompts in the backend rather than the UI, and the copilot has no vault access.
+
 ## Host key verification
 
 Connections verify the server's host key on a trust-on-first-use (TOFU) basis:

@@ -107,6 +107,7 @@ fn block_to_hosts(block: &Block, default_user: Option<&str>) -> Vec<Host> {
             jump: None,
             key_added_at: None,
             ntfy_topic: None,
+            environment: None,
         });
     }
     out

@@ -105,6 +105,11 @@ pub struct Host {
     /// Topic URL for ntfy.sh (or similar) to receive heartbeat failure notifications.
     #[serde(default)]
     pub ntfy_topic: Option<String>,
+    /// "production" | "staging" | "development". Deliberately separate from
+    /// `color`, which is decoration: overloading a colour to mean "this one can
+    /// take the site down" makes the meaning depend on the theme.
+    #[serde(default)]
+    pub environment: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -269,6 +274,7 @@ mod tests {
             jump: None,
             key_added_at: None,
             ntfy_topic: None,
+            environment: None,
         }]
     }
 

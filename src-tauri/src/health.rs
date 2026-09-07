@@ -118,6 +118,7 @@ mod tests {
             jump: None,
             key_added_at: None,
             ntfy_topic: None,
+            environment: None,
         }
     }
 
