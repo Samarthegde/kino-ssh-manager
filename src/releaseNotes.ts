@@ -15,6 +15,44 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.9.1",
+    headline: "An assistant can reach your hosts now - on a short leash, and only the ones you pick.",
+    items: [
+      {
+        title: "MCP server",
+        detail:
+          "Settings → Shortcuts & Tools → MCP Server exposes chosen hosts to an AI assistant " +
+          "over the Model Context Protocol. A newly ticked host is read-only: it can read " +
+          "files and listings, and runs a command only if a rule you wrote names it. The " +
+          "assistant never sees the rest of your vault, and never gets your master password.",
+      },
+      {
+        title: "Production guard",
+        detail:
+          "Mark a host production and its terminal gets a frame and a label. A dangerous " +
+          "command pressed there opens a confirmation naming the host in large type, and it " +
+          "won't dismiss for five seconds. Long pastes are held for a look, and broadcast " +
+          "input skips production hosts entirely.",
+      },
+      {
+        title: "The copilot treats host output as data",
+        detail:
+          "Terminal text and host notes are fenced and labelled so a machine's output can't " +
+          "pose as your instructions. Secrets are stripped before a request leaves the " +
+          "machine, Inspect shows the exact prompt, and a suggested command takes Insert or " +
+          "a confirmation rather than running on one click.",
+      },
+      {
+        title: "Transport audit and key sweep",
+        detail:
+          "Security → Transport asks each host what cryptography it would actually use - " +
+          "without logging in - and grades the fleet weakest-first. Security → On disk finds " +
+          "the private keys lying around in ~/.ssh, and can move one into the vault and take " +
+          "it off the filesystem.",
+      },
+    ],
+  },
+  {
     version: "0.9.0",
     headline: "Kino now lives in the tray, and knows what your servers have been up to.",
     items: [

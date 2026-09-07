@@ -560,7 +560,7 @@
   <section class="hero">
     <div class="wrap">
       <div class="hero-inner reel">
-        <span class="pill"><span class="tag">v0.9.0</span> New: runs in the tray, shell-history archaeology, encrypted notes</span>
+        <span class="pill"><span class="tag">v0.9.1</span> New: MCP server, production guard, transport &amp; on-disk key audits</span>
         <h1>Every SSH host<br><span class="soft">without the cloud</span><span class="stop">.</span></h1>
         <p class="lead">
           A cross-platform credential manager and terminal. Your hosts, keys, and passwords
@@ -632,20 +632,36 @@
       </div>
       <div class="features">
         <div class="feat">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.9 4.6 4.6 1.9-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z" stroke-linejoin="round"/><path d="M18 15l.8 2.2 2.2.8-2.2.8L18 21l-.8-2.2-2.2-.8 2.2-.8z" stroke-linejoin="round"/></svg></div>
+          <h3>MCP server <span class="new">New</span></h3><p>Expose chosen hosts to an AI assistant over the Model Context Protocol. A newly ticked host is <em>read-only</em> - it reads files and listings, and runs a command only if a rule you wrote names it. The assistant never sees the rest of your vault, and the headless binary never gets your master password.</p>
+        </div>
+        <div class="feat">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.4 8.3-8 10-4.6-1.7-8-5-8-10V6l8-4z" stroke-linejoin="round"/><path d="M12 8v5M12 16v.5" stroke-linecap="round"/></svg></div>
+          <h3>Production guard <span class="new">New</span></h3><p>Mark a host production and its terminal gets a frame and a label. A dangerous command pressed there opens a confirmation naming the host in large type, and it won't dismiss for five seconds. Long pastes are held for a look; broadcast input skips production entirely.</p>
+        </div>
+        <div class="feat">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l2-6 3 12 3-9 2 3h4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+          <h3>Transport audit <span class="new">New</span></h3><p>Asks each host what cryptography it would actually use - exchanging banners, reading its algorithm lists, never logging in - and grades the fleet weakest-first. OpenSSH 9.9+ warns when it can't negotiate a post-quantum key exchange; this finds which hosts are responsible. Exports as CSV or JSON.</p>
+        </div>
+        <div class="feat">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="8" r="4"/><path d="M11 11l8 8M16 16l2-2M19 19l2-2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+          <h3>On-disk key sweep <span class="new">New</span></h3><p>Finds the private keys lying around in <span class="mono">~/.ssh</span>, ranked by exposure - no passphrase is critical, world-readable is high. Move one into the vault and off the filesystem in two deliberate steps, and write it back out when the command line needs it. Never decrypts anything.</p>
+        </div>
+        <div class="feat">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8h4M7 12h10M7 16h7" stroke-linecap="round"/></svg></div>
-          <h3>Runs in the tray <span class="new">New</span></h3><p>Minimising sends Kino to the notification area instead of the taskbar, and closing the window leaves it running. When a host that was up goes down you get a desktop notification - add an <span class="mono">ntfy</span> topic and the alert reaches your phone.</p>
+          <h3>Runs in the tray</h3><p>Minimising sends Kino to the notification area instead of the taskbar, and closing the window leaves it running. When a host that was up goes down you get a desktop notification - add an <span class="mono">ntfy</span> topic and the alert reaches your phone.</p>
         </div>
         <div class="feat">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" stroke-linecap="round"/><path d="M3 3v5h5M12 7v5l4 2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-          <h3>Archaeology <span class="new">New</span></h3><p>Pulls the shell history of the account you connect as into an encrypted archive per host. It accumulates - the commands <span class="mono">HISTSIZE</span> has already trimmed off the server survive here. Never part of an exported profile.</p>
+          <h3>Archaeology</h3><p>Pulls the shell history of the account you connect as into an encrypted archive per host. It accumulates - the commands <span class="mono">HISTSIZE</span> has already trimmed off the server survive here. Never part of an exported profile.</p>
         </div>
         <div class="feat">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h9l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" stroke-linejoin="round"/><path d="M14 3v6h6M9 13h6M9 17h4" stroke-linecap="round"/></svg></div>
-          <h3>Encrypted notes <span class="new">New</span></h3><p>Recovery codes, licence keys and API tokens, kept beside the vault under the same master password and synced with it. Bodies stay blurred until you click to reveal.</p>
+          <h3>Encrypted notes</h3><p>Recovery codes, licence keys and API tokens, kept beside the vault under the same master password and synced with it. Bodies stay blurred until you click to reveal.</p>
         </div>
         <div class="feat">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h4M10 10h4M10 15h4M10 20h4" stroke-linecap="round"/><path d="M6 5v15h4M6 10h4M6 15h4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-          <h3>Process tree <span class="new">New</span></h3><p>Processes group under their parents and branches fold; filtering keeps a match's ancestors so a hit never floats without the chain that spawned it. Signal any of them with SIGTERM, SIGINT, SIGHUP, SIGSTOP, SIGCONT or SIGKILL.</p>
+          <h3>Process tree</h3><p>Processes group under their parents and branches fold; filtering keeps a match's ancestors so a hit never floats without the chain that spawned it. Signal any of them with SIGTERM, SIGINT, SIGHUP, SIGSTOP, SIGCONT or SIGKILL.</p>
         </div>
         <div class="feat">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
@@ -781,6 +797,7 @@
           <li><span class="ck"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="t"><b>Local-first by default.</b> The vault is an AES-256-GCM ciphertext on your disk. Plaintext never touches a server.</span></li>
           <li><span class="ck"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="t"><b>Argon2-derived key.</b> Your master password plus a random 16-byte salt derive the key. Nothing is stored in the clear.</span></li>
           <li><span class="ck"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="t"><b>Zero-knowledge sync.</b> Cloud sync uploads only the encrypted blob - GitHub never sees your secrets or master password.</span></li>
+          <li><span class="ck"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="t"><b>Least privilege for assistants.</b> A host exposed over MCP is read-only until you say otherwise, and enforcement lives in the headless binary itself - a refused call never opens a connection. Prompts to the AI provider are redacted in Rust at the command boundary, not in the UI that assembles them.</span></li>
           <li><span class="ck"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="t"><b>Secrets stay out of shared profiles.</b> Notes and harvested shell history live in their own encrypted blobs beside the vault, never on a host record - which is what an exported profile serialises. Sharing a host never ships a command line you typed a password into.</span></li>
           <li><span class="ck"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="t"><b>Rotation that can't strand you.</b> A new key is proved on its own connection before the old one is removed, and the rewrite of <span class="mono">authorized_keys</span> is refused if the new key isn't in the result. The audit itself contacts nothing.</span></li>
           <li><span class="ck"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="t"><b>Memory hygiene.</b> Secrets are zeroized on lock; idle auto-lock and master-password re-keying are built in.</span></li>

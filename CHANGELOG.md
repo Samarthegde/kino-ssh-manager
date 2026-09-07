@@ -4,7 +4,7 @@ All notable changes to Kino SSH Manager are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.9.1] - 2026-09-07
 
 ### Added
 - **An MCP server, so an AI assistant can work on hosts you choose.** A headless
@@ -48,6 +48,96 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
   `kino-mcp` is attached to each release as a separate download
   (`kino-mcp-linux-x86_64`, `kino-mcp-windows-x86_64.exe`) rather than bundled
   into the installers - it's a server you run, not an app you launch.
+
+- **A transport audit, under Security - Transport.** OpenSSH 9.9 and 10 default
+  to a post-quantum key exchange and warn when they cannot negotiate one, and
+  OpenSSH 10 dropped DSA outright. Kino was already negotiating the hybrid
+  exchange wherever a server supported it, and never said so.
+
+  It now asks each host directly: exchange version banners, read the algorithms
+  it offers, hang up. No credentials are read and no session is opened, so the
+  scan works with the vault locked and leaves a connection in the host's log
+  rather than a login. Hosts behind a relay or a jump host are not probed and
+  say so, instead of being guessed at.
+
+  Every host is graded weakest-first - weak, classical, post-quantum - with the
+  algorithms a connection would actually use, and each finding names the fix on
+  that host, quoting the version it is running rather than talking about
+  versions in general. Export the table as CSV or JSON, which is the thing you
+  hand to somebody who asked.
+
+  It judges what a host *offers*, not only what would be chosen. A server whose
+  only key exchange is SHA-1, or whose only host key is DSA, cannot be reached
+  by Kino at all - so looking at the negotiated algorithm alone would have said
+  nothing about exactly the host worth finding. And where a host offers a
+  post-quantum exchange Kino does not implement, it says so and whose gap it is,
+  rather than reporting the host as having none.
+- **Production guard.** A host can be marked **production**, staging or
+  development. Production frames the terminal viewport itself - not the tab,
+  which is small and not where you are looking while typing - and labels the
+  pane with the word, so the signal survives colour-vision deficiency and the
+  reduced-effects mode stripping the frame.
+
+  On a production host, pressing Enter on a command that matches the danger list
+  (`rm -rf`, `DROP`, `TRUNCATE`, `shutdown`, `systemctl stop`, and friends) opens
+  a confirmation. It puts the hostname in 24px, because the hostname is the thing
+  being got wrong; it says what the matched command *does* rather than only that
+  it is dangerous; and it disables its own button for five seconds so a reflex
+  click landing where Cancel used to be cannot dismiss it.
+
+  The command is read off the screen rather than accumulated from keystrokes,
+  which matters more than it sounds: the two ways a dangerous command usually
+  arrives are recalled from history with Up, or completed with Tab, and neither
+  passes through `onData` as text. Both are sitting on the row the cursor is on.
+  The check runs once per Enter and only on a production host, so an ordinary
+  session pays nothing. If it fails for any reason the keystroke is sent anyway -
+  the guard is a courtesy, and breaking Enter would be worse than missing one.
+
+  Three other ways into a production shell are covered too. The copilot's **Run**
+  checks the command text it already holds, rather than relying on the terminal
+  guard - a pasted command only reaches the screen once the shell echoes it back,
+  and the Enter does not wait for that. A **paste over 500 characters** is held
+  for a look, showing the line count and the first and last line, because shells
+  run a pasted block as it arrives. And **broadcast never reaches a production
+  host**: typing into several machines at once is the exact situation where you
+  have lost track of which ones they are, so those are left out and a toast says
+  how many.
+
+  It matches the command as written. It does not parse shell, and it is not
+  meant to stop somebody determined - the operator is the one holding the shell.
+  It exists to interrupt a reflex, and against that it works well.
+- **A key sweep, under Security - On disk.** Credential-harvesting malware walks
+  `~/.ssh` specifically, and an unencrypted `id_rsa` sitting there is a live
+  liability. Kino now finds them: it scans `~/.ssh` and one level below - not the
+  whole home directory, because a sweep that reads everything is one nobody runs
+  twice - and describes each key by format, algorithm, whether it has a
+  passphrase, its permissions, and what refers to it.
+
+  Findings are ranked so the list reads from the top: no passphrase is critical,
+  readable beyond its owner is high, never seen by the vault is medium, referred
+  to by nothing is low. It also reports the same key saved under several names,
+  because rotating a key means replacing every copy and the one you forget still
+  opens the door.
+
+  Detection runs with the vault locked - finding an unencrypted key is useful
+  before you have typed anything - and never asks for a passphrase or decrypts
+  anything, since whether a key is protected is readable from its header. Nothing
+  is copied, logged or transmitted.
+
+  From there a key can be **imported into the vault and the original removed**,
+  as two deliberate steps rather than one. Removal is refused unless Kino could
+  read the key, the key is in the vault *as written to disk*, and nothing in
+  `~/.ssh/config` names it. The proof is reading the key back out of the saved
+  vault file rather than trusting what is in memory: same order as key rotation -
+  prove the copy exists, then destroy the original, never the other way round.
+  The confirmation names the absolute path and states plainly that overwriting is
+  not erasure on a copy-on-write, journalling, flash or snapshotted volume.
+
+  And it is not a one-way door: a key in the vault can be **written back out to
+  disk** when `ssh` on the command line turns out to need it. The mode is set in
+  the open call rather than afterwards, so the key never sits readable by
+  everyone for even a moment, and an existing file is refused rather than
+  overwritten.
 
 ### Changed
 - **A copilot suggestion no longer runs on a single click.** The **Run** button
@@ -119,29 +209,10 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
   with the fact that a persuasive injected instruction can still produce a
   plausible command you approve.
 
-- **A transport audit, under Security - Transport.** OpenSSH 9.9 and 10 default
-  to a post-quantum key exchange and warn when they cannot negotiate one, and
-  OpenSSH 10 dropped DSA outright. Kino was already negotiating the hybrid
-  exchange wherever a server supported it, and never said so.
-
-  It now asks each host directly: exchange version banners, read the algorithms
-  it offers, hang up. No credentials are read and no session is opened, so the
-  scan works with the vault locked and leaves a connection in the host's log
-  rather than a login. Hosts behind a relay or a jump host are not probed and
-  say so, instead of being guessed at.
-
-  Every host is graded weakest-first - weak, classical, post-quantum - with the
-  algorithms a connection would actually use, and each finding names the fix on
-  that host, quoting the version it is running rather than talking about
-  versions in general. Export the table as CSV or JSON, which is the thing you
-  hand to somebody who asked.
-
-  It judges what a host *offers*, not only what would be chosen. A server whose
-  only key exchange is SHA-1, or whose only host key is DSA, cannot be reached
-  by Kino at all - so looking at the negotiated algorithm alone would have said
-  nothing about exactly the host worth finding. And where a host offers a
-  post-quantum exchange Kino does not implement, it says so and whose gap it is,
-  rather than reporting the host as having none.
+### Fixed
+- **Locking the vault now closes open SSH sessions.** Locking cleared the derived
+  key but left every session running, so a locked app still held live shells on
+  every connected host - the one state locking exists to prevent.
 
 ## [0.9.0] - 2026-09-01
 
