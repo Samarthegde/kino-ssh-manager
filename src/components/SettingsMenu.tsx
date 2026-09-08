@@ -11,7 +11,7 @@ import { AboutModal } from "./AboutModal";
 import { RecordingsModal } from "./RecordingsModal";
 import { AiSettingsModal } from "./AiSettingsModal";
 import { KeybindingsModal } from "./KeybindingsModal";
-import { SecurityPanel } from "./SecurityPanel";
+import { SecurityPanel, SecurityView } from "./SecurityPanel";
 import { NotesModal } from "./NotesModal";
 import { McpSettingsModal } from "./McpSettingsModal";
 import { Select } from "./Select";
@@ -20,7 +20,7 @@ interface Props {
   onLock: () => void;
 }
 
-type Section = "general" | "connectivity" | "copilot" | "vault" | "tools";
+type Section = "general" | "connectivity" | "copilot" | "vault" | "security" | "tools";
 
 /* ── Small layout primitives for the page ─────────────────────────────────── */
 
@@ -104,6 +104,12 @@ const ICONS: Record<Section, ReactNode> = {
       <path d="M7 11V7a5 5 0 0 1 10 0v4" />
     </svg>
   ),
+  security: (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+      <path d="M9 12l2 2 4-4" />
+    </svg>
+  ),
   tools: (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
       <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
@@ -116,6 +122,7 @@ const SECTIONS: { id: Section; label: string }[] = [
   { id: "connectivity", label: "Agent & Cloud" },
   { id: "copilot", label: "AI Copilot" },
   { id: "vault", label: "Vault & Sync" },
+  { id: "security", label: "Security" },
   { id: "tools", label: "Shortcuts & Tools" },
 ];
 
@@ -176,7 +183,7 @@ export function SettingsMenu({ onLock }: Props) {
   const [showAbout, setShowAbout] = useState(false);
   const [showAi, setShowAi] = useState(false);
   const [showKeys, setShowKeys] = useState(false);
-  const [showAudit, setShowAudit] = useState(false);
+  const [showAudit, setShowAudit] = useState<SecurityView | null>(null);
   const [showNotes, setShowNotes] = useState(false);
 
   const [cloudUrl, setCloudUrl] = useState("");
@@ -621,12 +628,6 @@ export function SettingsMenu({ onLock }: Props) {
                       onClick={() => setShowNotes(true)}
                     />
                     <ActionItem
-                      label="Security"
-                      desc="Four checks across your fleet: stored keys, private keys sitting on this machine, what cryptography each host would negotiate, and which have updates waiting. The first two are local; the last two ask the hosts."
-                      buttonLabel="Open…"
-                      onClick={() => setShowAudit(true)}
-                    />
-                    <ActionItem
                       label="Connection history"
                       desc="When each host was used, stored encrypted."
                       buttonLabel="View…"
@@ -646,6 +647,40 @@ export function SettingsMenu({ onLock }: Props) {
                       desc="Repo, token, and auto-sync behavior."
                       buttonLabel="Open…"
                       onClick={() => setShowSync(true)}
+                    />
+                  </Group>
+                </>
+              )}
+
+              {section === "security" && (
+                <>
+                  <Group
+                    title="Across your hosts"
+                    desc="Four checks, in one place. The first two read this machine; the last two ask the hosts themselves and open no session you did not ask for."
+                  >
+                    <ActionItem
+                      label="Vault keys"
+                      desc="Every stored key checked for weak algorithms, reuse across hosts and age - and rotated when you say so, new key proven before the old one goes."
+                      buttonLabel="Open…"
+                      onClick={() => setShowAudit("keys")}
+                    />
+                    <ActionItem
+                      label="Keys on disk"
+                      desc="Private keys sitting in ~/.ssh: which have no passphrase, which are readable by others, which the vault has never seen. Import one and take it off the disk."
+                      buttonLabel="Open…"
+                      onClick={() => setShowAudit("disk")}
+                    />
+                    <ActionItem
+                      label="Transport"
+                      desc="What key exchange and host key each host would actually negotiate, graded weakest first. Asks each host directly; no credentials are used and no session is opened."
+                      buttonLabel="Open…"
+                      onClick={() => setShowAudit("transport")}
+                    />
+                    <ActionItem
+                      label="Updates"
+                      desc="Which hosts have packages waiting and which of those are security updates. Read from each host's own package manager, never a third-party vulnerability feed."
+                      buttonLabel="Open…"
+                      onClick={() => setShowAudit("updates")}
                     />
                   </Group>
                 </>
@@ -692,7 +727,7 @@ export function SettingsMenu({ onLock }: Props) {
       {showAi && <AiSettingsModal onClose={() => setShowAi(false)} />}
       {showKeys && <KeybindingsModal onClose={() => setShowKeys(false)} />}
       {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
-      {showAudit && <SecurityPanel onClose={() => setShowAudit(false)} />}
+      {showAudit && <SecurityPanel initialView={showAudit} onClose={() => setShowAudit(null)} />}
       {showNotes && <NotesModal onClose={() => setShowNotes(false)} />}
       {showMcp && <McpSettingsModal onClose={() => setShowMcp(false)} />}
         </>,

@@ -14,8 +14,13 @@ import {
   useVaultStore,
 } from "../store";
 
+/** Which check the panel opens on. The settings menu lists all four, so each
+ *  entry has to land on the one it names. */
+export type SecurityView = "keys" | "disk" | "transport" | "updates";
+
 interface Props {
   onClose: () => void;
+  initialView?: SecurityView;
 }
 
 const SEVERITY_ORDER = { high: 0, medium: 1, low: 2 } as const;
@@ -76,7 +81,7 @@ function shortFingerprint(fp: string): string {
  * no "fix everything" button, because a rotation that goes wrong on ten hosts at
  * once is a very bad afternoon.
  */
-export function SecurityPanel({ onClose }: Props) {
+export function SecurityPanel({ onClose, initialView = "keys" }: Props) {
   const {
     auditKeys,
     rotateKey,
@@ -90,7 +95,7 @@ export function SecurityPanel({ onClose }: Props) {
     connectToHost,
     hosts,
   } = useVaultStore();
-  const [view, setView] = useState<"keys" | "disk" | "transport" | "updates">("keys");
+  const [view, setView] = useState<SecurityView>(initialView);
   const [report, setReport] = useState<AuditReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
