@@ -621,8 +621,8 @@ export function SettingsMenu({ onLock }: Props) {
                       onClick={() => setShowNotes(true)}
                     />
                     <ActionItem
-                      label="Key audit"
-                      desc="Checks every stored key for weak algorithms, reuse and age, and rotates one when you say so. Runs on this machine; no host is contacted."
+                      label="Security"
+                      desc="Four checks across your fleet: stored keys, private keys sitting on this machine, what cryptography each host would negotiate, and which have updates waiting. The first two are local; the last two ask the hosts."
                       buttonLabel="Open…"
                       onClick={() => setShowAudit(true)}
                     />
