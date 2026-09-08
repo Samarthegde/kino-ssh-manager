@@ -95,6 +95,22 @@ impl Manager {
         }
     }
 
+    /// What a person would type to actually apply the updates.
+    ///
+    /// Needs sudo, which is exactly why Kino inserts this on a command line
+    /// rather than running it: a password prompt, a conffile question or a
+    /// service restart all want somebody watching.
+    pub fn upgrade_command(&self) -> &'static str {
+        match self {
+            Manager::Apt => "sudo apt-get upgrade",
+            Manager::Dnf => "sudo dnf upgrade",
+            Manager::Yum => "sudo yum update",
+            Manager::Zypper => "sudo zypper update",
+            Manager::Apk => "sudo apk upgrade",
+            Manager::Pacman => "sudo pacman -Syu",
+        }
+    }
+
     /// What to run to list only security updates, where that is possible.
     pub fn security_command(&self) -> Option<&'static str> {
         match self {
@@ -290,6 +306,8 @@ pub struct HostPatches {
     /// "none" and "could not tell" lead to opposite decisions.
     pub security: Option<usize>,
     pub reboot_required: bool,
+    /// What to type to apply them, for the terminal Kino opens.
+    pub upgrade_command: Option<String>,
     pub packages: Vec<Pending>,
     pub error: Option<String>,
     pub checked_at: i64,
@@ -371,6 +389,7 @@ async fn check_one(host: &Host) -> HostPatches {
         total: 0,
         security: None,
         reboot_required: false,
+        upgrade_command: None,
         packages: vec![],
         error: None,
         checked_at: now,
@@ -390,6 +409,7 @@ async fn check_one(host: &Host) -> HostPatches {
             if manager.is_none() {
                 out.error = Some("No supported package manager found on this host.".into());
             }
+            out.upgrade_command = manager.map(|m| m.upgrade_command().to_string());
             out.manager = manager;
             out.total = packages.len();
             out.packages = packages;
@@ -464,6 +484,28 @@ mod tests {
         // Every manager gets a branch, so a host is asked once.
         for probe in ["apt-get", "dnf", "yum", "zypper", "apk", "pacman"] {
             assert!(script.contains(probe), "no branch for {probe}");
+        }
+    }
+
+    #[test]
+    fn applying_updates_is_never_something_kino_runs_itself() {
+        // Every one of these needs sudo and may ask a question. They are for
+        // inserting on a command line in front of a person, not for running.
+        for m in [
+            Manager::Apt,
+            Manager::Dnf,
+            Manager::Yum,
+            Manager::Zypper,
+            Manager::Apk,
+            Manager::Pacman,
+        ] {
+            let cmd = m.upgrade_command();
+            assert!(cmd.starts_with("sudo "), "{cmd}");
+            assert!(
+                !cmd.contains(" -y"),
+                "{cmd} must not answer its own prompts"
+            );
+            assert!(!cmd.contains("--noconfirm"), "{cmd}");
         }
     }
 
