@@ -166,6 +166,8 @@ export function McpSettingsModal({ onClose }: Props) {
             to it.
           </p>
 
+          {config?.problem && <div className="mcp-warn">{config.problem}</div>}
+
           {fullHosts.length > 0 ? (
             <div className="mcp-warn">
               {fullHosts.length === 1 ? "One host is" : `${fullHosts.length} hosts are`} exposed
@@ -240,7 +242,11 @@ export function McpSettingsModal({ onClose }: Props) {
                         <div className="mcp-host-policy">
                           <select
                             className="mcp-mode"
-                            value={d.mode}
+                            // While Full waits for its confirmation, show Full.
+                            // Showing the stored mode here made the dropdown snap
+                            // back the instant Full was picked - it looked as
+                            // though the choice had been refused.
+                            value={pendingFull === h.id ? "full" : d.mode}
                             onChange={(e) => chooseMode(h.id, e.target.value as McpMode)}
                           >
                             {(Object.keys(MODE_LABELS) as McpMode[]).map((m) => (
@@ -355,11 +361,16 @@ export function McpSettingsModal({ onClose }: Props) {
           <button
             className="btn btn-primary btn-sm"
             onClick={() => void save()}
-            disabled={saving || (!configured && !password)}
+            disabled={saving || (!configured && !password) || pendingFull !== null}
           >
             {saving ? "Saving…" : saved ? "Saved" : "Save"}
           </button>
           <button className="btn btn-sm" onClick={onClose}>Close</button>
+          {pendingFull !== null && (
+            <p className="mcp-hint" style={{ margin: 0 }}>
+              Confirm or cancel full access above before saving.
+            </p>
+          )}
           {!configured && !password && (
             <span className="mcp-hint">Set a password to enable the server.</span>
           )}

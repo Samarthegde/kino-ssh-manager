@@ -133,6 +133,14 @@ fn change_master_password(
     current_password: String,
     new_password: String,
 ) -> Result<(), String> {
+    change_master_password_in(&state, current_password, new_password)
+}
+
+fn change_master_password_in(
+    state: &AppState,
+    current_password: String,
+    new_password: String,
+) -> Result<(), String> {
     use zeroize::Zeroize;
     if new_password.is_empty() {
         return Err("New password cannot be empty".to_string());
@@ -162,6 +170,20 @@ fn change_master_password(
     OsRng.fill_bytes(&mut new_salt);
     let new_key = vault::derive_key(&new_password, &new_salt)?;
 
+    // Read these under the old key before anything is rewritten. Both were
+    // missing from this list, so a password change left them encrypted under a
+    // key that no longer existed: the MCP policies were then wiped on the next
+    // MCP save, and the copilot's API key simply vanished.
+    //
+    // One that is already unreadable - from a password change made before this
+    // fix - is left alone rather than blocking this one. Re-keying cannot make
+    // it worse, and refusing would lock someone out of ever changing password.
+    let mcp_settings = mcp_config::config_path()
+        .exists()
+        .then(|| mcp_config::load_config(&old_key).ok())
+        .flatten();
+    let ai_settings = ai::load_config(&old_key);
+
     vault::save_vault(&state.hosts.lock().unwrap(), &new_key, &new_salt)?;
     history::save_history(&state.history.lock().unwrap(), &new_key, &new_salt)?;
     snippets::save_snippets(&state.snippets.lock().unwrap(), &new_key, &new_salt)?;
@@ -169,6 +191,12 @@ fn change_master_password(
     shell_history::save(&state.shell_history.lock().unwrap(), &new_key, &new_salt)?;
     if let Some(cfg) = sync::load_config(&old_key) {
         sync::save_config(&cfg, &new_key, &new_salt)?;
+    }
+    if let Some(cfg) = mcp_settings {
+        mcp_config::save_config(&cfg, &new_key, &new_salt)?;
+    }
+    if let Some(cfg) = ai_settings {
+        ai::save_config(&cfg, &new_key, &new_salt)?;
     }
 
     // Swap into state, wiping the old key.
@@ -1637,8 +1665,12 @@ fn list_active_forwards(state: State<'_, AppState>) -> Vec<String> {
 fn mcp_get_config(state: State<'_, AppState>) -> Result<mcp_config::McpConfigView, String> {
     let key_guard = state.vault_key.lock().unwrap();
     let key = key_guard.as_ref().ok_or("Vault is locked")?;
-    let config = mcp_config::load_config(key)?;
+    let (config, problem) = match mcp_config::load_config(key) {
+        Ok(c) => (c, None),
+        Err(e) => (mcp_config::McpConfig::default(), Some(e)),
+    };
     Ok(mcp_config::McpConfigView {
+        problem,
         host_policies: config
             .host_policies
             .iter()
@@ -1670,7 +1702,7 @@ fn mcp_set_password(state: State<'_, AppState>, password: String) -> Result<(), 
         let key = key_guard.as_ref().ok_or("Vault is locked")?;
         let salt_guard = state.vault_salt.lock().unwrap();
         let salt = salt_guard.as_ref().ok_or("Vault is locked")?;
-        let mut config = mcp_config::load_config(key)?;
+        let mut config = mcp_config::load_for_edit(key);
 
         // A fresh salt for the MCP vault's own key derivation. Changing the
         // password re-derives and rewrites `mcp_vault.enc`, so anything holding
@@ -1710,7 +1742,7 @@ fn mcp_set_host_policy(
         let key = key_guard.as_ref().ok_or("Vault is locked")?;
         let salt = state.vault_salt.lock().unwrap();
         let salt = salt.as_ref().ok_or("Vault is locked")?;
-        let mut config = mcp_config::load_config(key)?;
+        let mut config = mcp_config::load_for_edit(key);
         config
             .host_policies
             .insert(host_id, mcp_policy::HostPolicy { mode, rules });
@@ -1728,7 +1760,7 @@ fn mcp_set_global_rules(state: State<'_, AppState>, rules_text: String) -> Resul
         let key = key_guard.as_ref().ok_or("Vault is locked")?;
         let salt = state.vault_salt.lock().unwrap();
         let salt = salt.as_ref().ok_or("Vault is locked")?;
-        let mut config = mcp_config::load_config(key)?;
+        let mut config = mcp_config::load_for_edit(key);
         config.global_rules = rules;
         mcp_config::save_config(&config, key, salt)?;
     }
@@ -1742,7 +1774,7 @@ fn mcp_set_exposed_hosts(state: State<'_, AppState>, host_ids: Vec<String>) -> R
         let key = key_guard.as_ref().ok_or("Vault is locked")?;
         let salt_guard = state.vault_salt.lock().unwrap();
         let salt = salt_guard.as_ref().ok_or("Vault is locked")?;
-        let mut config = mcp_config::load_config(key)?;
+        let mut config = mcp_config::load_for_edit(key);
         config.exposed_host_ids = host_ids;
         mcp_config::save_config(&config, key, salt)?;
     }
@@ -2228,6 +2260,78 @@ mod lock_tests {
         let id = saved.id.clone();
         finishes(move || delete_host_in(&s, &id)).unwrap();
         assert!(state.hosts.lock().unwrap().is_empty());
+    }
+
+    /// A master password change left the MCP settings and the copilot's key
+    /// encrypted under a key that no longer existed. The policies were then
+    /// wiped on the next MCP save; the API key just vanished. Both have to
+    /// survive a change of password.
+    #[test]
+    fn changing_the_master_password_keeps_mcp_settings_and_the_ai_key() {
+        let _serial = DATA_DIR.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let state = unlocked_state(dir.path());
+        let old_key = state.vault_key.lock().unwrap().unwrap();
+        let salt = state.vault_salt.lock().unwrap().unwrap();
+
+        let mut mcp = mcp_config::McpConfig {
+            exposed_host_ids: vec!["h1".into()],
+            configured: true,
+            ..Default::default()
+        };
+        mcp.host_policies.insert(
+            "h1".into(),
+            mcp_policy::HostPolicy {
+                mode: mcp_policy::McpMode::Guarded,
+                rules: vec![],
+            },
+        );
+        mcp_config::save_config(&mcp, &old_key, &salt).unwrap();
+
+        let mut api_keys = HashMap::new();
+        api_keys.insert("openrouter".to_string(), "sk-or-kept".to_string());
+        ai::save_config(
+            &ai::AiConfig {
+                provider: "openrouter".into(),
+                api_keys,
+                models: HashMap::new(),
+                effort: "medium".into(),
+            },
+            &old_key,
+            &salt,
+        )
+        .unwrap();
+
+        change_master_password_in(&state, "test".into(), "a-new-password".into()).unwrap();
+
+        let new_key = state.vault_key.lock().unwrap().unwrap();
+        assert_ne!(new_key, old_key, "the key really did change");
+
+        let back = mcp_config::load_config(&new_key)
+            .expect("MCP settings unreadable after a password change");
+        assert_eq!(
+            back.host_policies["h1"].mode,
+            mcp_policy::McpMode::Guarded,
+            "the policy did not survive"
+        );
+        let ai_back = ai::load_config(&new_key).expect("the AI key was lost");
+        assert_eq!(ai_back.api_keys["openrouter"], "sk-or-kept");
+    }
+
+    #[test]
+    fn unreadable_mcp_settings_are_an_error_not_an_empty_config() {
+        // The old behaviour turned "cannot decrypt" into "nothing set up",
+        // which the next save then wrote over everything.
+        let _serial = DATA_DIR.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let state = unlocked_state(dir.path());
+        let key = state.vault_key.lock().unwrap().unwrap();
+        let salt = state.vault_salt.lock().unwrap().unwrap();
+        mcp_config::save_config(&mcp_config::McpConfig::default(), &key, &salt).unwrap();
+
+        let wrong = vault::derive_key("someone-else", &salt).unwrap();
+        let err = mcp_config::load_config(&wrong).unwrap_err();
+        assert!(err.contains("could not be read"), "{err}");
     }
 
     #[test]

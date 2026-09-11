@@ -377,6 +377,8 @@ export interface McpConfig {
   host_policies: Record<string, McpHostPolicy>;
   /** The global rule block, in the text form the editor uses. */
   global_rules_text: string;
+  /** Set when saved settings exist but could not be read. */
+  problem?: string | null;
   /** True once an MCP password has been set. */
   configured: boolean;
   /** Absolute path of the exposed vault, shown so it can be backed up or removed. */
