@@ -15,6 +15,33 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.9.2",
+    headline: "Saving a host works again - and every fleet check now lives under Security.",
+    items: [
+      {
+        title: "Fixed: saving a host hung the app",
+        detail:
+          "In 0.9.1, saving, editing or deleting a host - or a snippet - froze the window " +
+          "for good. Fixed. So is an MCP access mode that slipped back to read-only, and a " +
+          "master password change that lost your MCP settings and your copilot key.",
+      },
+      {
+        title: "Updates",
+        detail:
+          "Settings → Security → Updates asks each host what it has waiting and which of " +
+          "those are security updates, straight from its own package manager. Apply opens a " +
+          "terminal with the upgrade ready, rather than running it for you.",
+      },
+      {
+        title: "Updates you can check",
+        detail:
+          "The updater now shows the key a package was signed with before it installs, and " +
+          "kino-mcp is signed like everything else. The MCP panel checks the binary on your " +
+          "PATH against the release's own checksums.",
+      },
+    ],
+  },
+  {
     version: "0.9.1",
     headline: "An assistant can reach your hosts now - on a short leash, and only the ones you pick.",
     items: [

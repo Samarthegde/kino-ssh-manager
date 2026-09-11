@@ -4,6 +4,66 @@ All notable changes to Kino SSH Manager are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.2] - 2026-09-11
+
+This release exists mostly to fix 0.9.1, which could not save a host. If you
+are on 0.9.1, upgrade.
+
+### Fixed
+- **Saving, editing or deleting a host no longer hangs the app.** In 0.9.1 all
+  three froze the window and never came back, and so did saving or deleting a
+  snippet. Each held three internal locks while updating the MCP server's copy
+  of your hosts, and that update tried to take one of them again - so the app
+  waited on itself forever. The locks are now released first.
+- **An MCP access mode no longer reverts to read-only.** Choosing *Full access*
+  made the dropdown snap straight back to the previous mode, because Full waits
+  for a confirmation, and saving with that confirmation still open wrote the
+  old mode. The dropdown now shows the choice being confirmed, and Save waits
+  for you to confirm or cancel.
+- **Changing your master password no longer loses your MCP settings or your
+  copilot key.** Both files were left encrypted under the old password. The MCP
+  settings then read as empty and the next save wrote that emptiness over them;
+  the copilot's API key simply disappeared. Both are re-encrypted now. If yours
+  were lost to this in 0.9.1, the MCP panel says so rather than looking as
+  though nothing was ever set up.
+- **Opening the MCP panel, or starting Kino offline, no longer freezes the
+  window.** Two checks that reach GitHub ran on the thread that draws the
+  window, with no limit on how long they could wait - thirty seconds offline,
+  and indefinitely behind a captive portal. They now run in the background and
+  give up after ten seconds.
+
+### Added
+- **Updates, under Security.** Asks each host what packages it has waiting and
+  which of those are security updates, and sorts the fleet by what matters. The
+  answer comes from each host's own package manager - apt, dnf, yum, zypper,
+  apk or pacman - and never from a third-party vulnerability database, so it
+  works with no internet beyond SSH itself. Where a package manager can't tell
+  security updates apart, it says so instead of showing a zero. A host that
+  couldn't be reached stays in the list with its reason. *Apply* opens a
+  terminal on the host with the upgrade command ready, and doesn't run it: an
+  upgrade needs sudo and may stop to ask something only you can answer.
+- **Security is its own section in Settings**, listing all four checks - vault
+  keys, keys on disk, transport, and updates - each opening the tab it names.
+  It used to be filed under Vault as "Key audit", with a description promising
+  no host would be contacted, which stopped being true two tabs ago.
+- **The updater says what it checked before it installs.** Downloading and
+  installing are now separate steps, with the answer in between: the key the
+  package was signed with, the version, and the size. The key is published as
+  `minisign.pub` in the repository, so you can compare it without trusting the
+  window showing it. A package that fails verification is refused, never
+  offered anyway.
+- **The MCP panel checks its own binary.** `kino-mcp` is a download you put on
+  your PATH by hand, so nothing had confirmed it was the file this version
+  shipped. The panel now compares it against the release's signed checksums,
+  and says plainly which half is missing when it can't.
+
+### Security
+- **`kino-mcp` is signed.** In 0.9.1 the installers were signed but the MCP
+  binary - the one that can reach every host you expose to it - was not.
+  Every release asset now carries a minisign signature under the same key as
+  the installers, a GitHub build provenance attestation, and a line in a signed
+  `SHA256SUMS`. The README shows how to check all three before running it.
+
 ## [0.9.1] - 2026-09-07
 
 ### Added
