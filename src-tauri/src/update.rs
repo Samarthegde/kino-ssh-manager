@@ -11,6 +11,20 @@
 //! restrictions.
 
 use serde::Serialize;
+use std::time::Duration;
+
+/// HTTP for this module, with the limits ureq does not set.
+///
+/// Its defaults are a 30-second connect timeout and no read timeout at all -
+/// so a connection that opens and then stalls, as a captive portal or a
+/// half-broken proxy will, waits forever. Neither call here is worth more than
+/// a few seconds.
+fn agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(5))
+        .timeout(Duration::from_secs(10))
+        .build()
+}
 
 const REPO: &str = "Samarthegde/kino-ssh-manager";
 
@@ -138,8 +152,19 @@ fn sha256_of(path: &std::path::Path) -> Option<String> {
 /// Both halves can legitimately be missing - the binary may not be installed,
 /// and a release older than SHA256SUMS has nothing to compare against - so
 /// `matches` stays `None` unless both are known.
+///
+/// Async so it runs off the main thread. Tauri runs a non-`async` command *on*
+/// the main thread, and this makes a network request - so as a plain `fn` it
+/// froze the entire window while the MCP panel waited on GitHub, for thirty
+/// seconds offline and indefinitely on a stalled connection.
 #[tauri::command]
-pub fn check_mcp_binary() -> McpBinaryCheck {
+pub async fn check_mcp_binary() -> McpBinaryCheck {
+    tokio::task::spawn_blocking(check_mcp_binary_now)
+        .await
+        .unwrap_or_default()
+}
+
+fn check_mcp_binary_now() -> McpBinaryCheck {
     let asset = mcp_asset_name().to_string();
     let version = env!("CARGO_PKG_VERSION");
     let mut out = McpBinaryCheck {
@@ -155,7 +180,8 @@ pub fn check_mcp_binary() -> McpBinaryCheck {
     }
 
     let url = format!("https://github.com/{REPO}/releases/download/v{version}/SHA256SUMS");
-    let fetched = ureq::get(&url)
+    let fetched = agent()
+        .get(&url)
         .set("User-Agent", "kino-ssh-manager")
         .call()
         .ok()
@@ -186,12 +212,22 @@ pub fn check_mcp_binary() -> McpBinaryCheck {
     out
 }
 
+/// Async for the same reason as `check_mcp_binary`: this runs at startup, and
+/// as a plain `fn` a slow or absent network held the window frozen while the
+/// app was still opening.
 #[tauri::command]
-pub fn check_for_update() -> Result<UpdateInfo, String> {
+pub async fn check_for_update() -> Result<UpdateInfo, String> {
+    tokio::task::spawn_blocking(check_for_update_now)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn check_for_update_now() -> Result<UpdateInfo, String> {
     let current = env!("CARGO_PKG_VERSION").to_string();
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
 
-    let json: serde_json::Value = ureq::get(&url)
+    let json: serde_json::Value = agent()
+        .get(&url)
         .set("User-Agent", "kino-ssh-manager")
         .set("Accept", "application/vnd.github+json")
         .call()
@@ -225,6 +261,40 @@ pub fn check_for_update() -> Result<UpdateInfo, String> {
 #[cfg(test)]
 mod tests {
     use super::is_newer;
+
+    /// The case that used to hang forever: a server that accepts the
+    /// connection and then never says anything, which is what a captive portal
+    /// or a wedged proxy looks like. ureq's defaults have no read timeout, so
+    /// this waited indefinitely - on the main thread, freezing the window.
+    ///
+    /// Ignored by default only because it takes the full ten seconds.
+    ///
+    ///     cargo test --lib update -- --ignored
+    #[test]
+    #[ignore = "waits out the full request timeout"]
+    fn a_server_that_never_answers_does_not_hang_the_request() {
+        use std::time::{Duration, Instant};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        // Accept, hold the socket open, say nothing.
+        std::thread::spawn(move || {
+            let _held: Vec<_> = listener.incoming().take(1).collect();
+            std::thread::sleep(Duration::from_secs(60));
+        });
+
+        let started = Instant::now();
+        let result = super::agent()
+            .get(&format!("http://{addr}/SHA256SUMS"))
+            .call();
+        let took = started.elapsed();
+
+        assert!(result.is_err(), "a silent server cannot have answered");
+        assert!(
+            took < Duration::from_secs(15),
+            "waited {took:?} - the request is not bounded"
+        );
+        println!("gave up after {took:?}");
+    }
 
     #[test]
     fn compares_versions() {
