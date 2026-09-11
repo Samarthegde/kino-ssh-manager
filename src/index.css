@@ -3436,6 +3436,25 @@ textarea.mono {
 
 .copilot-payload span { margin-right: auto; }
 
+/* Package lists get long, so the rows are tight and the security ones carry
+   the only colour in the table. */
+.patch-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.patch-table td {
+  padding: 3px 8px 3px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--rule) 40%, transparent);
+  color: var(--subtle);
+  vertical-align: top;
+}
+
+.patch-table td:first-child { color: var(--text); }
+.patch-table tr:last-child td { border-bottom: 0; }
+.patch-table tr.security td:first-child { color: var(--red); }
+
 /* ── Production guard ────────────────────────────────────────────────────────
  * The frame goes on the terminal viewport, not the tab. A tab is small, it is
  * one of several, and it is not where you are looking when you type.

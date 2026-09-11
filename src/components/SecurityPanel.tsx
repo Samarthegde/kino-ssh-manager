@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
+import { pasteToSession } from "../terminalRegistry";
 import {
   AuditReport,
   HostAudit,
+  HostPatches,
   HostProbe,
   KeyOnDisk,
   RotateOutcome,
@@ -12,8 +14,13 @@ import {
   useVaultStore,
 } from "../store";
 
+/** Which check the panel opens on. The settings menu lists all four, so each
+ *  entry has to land on the one it names. */
+export type SecurityView = "keys" | "disk" | "transport" | "updates";
+
 interface Props {
   onClose: () => void;
+  initialView?: SecurityView;
 }
 
 const SEVERITY_ORDER = { high: 0, medium: 1, low: 2 } as const;
@@ -74,7 +81,7 @@ function shortFingerprint(fp: string): string {
  * no "fix everything" button, because a rotation that goes wrong on ten hosts at
  * once is a very bad afternoon.
  */
-export function SecurityPanel({ onClose }: Props) {
+export function SecurityPanel({ onClose, initialView = "keys" }: Props) {
   const {
     auditKeys,
     rotateKey,
@@ -84,9 +91,11 @@ export function SecurityPanel({ onClose }: Props) {
     evictKeyFromDisk,
     exportKeyToDisk,
     writeTextFile,
+    checkPatches,
+    connectToHost,
     hosts,
   } = useVaultStore();
-  const [view, setView] = useState<"keys" | "disk" | "transport">("keys");
+  const [view, setView] = useState<SecurityView>(initialView);
   const [report, setReport] = useState<AuditReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -96,6 +105,9 @@ export function SecurityPanel({ onClose }: Props) {
   const [progress, setProgress] = useState<string>("");
   const [outcome, setOutcome] = useState<{ id: string; result: RotateOutcome } | null>(null);
   const [showClean, setShowClean] = useState(false);
+  const [patches, setPatches] = useState<HostPatches[] | null>(null);
+  const [scanningPatches, setScanningPatches] = useState(false);
+  const [openPatch, setOpenPatch] = useState<string | null>(null);
 
   // Probe results live for as long as the panel is open and no longer.
   //
@@ -284,6 +296,140 @@ export function SecurityPanel({ onClose }: Props) {
         )}
       </div>
     );
+  }
+
+  async function runPatchScan() {
+    setScanningPatches(true);
+    setError(null);
+    try {
+      setPatches(await checkPatches(hosts));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setScanningPatches(false);
+    }
+  }
+
+  /**
+   * Open a terminal on the host with the upgrade command on the line, unrun.
+   *
+   * Applying updates needs sudo and may stop to ask about a conffile or a
+   * service restart. Kino's job is to get you to the prompt with the right
+   * command in front of you, not to answer questions on your behalf about a
+   * machine whose consequences it cannot see.
+   */
+  async function applyOn(p: HostPatches) {
+    const host = hosts.find((h) => h.id === p.host_id);
+    if (!host || !p.upgrade_command) return;
+    const command = p.upgrade_command;
+    try {
+      const sessionId = await connectToHost(host);
+      onClose();
+      // The tab exists before its terminal has mounted and registered itself,
+      // so wait for it rather than inserting into nothing.
+      let tries = 0;
+      const insert = () => {
+        if (pasteToSession(sessionId, command, false) || tries++ > 20) return;
+        window.setTimeout(insert, 100);
+      };
+      insert();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  function renderUpdates() {
+    if (!patches) {
+      return (
+        <div className="docker-empty">
+          <p>Asks each host's own package manager what it has waiting.</p>
+          <p className="hint">
+            Nothing is fetched from a vulnerability database - the answer comes from the
+            distribution's own tooling on the host, which is the only thing that knows what is
+            installed there. Everything Kino runs is read-only.
+          </p>
+        </div>
+      );
+    }
+    if (patches.length === 0) return <div className="docker-empty">No hosts in the vault yet.</div>;
+
+    // Security first, then sheer volume. A host that could not be reached
+    // sorts last but is never dropped.
+    const ranked = [...patches].sort((a, b) => {
+      if (!!a.error !== !!b.error) return a.error ? 1 : -1;
+      return (b.security ?? -1) - (a.security ?? -1) || b.total - a.total;
+    });
+
+    return ranked.map((p) => {
+      const host = hosts.find((h) => h.id === p.host_id);
+      const open = openPatch === p.host_id;
+      const sev = p.error
+        ? "none"
+        : (p.security ?? 0) > 0
+          ? "high"
+          : p.total > 0
+            ? "medium"
+            : "none";
+      return (
+        <div key={p.host_id} className={`audit-host sev-${sev}`}>
+          <div className="audit-host-head">
+            <button
+              className="audit-host-toggle"
+              onClick={() => setOpenPatch(open ? null : p.host_id)}
+              aria-expanded={open}
+            >
+              <span className="audit-host-name">{host?.name ?? p.host_id}</span>
+              <span className="audit-host-key">
+                {p.error
+                  ? p.error
+                  : `${p.total} pending · ${
+                      p.security === null
+                        ? `${p.manager} cannot say which are security`
+                        : `${p.security} security`
+                    }${p.reboot_required ? " · reboot required" : ""}`}
+              </span>
+              {p.manager && <span className="audit-count">{p.manager}</span>}
+            </button>
+            {p.upgrade_command && p.total > 0 && (
+              <button
+                className="btn btn-sm"
+                title={`Open a terminal here with "${p.upgrade_command}" ready to run`}
+                onClick={() => void applyOn(p)}
+              >
+                Apply…
+              </button>
+            )}
+          </div>
+
+          {open && !p.error && (
+            <div className="audit-detail">
+              {p.upgrade_command && (
+                <p className="audit-fingerprint">
+                  <code>{p.upgrade_command}</code>
+                  {p.reboot_required && <span className="audit-tag">reboot required</span>}
+                </p>
+              )}
+              {p.packages.length === 0 ? (
+                <p className="audit-finding-detail">Nothing pending. This host is up to date.</p>
+              ) : (
+                <table className="patch-table">
+                  <tbody>
+                    {p.packages.map((pkg) => (
+                      <tr key={pkg.name} className={pkg.security ? "security" : ""}>
+                        <td>{pkg.name}</td>
+                        <td className="mono">{pkg.current ?? ""}</td>
+                        <td className="mono">{pkg.candidate}</td>
+                        <td>{pkg.security && <span className="audit-sev">security</span>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    });
   }
 
   async function runSweep() {
@@ -667,10 +813,41 @@ export function SecurityPanel({ onClose }: Props) {
           >
             Transport
           </button>
+          <button
+            className={`audit-tab ${view === "updates" ? "on" : ""}`}
+            onClick={() => setView("updates")}
+          >
+            Updates
+          </button>
         </div>
 
         <div className="audit-toolbar">
-          {view === "disk" ? (
+          {view === "updates" ? (
+            <>
+              {patches && (
+                <div className="audit-summary">
+                  {patches.reduce((n, p) => n + (p.security ?? 0), 0) > 0 && (
+                    <span className="audit-chip sev-high">
+                      {patches.reduce((n, p) => n + (p.security ?? 0), 0)} security
+                    </span>
+                  )}
+                  <span className="audit-scope">
+                    {patches.reduce((n, p) => n + p.total, 0)} pending across {patches.length}{" "}
+                    host{patches.length === 1 ? "" : "s"}
+                    {patches.some((p) => p.security === null) &&
+                      ` · ${patches.filter((p) => p.security === null).length} cannot separate security updates`}
+                  </span>
+                </div>
+              )}
+              <button
+                className="btn btn-sm"
+                onClick={() => void runPatchScan()}
+                disabled={scanningPatches}
+              >
+                {scanningPatches ? "Asking…" : patches ? "Check again" : "Check hosts"}
+              </button>
+            </>
+          ) : view === "disk" ? (
             <>
               {sweep && (
                 <div className="audit-summary">
@@ -751,7 +928,13 @@ export function SecurityPanel({ onClose }: Props) {
         {error && <p className="form-error">{error}</p>}
 
         <div className="audit-body">
-          {view === "disk" ? (
+          {view === "updates" ? (
+            scanningPatches && !patches ? (
+              <div className="docker-empty">Asking each host…</div>
+            ) : (
+              renderUpdates()
+            )
+          ) : view === "disk" ? (
             sweeping && !sweep ? (
               <div className="docker-empty">Looking through ~/.ssh…</div>
             ) : (
@@ -791,7 +974,9 @@ export function SecurityPanel({ onClose }: Props) {
         </div>
 
         <p className="audit-footnote">
-          {view === "disk"
+          {view === "updates"
+            ? "The answer comes from each host's own package manager, never a vulnerability database, so this works with no internet beyond SSH itself. Applying opens a terminal with the command ready rather than running it: an upgrade needs sudo and may stop to ask something only you can answer."
+            : view === "disk"
             ? "Keys are read and described, never decrypted and never copied. A key with no passphrase is protected only by the filesystem, and anything running as you can read it - which is what a compromised package in your project would do first."
             : view === "transport"
             ? "Kino compares what each host offers against the algorithms it will itself negotiate, so a finding is about a connection you would actually make. Hosts reached through a relay or a jump host are not probed, and say so rather than being guessed at."

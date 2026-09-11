@@ -308,6 +308,30 @@ export interface SweepReport {
   high: number;
 }
 
+/** One package with something newer available. Mirrors `Pending`. */
+export interface PendingUpdate {
+  name: string;
+  current: string | null;
+  candidate: string;
+  security: boolean;
+}
+
+/** What one host has waiting. Mirrors `HostPatches`. */
+export interface HostPatches {
+  host_id: string;
+  /** "apt" | "dnf" | "yum" | "zypper" | "apk" | "pacman" */
+  manager: string | null;
+  total: number;
+  /** `null` where the manager cannot separate security updates - which is not
+   *  the same as zero, and must not be shown as zero. */
+  security: number | null;
+  reboot_required: boolean;
+  upgrade_command: string | null;
+  packages: PendingUpdate[];
+  error: string | null;
+  checked_at: number;
+}
+
 export interface AuditReport {
   hosts: HostAudit[];
   generated_at: number;
@@ -353,6 +377,8 @@ export interface McpConfig {
   host_policies: Record<string, McpHostPolicy>;
   /** The global rule block, in the text form the editor uses. */
   global_rules_text: string;
+  /** Set when saved settings exist but could not be read. */
+  problem?: string | null;
   /** True once an MCP password has been set. */
   configured: boolean;
   /** Absolute path of the exposed vault, shown so it can be backed up or removed. */
@@ -594,6 +620,9 @@ interface VaultStore {
   /** Is this command line worth stopping for? Called once per Enter, and only
    *  in a session marked production. */
   checkCommandDanger: (line: string) => Promise<DangerMatch | null>;
+  /** Ask each host what updates it has pending. Reads the host's own package
+   *  manager and nothing else - no third-party vulnerability feed. */
+  checkPatches: (hosts: Host[]) => Promise<HostPatches[]>;
   auditKeys: () => Promise<AuditReport>;
   /** Find private keys on this machine. Detection only - it reads and
    *  describes, and works with the vault locked. */
@@ -1795,6 +1824,7 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
     invoke<CronPreview>("cron_preview", { schedule, hostNow, hostOffsetMin }),
 
   checkCommandDanger: (line) => invoke<DangerMatch | null>("check_command_danger", { line }),
+  checkPatches: (hosts) => invoke<HostPatches[]>("check_patches", { hosts }),
   auditKeys: () => invoke<AuditReport>("audit_keys"),
   sweepKeys: (extraDirs) => invoke<SweepReport>("sweep_keys", { extraDirs }),
   importKeyFromDisk: (path, hostId, name) =>

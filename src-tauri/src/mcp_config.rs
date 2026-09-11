@@ -79,6 +79,9 @@ pub struct McpConfigView {
     pub host_policies: HashMap<String, HostPolicyView>,
     /// The global rule block in its text form, ready for the editor.
     pub global_rules_text: String,
+    /// Set when the settings exist but could not be read, so the panel can say
+    /// why everything looks empty instead of implying it always was.
+    pub problem: Option<String>,
 }
 
 /// Which hosts and snippets a given exposure list actually yields.
@@ -138,12 +141,34 @@ pub fn mcp_vault_path() -> PathBuf {
     vault_path().parent().unwrap().join("mcp_vault.enc")
 }
 
+/// Read the MCP settings.
+///
+/// A missing file is an empty config - MCP has simply never been set up. An
+/// *unreadable* one is an error, and deliberately not the same thing. It used
+/// to fall back to an empty config too, and since every MCP command reads,
+/// changes and writes back, the first save after a failed read wrote that
+/// empty config over whatever was there: every exposed host, every policy,
+/// gone, with nothing said. After a master password change that was every
+/// time, because this file was never re-keyed.
 pub fn load_config(key: &[u8; 32]) -> Result<McpConfig, String> {
     let path = config_path();
     if !path.exists() {
         return Ok(McpConfig::default());
     }
-    load_encrypted(&path, key).or_else(|_| Ok(McpConfig::default()))
+    load_encrypted(&path, key).map_err(|_| UNREADABLE.to_string())
+}
+
+/// Shown when the settings exist but cannot be decrypted.
+pub const UNREADABLE: &str = "Your MCP settings could not be read. This happens if the master \
+password was changed in a version before 0.9.2, which did not re-encrypt them. Saving here \
+starts them fresh; your hosts themselves are not affected.";
+
+/// For an explicit save from the MCP panel, where the user is looking at the
+/// settings and re-entering them: start fresh if the old ones are unreadable,
+/// having been told so by `mcp_get_config`. Nothing else may use this - a
+/// background sync that silently started fresh is exactly the bug above.
+pub fn load_for_edit(key: &[u8; 32]) -> McpConfig {
+    load_config(key).unwrap_or_default()
 }
 
 pub fn save_config(config: &McpConfig, key: &[u8; 32], salt: &[u8; 16]) -> Result<(), String> {
@@ -324,6 +349,41 @@ mod tests {
                 commands: "echo bye".into(),
             },
         ]
+    }
+
+    /// A reported bug: setting a host to Guarded or Full, then reopening the
+    /// panel, showed it back at read-only. First question - does the mode
+    /// survive being written and read back?
+    #[test]
+    fn a_non_default_mode_survives_being_saved_and_loaded() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp_config.enc");
+        let key = vault::derive_key("master", &[3u8; 16]).unwrap();
+
+        let mut config = McpConfig {
+            exposed_host_ids: vec!["h1".into(), "h2".into()],
+            configured: true,
+            ..Default::default()
+        };
+        config.host_policies.insert(
+            "h1".into(),
+            HostPolicy {
+                mode: McpMode::Guarded,
+                rules: vec![],
+            },
+        );
+        config.host_policies.insert(
+            "h2".into(),
+            HostPolicy {
+                mode: McpMode::Full,
+                rules: vec![],
+            },
+        );
+        save_encrypted(&path, &config, &key, &[3u8; 16]).unwrap();
+
+        let back: McpConfig = load_encrypted(&path, &key).unwrap();
+        assert_eq!(back.host_policies["h1"].mode, McpMode::Guarded);
+        assert_eq!(back.host_policies["h2"].mode, McpMode::Full);
     }
 
     #[test]
