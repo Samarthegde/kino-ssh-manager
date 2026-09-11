@@ -20,6 +20,7 @@ pub mod mcp_config;
 pub mod mcp_policy;
 mod metrics;
 mod notes;
+mod patches;
 mod processes;
 mod recorder;
 mod redact;
@@ -132,6 +133,14 @@ fn change_master_password(
     current_password: String,
     new_password: String,
 ) -> Result<(), String> {
+    change_master_password_in(&state, current_password, new_password)
+}
+
+fn change_master_password_in(
+    state: &AppState,
+    current_password: String,
+    new_password: String,
+) -> Result<(), String> {
     use zeroize::Zeroize;
     if new_password.is_empty() {
         return Err("New password cannot be empty".to_string());
@@ -161,6 +170,20 @@ fn change_master_password(
     OsRng.fill_bytes(&mut new_salt);
     let new_key = vault::derive_key(&new_password, &new_salt)?;
 
+    // Read these under the old key before anything is rewritten. Both were
+    // missing from this list, so a password change left them encrypted under a
+    // key that no longer existed: the MCP policies were then wiped on the next
+    // MCP save, and the copilot's API key simply vanished.
+    //
+    // One that is already unreadable - from a password change made before this
+    // fix - is left alone rather than blocking this one. Re-keying cannot make
+    // it worse, and refusing would lock someone out of ever changing password.
+    let mcp_settings = mcp_config::config_path()
+        .exists()
+        .then(|| mcp_config::load_config(&old_key).ok())
+        .flatten();
+    let ai_settings = ai::load_config(&old_key);
+
     vault::save_vault(&state.hosts.lock().unwrap(), &new_key, &new_salt)?;
     history::save_history(&state.history.lock().unwrap(), &new_key, &new_salt)?;
     snippets::save_snippets(&state.snippets.lock().unwrap(), &new_key, &new_salt)?;
@@ -168,6 +191,12 @@ fn change_master_password(
     shell_history::save(&state.shell_history.lock().unwrap(), &new_key, &new_salt)?;
     if let Some(cfg) = sync::load_config(&old_key) {
         sync::save_config(&cfg, &new_key, &new_salt)?;
+    }
+    if let Some(cfg) = mcp_settings {
+        mcp_config::save_config(&cfg, &new_key, &new_salt)?;
+    }
+    if let Some(cfg) = ai_settings {
+        ai::save_config(&cfg, &new_key, &new_salt)?;
     }
 
     // Swap into state, wiping the old key.
@@ -212,41 +241,65 @@ fn log_history(state: State<'_, AppState>, event: history::HistoryEvent) -> Resu
 }
 
 #[tauri::command]
-fn save_host(state: State<'_, AppState>, mut host: Host) -> Result<Host, String> {
-    let key_guard = state.vault_key.lock().unwrap();
-    let key = key_guard.as_ref().ok_or("Vault is locked")?;
-    let salt_guard = state.vault_salt.lock().unwrap();
-    let salt = salt_guard.as_ref().ok_or("Vault is locked")?;
-    if host.id.is_empty() {
-        host.id = Uuid::new_v4().to_string();
+fn save_host(state: State<'_, AppState>, host: Host) -> Result<Host, String> {
+    save_host_in(&state, host)
+}
+
+fn save_host_in(state: &AppState, mut host: Host) -> Result<Host, String> {
+    {
+        let key_guard = state.vault_key.lock().unwrap();
+        let key = key_guard.as_ref().ok_or("Vault is locked")?;
+        let salt_guard = state.vault_salt.lock().unwrap();
+        let salt = salt_guard.as_ref().ok_or("Vault is locked")?;
+        if host.id.is_empty() {
+            host.id = Uuid::new_v4().to_string();
+        }
+        let mut hosts = state.hosts.lock().unwrap();
+        if let Some(existing) = hosts.iter_mut().find(|h| h.id == host.id) {
+            *existing = host.clone();
+        } else {
+            hosts.push(host.clone());
+        }
+        vault::save_vault(&hosts, key, salt)?;
     }
-    let mut hosts = state.hosts.lock().unwrap();
-    if let Some(existing) = hosts.iter_mut().find(|h| h.id == host.id) {
-        *existing = host.clone();
-    } else {
-        hosts.push(host.clone());
-    }
-    vault::save_vault(&hosts, key, salt)?;
-    let _ = sync_mcp_vault(&state);
+    // Every guard above is dropped by the end of that block, and that is the
+    // whole fix. `sync_mcp_vault` takes `vault_key` and `hosts` itself, and
+    // `std::sync::Mutex` is not reentrant: calling it with them still held
+    // made the thread wait on itself forever. That is how saving a host hung
+    // the app - on every save, since v0.9.1.
+    let _ = sync_mcp_vault(state);
     Ok(host)
 }
 
 #[tauri::command]
 fn delete_host(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    let key_guard = state.vault_key.lock().unwrap();
-    let key = key_guard.as_ref().ok_or("Vault is locked")?;
-    let salt_guard = state.vault_salt.lock().unwrap();
-    let salt = salt_guard.as_ref().ok_or("Vault is locked")?;
-    let mut hosts = state.hosts.lock().unwrap();
-    hosts.retain(|h| h.id != id);
-    vault::save_vault(&hosts, key, salt)?;
-    let _ = sync_mcp_vault(&state);
-    // Its archived shell history goes with it; leaving that behind would keep
-    // the commands (and anything typed on a command line) after the host is gone.
-    let mut hist = state.shell_history.lock().unwrap();
-    if hist.remove(&id).is_some() {
-        shell_history::save(&hist, key, salt)?;
+    delete_host_in(&state, &id)
+}
+
+fn delete_host_in(state: &AppState, id: &str) -> Result<(), String> {
+    {
+        let key_guard = state.vault_key.lock().unwrap();
+        let key = key_guard.as_ref().ok_or("Vault is locked")?;
+        let salt_guard = state.vault_salt.lock().unwrap();
+        let salt = salt_guard.as_ref().ok_or("Vault is locked")?;
+        let mut hosts = state.hosts.lock().unwrap();
+        hosts.retain(|h| h.id != id);
+        vault::save_vault(&hosts, key, salt)?;
+        drop(hosts);
+        // Its archived shell history goes with it; leaving that behind would
+        // keep the commands (and anything typed on a command line) after the
+        // host is gone.
+        let mut hist = state.shell_history.lock().unwrap();
+        if hist.remove(id).is_some() {
+            shell_history::save(&hist, key, salt)?;
+        }
     }
+    // Every guard above is dropped by the end of that block, and that is the
+    // whole fix. `sync_mcp_vault` takes `vault_key` and `hosts` itself, and
+    // `std::sync::Mutex` is not reentrant: calling it with them still held
+    // made the thread wait on itself forever. That is how saving a host hung
+    // the app - on every save, since v0.9.1.
+    let _ = sync_mcp_vault(state);
     Ok(())
 }
 
@@ -310,50 +363,79 @@ fn get_snippets(state: State<'_, AppState>) -> Result<Vec<snippets::Snippet>, St
 #[tauri::command]
 fn save_snippet(
     state: State<'_, AppState>,
+    snippet: snippets::Snippet,
+) -> Result<snippets::Snippet, String> {
+    save_snippet_in(&state, snippet)
+}
+
+fn save_snippet_in(
+    state: &AppState,
     mut snippet: snippets::Snippet,
 ) -> Result<snippets::Snippet, String> {
-    let key_guard = state.vault_key.lock().unwrap();
-    let key = key_guard.as_ref().ok_or("Vault is locked")?;
-    let salt_guard = state.vault_salt.lock().unwrap();
-    let salt = salt_guard.as_ref().ok_or("Vault is locked")?;
-    if snippet.id.is_empty() {
-        snippet.id = Uuid::new_v4().to_string();
+    {
+        let key_guard = state.vault_key.lock().unwrap();
+        let key = key_guard.as_ref().ok_or("Vault is locked")?;
+        let salt_guard = state.vault_salt.lock().unwrap();
+        let salt = salt_guard.as_ref().ok_or("Vault is locked")?;
+        if snippet.id.is_empty() {
+            snippet.id = Uuid::new_v4().to_string();
+        }
+        let mut snips = state.snippets.lock().unwrap();
+        if let Some(existing) = snips.iter_mut().find(|s| s.id == snippet.id) {
+            *existing = snippet.clone();
+        } else {
+            snips.push(snippet.clone());
+        }
+        snippets::save_snippets(&snips, key, salt)?;
     }
-    let mut snips = state.snippets.lock().unwrap();
-    if let Some(existing) = snips.iter_mut().find(|s| s.id == snippet.id) {
-        *existing = snippet.clone();
-    } else {
-        snips.push(snippet.clone());
-    }
-    snippets::save_snippets(&snips, key, salt)?;
-    let _ = sync_mcp_vault(&state);
+    // Every guard above is dropped by the end of that block, and that is the
+    // whole fix. `sync_mcp_vault` takes `vault_key` and `hosts` itself, and
+    // `std::sync::Mutex` is not reentrant: calling it with them still held
+    // made the thread wait on itself forever. That is how saving a host hung
+    // the app - on every save, since v0.9.1.
+    let _ = sync_mcp_vault(state);
     Ok(snippet)
 }
 
 #[tauri::command]
 fn delete_snippet(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    let key_guard = state.vault_key.lock().unwrap();
-    let key = key_guard.as_ref().ok_or("Vault is locked")?;
-    let salt_guard = state.vault_salt.lock().unwrap();
-    let salt = salt_guard.as_ref().ok_or("Vault is locked")?;
-    let mut snips = state.snippets.lock().unwrap();
-    snips.retain(|s| s.id != id);
-    snippets::save_snippets(&snips, key, salt)?;
-    let _ = sync_mcp_vault(&state);
+    delete_snippet_in(&state, &id)
+}
 
-    // Drop the now-dangling reference from any host that used this snippet.
-    let mut hosts = state.hosts.lock().unwrap();
-    let mut hosts_changed = false;
-    for h in hosts.iter_mut() {
-        let before = h.on_connect_snippets.len();
-        h.on_connect_snippets.retain(|sid| sid != &id);
-        if h.on_connect_snippets.len() != before {
-            hosts_changed = true;
+fn delete_snippet_in(state: &AppState, id: &str) -> Result<(), String> {
+    {
+        let key_guard = state.vault_key.lock().unwrap();
+        let key = key_guard.as_ref().ok_or("Vault is locked")?;
+        let salt_guard = state.vault_salt.lock().unwrap();
+        let salt = salt_guard.as_ref().ok_or("Vault is locked")?;
+        let mut snips = state.snippets.lock().unwrap();
+        snips.retain(|s| s.id != id);
+        snippets::save_snippets(&snips, key, salt)?;
+        drop(snips);
+
+        // Drop the now-dangling reference from any host that used this snippet.
+        let mut hosts = state.hosts.lock().unwrap();
+        let mut hosts_changed = false;
+        for h in hosts.iter_mut() {
+            let before = h.on_connect_snippets.len();
+            h.on_connect_snippets.retain(|sid| sid != id);
+            if h.on_connect_snippets.len() != before {
+                hosts_changed = true;
+            }
+        }
+        if hosts_changed {
+            vault::save_vault(&hosts, key, salt)?;
         }
     }
-    if hosts_changed {
-        vault::save_vault(&hosts, key, salt)?;
-    }
+    // Synced last, after the host references are cleaned up. It used to run
+    // before them, so the exposed vault kept pointing at a snippet that no
+    // longer existed.
+    // Every guard above is dropped by the end of that block, and that is the
+    // whole fix. `sync_mcp_vault` takes `vault_key` and `hosts` itself, and
+    // `std::sync::Mutex` is not reentrant: calling it with them still held
+    // made the thread wait on itself forever. That is how saving a host hung
+    // the app - on every save, since v0.9.1.
+    let _ = sync_mcp_vault(state);
     Ok(())
 }
 
@@ -1583,8 +1665,12 @@ fn list_active_forwards(state: State<'_, AppState>) -> Vec<String> {
 fn mcp_get_config(state: State<'_, AppState>) -> Result<mcp_config::McpConfigView, String> {
     let key_guard = state.vault_key.lock().unwrap();
     let key = key_guard.as_ref().ok_or("Vault is locked")?;
-    let config = mcp_config::load_config(key)?;
+    let (config, problem) = match mcp_config::load_config(key) {
+        Ok(c) => (c, None),
+        Err(e) => (mcp_config::McpConfig::default(), Some(e)),
+    };
     Ok(mcp_config::McpConfigView {
+        problem,
         host_policies: config
             .host_policies
             .iter()
@@ -1616,7 +1702,7 @@ fn mcp_set_password(state: State<'_, AppState>, password: String) -> Result<(), 
         let key = key_guard.as_ref().ok_or("Vault is locked")?;
         let salt_guard = state.vault_salt.lock().unwrap();
         let salt = salt_guard.as_ref().ok_or("Vault is locked")?;
-        let mut config = mcp_config::load_config(key)?;
+        let mut config = mcp_config::load_for_edit(key);
 
         // A fresh salt for the MCP vault's own key derivation. Changing the
         // password re-derives and rewrites `mcp_vault.enc`, so anything holding
@@ -1656,7 +1742,7 @@ fn mcp_set_host_policy(
         let key = key_guard.as_ref().ok_or("Vault is locked")?;
         let salt = state.vault_salt.lock().unwrap();
         let salt = salt.as_ref().ok_or("Vault is locked")?;
-        let mut config = mcp_config::load_config(key)?;
+        let mut config = mcp_config::load_for_edit(key);
         config
             .host_policies
             .insert(host_id, mcp_policy::HostPolicy { mode, rules });
@@ -1674,7 +1760,7 @@ fn mcp_set_global_rules(state: State<'_, AppState>, rules_text: String) -> Resul
         let key = key_guard.as_ref().ok_or("Vault is locked")?;
         let salt = state.vault_salt.lock().unwrap();
         let salt = salt.as_ref().ok_or("Vault is locked")?;
-        let mut config = mcp_config::load_config(key)?;
+        let mut config = mcp_config::load_for_edit(key);
         config.global_rules = rules;
         mcp_config::save_config(&config, key, salt)?;
     }
@@ -1688,7 +1774,7 @@ fn mcp_set_exposed_hosts(state: State<'_, AppState>, host_ids: Vec<String>) -> R
         let key = key_guard.as_ref().ok_or("Vault is locked")?;
         let salt_guard = state.vault_salt.lock().unwrap();
         let salt = salt_guard.as_ref().ok_or("Vault is locked")?;
-        let mut config = mcp_config::load_config(key)?;
+        let mut config = mcp_config::load_for_edit(key);
         config.exposed_host_ids = host_ids;
         mcp_config::save_config(&config, key, salt)?;
     }
@@ -1917,6 +2003,7 @@ pub fn run() {
             docker::docker_shell,
             metrics::metrics_start,
             metrics::metrics_stop,
+            patches::check_patches,
             processes::processes_list,
             processes::process_kill,
             cron::cron_list,
@@ -2058,5 +2145,219 @@ mod export_tests {
         assert!(!profile_is_encrypted(p.clone()).unwrap());
         // The plaintext importer must still accept legacy/unencrypted profiles.
         assert_eq!(import_host(p).unwrap().name, "web");
+    }
+}
+
+#[cfg(test)]
+mod lock_tests {
+    //! Saving a host hung the app on every save from v0.9.1 onwards: the
+    //! command held three locks while calling `sync_mcp_vault`, which took one
+    //! of them again. Nothing tested a save, so nothing noticed. These do.
+    //!
+    //! Each runs on its own thread with a deadline, so a regression fails the
+    //! test instead of hanging the suite.
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    /// Serialises the tests that redirect the data directory. The redirect is
+    /// process-wide, so two of them at once could see each other's vault.
+    static DATA_DIR: Mutex<()> = Mutex::new(());
+
+    /// An unlocked state whose vault lives in `dir`, never in the real one.
+    fn unlocked_state(dir: &std::path::Path) -> AppState {
+        std::env::set_var("XDG_DATA_HOME", dir);
+        // Refuse to go on unless the redirect has actually taken effect. This
+        // is what stands between these tests and somebody's real vault.
+        assert!(
+            vault::vault_path().starts_with(dir),
+            "vault is not redirected - refusing to write to {}",
+            vault::vault_path().display()
+        );
+        AppState {
+            vault_key: Arc::new(Mutex::new(Some(
+                vault::derive_key("test", &[9u8; 16]).unwrap(),
+            ))),
+            vault_salt: Arc::new(Mutex::new(Some([9u8; 16]))),
+            hosts: Arc::new(Mutex::new(vec![])),
+            history: Arc::new(Mutex::new(vec![])),
+            snippets: Arc::new(Mutex::new(vec![])),
+            notes: Arc::new(Mutex::new(vec![])),
+            shell_history: Arc::new(Mutex::new(Default::default())),
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            local_sessions: Arc::new(Mutex::new(HashMap::new())),
+            active_forwards: Arc::new(Mutex::new(HashMap::new())),
+            sftp_sessions: Arc::new(Mutex::new(HashMap::new())),
+            metrics_streams: Arc::new(Mutex::new(HashMap::new())),
+            docker_log_streams: Arc::new(Mutex::new(HashMap::new())),
+            ai_cancels: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn a_host() -> Host {
+        Host {
+            id: String::new(),
+            name: "web".into(),
+            hostname: "10.0.0.1".into(),
+            port: 22,
+            username: "root".into(),
+            default_auth: "Password".into(),
+            password: Some("x".into()),
+            private_key: None,
+            public_key: None,
+            passphrase: None,
+            port_forwards: vec![],
+            on_connect_snippets: vec![],
+            color: None,
+            notes: None,
+            group: None,
+            os: None,
+            connection_mode: None,
+            agent_id: None,
+            relay_url: None,
+            relay_token: None,
+            control_url: None,
+            proxy_type: None,
+            proxy_host: None,
+            proxy_port: None,
+            proxy_username: None,
+            proxy_password: None,
+            jump_host: None,
+            jump: None,
+            key_added_at: None,
+            ntfy_topic: None,
+            environment: None,
+        }
+    }
+
+    /// Run `f` on its own thread and fail if it has not finished in time. A
+    /// deadlocked thread is left behind rather than taking the suite with it.
+    fn finishes<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        rx.recv_timeout(Duration::from_secs(5))
+            .expect("did not finish in 5s - a lock is being taken twice on one thread")
+    }
+
+    #[test]
+    fn saving_editing_and_deleting_a_host_does_not_hang() {
+        let _serial = DATA_DIR.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let state = Arc::new(unlocked_state(dir.path()));
+
+        let s = Arc::clone(&state);
+        let saved = finishes(move || save_host_in(&s, a_host())).unwrap();
+        assert!(!saved.id.is_empty(), "a new host gets an id");
+
+        // Editing is the same command with an existing id - the path reported.
+        let s = Arc::clone(&state);
+        let mut edited = saved.clone();
+        edited.name = "web-renamed".into();
+        finishes(move || save_host_in(&s, edited)).unwrap();
+        assert_eq!(state.hosts.lock().unwrap()[0].name, "web-renamed");
+
+        let s = Arc::clone(&state);
+        let id = saved.id.clone();
+        finishes(move || delete_host_in(&s, &id)).unwrap();
+        assert!(state.hosts.lock().unwrap().is_empty());
+    }
+
+    /// A master password change left the MCP settings and the copilot's key
+    /// encrypted under a key that no longer existed. The policies were then
+    /// wiped on the next MCP save; the API key just vanished. Both have to
+    /// survive a change of password.
+    #[test]
+    fn changing_the_master_password_keeps_mcp_settings_and_the_ai_key() {
+        let _serial = DATA_DIR.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let state = unlocked_state(dir.path());
+        let old_key = state.vault_key.lock().unwrap().unwrap();
+        let salt = state.vault_salt.lock().unwrap().unwrap();
+
+        let mut mcp = mcp_config::McpConfig {
+            exposed_host_ids: vec!["h1".into()],
+            configured: true,
+            ..Default::default()
+        };
+        mcp.host_policies.insert(
+            "h1".into(),
+            mcp_policy::HostPolicy {
+                mode: mcp_policy::McpMode::Guarded,
+                rules: vec![],
+            },
+        );
+        mcp_config::save_config(&mcp, &old_key, &salt).unwrap();
+
+        let mut api_keys = HashMap::new();
+        api_keys.insert("openrouter".to_string(), "sk-or-kept".to_string());
+        ai::save_config(
+            &ai::AiConfig {
+                provider: "openrouter".into(),
+                api_keys,
+                models: HashMap::new(),
+                effort: "medium".into(),
+            },
+            &old_key,
+            &salt,
+        )
+        .unwrap();
+
+        change_master_password_in(&state, "test".into(), "a-new-password".into()).unwrap();
+
+        let new_key = state.vault_key.lock().unwrap().unwrap();
+        assert_ne!(new_key, old_key, "the key really did change");
+
+        let back = mcp_config::load_config(&new_key)
+            .expect("MCP settings unreadable after a password change");
+        assert_eq!(
+            back.host_policies["h1"].mode,
+            mcp_policy::McpMode::Guarded,
+            "the policy did not survive"
+        );
+        let ai_back = ai::load_config(&new_key).expect("the AI key was lost");
+        assert_eq!(ai_back.api_keys["openrouter"], "sk-or-kept");
+    }
+
+    #[test]
+    fn unreadable_mcp_settings_are_an_error_not_an_empty_config() {
+        // The old behaviour turned "cannot decrypt" into "nothing set up",
+        // which the next save then wrote over everything.
+        let _serial = DATA_DIR.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let state = unlocked_state(dir.path());
+        let key = state.vault_key.lock().unwrap().unwrap();
+        let salt = state.vault_salt.lock().unwrap().unwrap();
+        mcp_config::save_config(&mcp_config::McpConfig::default(), &key, &salt).unwrap();
+
+        let wrong = vault::derive_key("someone-else", &salt).unwrap();
+        let err = mcp_config::load_config(&wrong).unwrap_err();
+        assert!(err.contains("could not be read"), "{err}");
+    }
+
+    #[test]
+    fn saving_and_deleting_a_snippet_does_not_hang() {
+        let _serial = DATA_DIR.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let state = Arc::new(unlocked_state(dir.path()));
+
+        let s = Arc::clone(&state);
+        let snip = finishes(move || {
+            save_snippet_in(
+                &s,
+                snippets::Snippet {
+                    id: String::new(),
+                    name: "uptime".into(),
+                    commands: "uptime".into(),
+                },
+            )
+        })
+        .unwrap();
+
+        let s = Arc::clone(&state);
+        let id = snip.id.clone();
+        finishes(move || delete_snippet_in(&s, &id)).unwrap();
+        assert!(state.snippets.lock().unwrap().is_empty());
     }
 }
