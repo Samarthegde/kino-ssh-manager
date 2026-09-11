@@ -11,6 +11,20 @@
 //! restrictions.
 
 use serde::Serialize;
+use std::time::Duration;
+
+/// HTTP for this module, with the limits ureq does not set.
+///
+/// Its defaults are a 30-second connect timeout and no read timeout at all -
+/// so a connection that opens and then stalls, as a captive portal or a
+/// half-broken proxy will, waits forever. Neither call here is worth more than
+/// a few seconds.
+fn agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(5))
+        .timeout(Duration::from_secs(10))
+        .build()
+}
 
 const REPO: &str = "Samarthegde/kino-ssh-manager";
 
@@ -52,12 +66,168 @@ fn is_newer(latest: &str, current: &str) -> bool {
     false
 }
 
+/// The minisign key id the updater will verify against.
+///
+/// Read out of the running app's own config rather than hardcoded, so it
+/// cannot drift from the key that actually gates an install. Shown to the user
+/// before they apply an update: "signed by E417F3D9D4D9C4E1" is checkable
+/// against the key published in the repo, where "signature valid" alone asks
+/// them to take our word for which key.
 #[tauri::command]
-pub fn check_for_update() -> Result<UpdateInfo, String> {
+pub fn updater_key_id(app: tauri::AppHandle) -> Option<String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let pubkey = app
+        .config()
+        .plugins
+        .0
+        .get("updater")?
+        .get("pubkey")?
+        .as_str()?
+        .to_string();
+    let decoded = String::from_utf8(STANDARD.decode(pubkey).ok()?).ok()?;
+    // `untrusted comment: minisign public key: E417F3D9D4D9C4E1`
+    decoded
+        .lines()
+        .next()?
+        .rsplit(':')
+        .next()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// What the `kino-mcp` binary on this machine is, against what the release
+/// says it should be.
+#[derive(Serialize, Default)]
+pub struct McpBinaryCheck {
+    /// The asset name for this platform, so the user knows what to download.
+    pub asset: String,
+    /// SHA-256 from the release's signed SHA256SUMS. `None` when the release
+    /// predates checksums, or could not be reached.
+    pub expected: Option<String>,
+    /// Where `kino-mcp` was found on PATH, if it was.
+    pub path: Option<String>,
+    /// SHA-256 of that file.
+    pub actual: Option<String>,
+    /// Only `Some` when both halves are known - never a guess.
+    pub matches: Option<bool>,
+    /// Why a half is missing, in words worth showing.
+    pub detail: Option<String>,
+}
+
+fn mcp_asset_name() -> &'static str {
+    if cfg!(windows) {
+        "kino-mcp-windows-x86_64.exe"
+    } else {
+        "kino-mcp-linux-x86_64"
+    }
+}
+
+/// Find `kino-mcp` the way a shell would.
+fn mcp_on_path() -> Option<std::path::PathBuf> {
+    let exe = if cfg!(windows) {
+        "kino-mcp.exe"
+    } else {
+        "kino-mcp"
+    };
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|dir| dir.join(exe))
+            .find(|p| p.is_file())
+    })
+}
+
+fn sha256_of(path: &std::path::Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path).ok()?;
+    Some(format!("{:x}", Sha256::digest(&bytes)))
+}
+
+/// Compare the installed `kino-mcp` against the release it claims to be from.
+///
+/// `kino-mcp` is a separate download that the user places on their PATH
+/// themselves, so nothing in the app has ever confirmed it is the file this
+/// version shipped. It can reach every host exposed to it, which makes that
+/// worth answering rather than assuming.
+///
+/// Both halves can legitimately be missing - the binary may not be installed,
+/// and a release older than SHA256SUMS has nothing to compare against - so
+/// `matches` stays `None` unless both are known.
+///
+/// Async so it runs off the main thread. Tauri runs a non-`async` command *on*
+/// the main thread, and this makes a network request - so as a plain `fn` it
+/// froze the entire window while the MCP panel waited on GitHub, for thirty
+/// seconds offline and indefinitely on a stalled connection.
+#[tauri::command]
+pub async fn check_mcp_binary() -> McpBinaryCheck {
+    tokio::task::spawn_blocking(check_mcp_binary_now)
+        .await
+        .unwrap_or_default()
+}
+
+fn check_mcp_binary_now() -> McpBinaryCheck {
+    let asset = mcp_asset_name().to_string();
+    let version = env!("CARGO_PKG_VERSION");
+    let mut out = McpBinaryCheck {
+        asset: asset.clone(),
+        ..Default::default()
+    };
+
+    if let Some(path) = mcp_on_path() {
+        out.actual = sha256_of(&path);
+        out.path = Some(path.to_string_lossy().into_owned());
+    } else {
+        out.detail = Some("kino-mcp was not found on your PATH.".into());
+    }
+
+    let url = format!("https://github.com/{REPO}/releases/download/v{version}/SHA256SUMS");
+    let fetched = agent()
+        .get(&url)
+        .set("User-Agent", "kino-ssh-manager")
+        .call()
+        .ok()
+        .and_then(|r| r.into_string().ok());
+    match fetched {
+        Some(body) => {
+            out.expected = body
+                .lines()
+                .find(|l| l.ends_with(&asset))
+                .and_then(|l| l.split_whitespace().next())
+                .map(str::to_string);
+            if out.expected.is_none() {
+                out.detail = Some(format!("v{version}'s SHA256SUMS does not list {asset}."));
+            }
+        }
+        None => {
+            out.detail = Some(format!(
+                "Could not fetch SHA256SUMS for v{version} - it may predate signed checksums, \
+                 or you may be offline."
+            ));
+        }
+    }
+
+    out.matches = match (&out.expected, &out.actual) {
+        (Some(e), Some(a)) => Some(e.eq_ignore_ascii_case(a)),
+        _ => None,
+    };
+    out
+}
+
+/// Async for the same reason as `check_mcp_binary`: this runs at startup, and
+/// as a plain `fn` a slow or absent network held the window frozen while the
+/// app was still opening.
+#[tauri::command]
+pub async fn check_for_update() -> Result<UpdateInfo, String> {
+    tokio::task::spawn_blocking(check_for_update_now)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn check_for_update_now() -> Result<UpdateInfo, String> {
     let current = env!("CARGO_PKG_VERSION").to_string();
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
 
-    let json: serde_json::Value = ureq::get(&url)
+    let json: serde_json::Value = agent()
+        .get(&url)
         .set("User-Agent", "kino-ssh-manager")
         .set("Accept", "application/vnd.github+json")
         .call()
@@ -91,6 +261,40 @@ pub fn check_for_update() -> Result<UpdateInfo, String> {
 #[cfg(test)]
 mod tests {
     use super::is_newer;
+
+    /// The case that used to hang forever: a server that accepts the
+    /// connection and then never says anything, which is what a captive portal
+    /// or a wedged proxy looks like. ureq's defaults have no read timeout, so
+    /// this waited indefinitely - on the main thread, freezing the window.
+    ///
+    /// Ignored by default only because it takes the full ten seconds.
+    ///
+    ///     cargo test --lib update -- --ignored
+    #[test]
+    #[ignore = "waits out the full request timeout"]
+    fn a_server_that_never_answers_does_not_hang_the_request() {
+        use std::time::{Duration, Instant};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        // Accept, hold the socket open, say nothing.
+        std::thread::spawn(move || {
+            let _held: Vec<_> = listener.incoming().take(1).collect();
+            std::thread::sleep(Duration::from_secs(60));
+        });
+
+        let started = Instant::now();
+        let result = super::agent()
+            .get(&format!("http://{addr}/SHA256SUMS"))
+            .call();
+        let took = started.elapsed();
+
+        assert!(result.is_err(), "a silent server cannot have answered");
+        assert!(
+            took < Duration::from_secs(15),
+            "waited {took:?} - the request is not bounded"
+        );
+        println!("gave up after {took:?}");
+    }
 
     #[test]
     fn compares_versions() {

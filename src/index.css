@@ -3436,6 +3436,36 @@ textarea.mono {
 
 .copilot-payload span { margin-right: auto; }
 
+/* What the updater checked, shown before it is allowed to act on it. */
+.update-verified {
+  padding: 10px 12px;
+  border: 1px solid var(--muted);
+  border-left: 3px solid var(--green);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.update-verified-head {
+  margin: 0 0 6px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.update-verified ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--subtle);
+  line-height: 1.7;
+}
+
+.update-verified .hint { margin: 8px 0 0; }
+
+.update-verified-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
 /* Package lists get long, so the rows are tight and the security ones carry
    the only colour in the table. */
 .patch-table {

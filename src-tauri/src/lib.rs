@@ -2025,6 +2025,8 @@ pub fn run() {
             ai::ai_preview,
             ai::ai_cancel,
             update::check_for_update,
+            update::updater_key_id,
+            update::check_mcp_binary,
             start_recording,
             stop_recording,
             list_recordings,
