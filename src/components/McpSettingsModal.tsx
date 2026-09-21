@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { McpBinaryCheck, McpConfig, McpMode, useVaultStore } from "../store";
+import { McpBinaryStatus, McpConfig, McpMode, useVaultStore } from "../store";
 
 interface Props {
   onClose: () => void;
@@ -38,9 +38,11 @@ export function McpSettingsModal({ onClose }: Props) {
     mcpSetHostPolicy,
     mcpSetGlobalRules,
     checkMcpBinary,
+    installMcpBinary,
     hosts,
   } = useVaultStore();
-  const [binary, setBinary] = useState<McpBinaryCheck | null>(null);
+  const [binary, setBinary] = useState<McpBinaryStatus | null>(null);
+  const [installing, setInstalling] = useState(false);
   useEffect(() => {
     checkMcpBinary().then(setBinary).catch(() => setBinary(null));
   }, [checkMcpBinary]);
@@ -145,7 +147,7 @@ export function McpSettingsModal({ onClose }: Props) {
         {
           mcpServers: {
             kino: {
-              command: config?.binary_hint ?? "kino-mcp",
+              command: binary?.command ?? config?.binary_hint ?? "kino-mcp",
               env: { KINO_MCP_PASSWORD: "your-mcp-password" },
             },
           },
@@ -153,8 +155,20 @@ export function McpSettingsModal({ onClose }: Props) {
         null,
         2
       ),
-    [config]
+    [config, binary]
   );
+
+  async function install() {
+    setInstalling(true);
+    setError("");
+    try {
+      setBinary(await installMcpBinary());
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setInstalling(false);
+    }
+  }
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -341,33 +355,56 @@ export function McpSettingsModal({ onClose }: Props) {
           <section className="mcp-section">
             <p className="mcp-section-title">
               The binary
-              {binary?.matches === true && <span className="mcp-badge">verified</span>}
+              {binary?.command && (
+                <span className="mcp-badge">{binary.needs_install ? "installed" : "bundled"}</span>
+              )}
             </p>
-            {binary?.matches === true ? (
+            {!binary ? (
+              <p className="mcp-hint">Checking…</p>
+            ) : !binary.bundled ? (
               <p className="mcp-hint">
-                The <code>kino-mcp</code> at <code>{binary.path}</code> is the one this version
-                published. Nothing has replaced it.
+                This build does not carry <code>kino-mcp</code> - it is a development build. Build
+                it with <code>cargo build --bin kino-mcp</code>, or use a release installer, which
+                includes it.
               </p>
-            ) : binary?.matches === false ? (
-              <div className="mcp-warn">
-                The <code>kino-mcp</code> on your PATH is <strong>not</strong> the file this
-                version published. Either it is left over from another version, or something
-                replaced it. It can reach every host you expose, so check it before using it.
-                <br />
-                <code>{binary.path}</code>
-              </div>
+            ) : !binary.needs_install ? (
+              <p className="mcp-hint">
+                <code>kino-mcp</code> came with this install, at <code>{binary.command}</code>. It
+                updates with the app, so there is nothing to download.
+              </p>
+            ) : binary.command ? (
+              <p className="mcp-hint">
+                Installed at <code>{binary.command}</code>. When the AppImage updates, Kino
+                updates this copy on its next start.
+              </p>
             ) : (
-              <p className="mcp-hint">
-                {binary?.detail ?? "Checking…"} The expected SHA-256 for{" "}
-                <code>{binary?.asset}</code> is published in each release's signed{" "}
-                <code>SHA256SUMS</code>.
-              </p>
+              <>
+                <p className="mcp-hint">
+                  {binary.install_stale ? (
+                    <>
+                      The copy at <code>{binary.install_path}</code> is from another version.
+                    </>
+                  ) : (
+                    <>
+                      An AppImage runs from a new place on every launch, so an assistant cannot
+                      use the copy inside it. Install one to <code>{binary.install_path}</code> -
+                      Kino keeps it up to date from then on.
+                    </>
+                  )}
+                </p>
+                <div className="mcp-config-actions">
+                  <button className="btn btn-sm" onClick={install} disabled={installing}>
+                    {installing ? "Installing…" : binary.install_stale ? "Update kino-mcp" : "Install kino-mcp"}
+                  </button>
+                </div>
+              </>
             )}
-            {binary?.expected && (
-              <pre className="mcp-config">
-                expected {binary.expected}
-                {binary.actual ? `\nfound    ${binary.actual}` : ""}
-              </pre>
+            {binary?.on_path_matches === false && (
+              <div className="mcp-warn">
+                A different <code>kino-mcp</code> comes first on your PATH, at{" "}
+                <code>{binary.on_path}</code>. A config that names just <code>kino-mcp</code>{" "}
+                runs that file, not this version&apos;s. Use the full path below, or remove it.
+              </div>
             )}
           </section>
 

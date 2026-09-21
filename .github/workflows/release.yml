@@ -75,9 +75,9 @@ jobs:
       matrix:
         include:
           - platform: ubuntu-22.04
-            args: "--bundles deb,rpm,appimage"
+            args: "--bundles deb,rpm,appimage --config src-tauri/tauri.bundle-mcp.conf.json"
           - platform: windows-latest
-            args: ""
+            args: "--config src-tauri/tauri.bundle-mcp.conf.json"
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -113,6 +113,14 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # kino-mcp ships inside every installer as a Tauri sidecar, landing next
+      # to the app - /usr/bin on Linux, the install directory on Windows - so
+      # nobody downloads, renames or moves it. The sidecar is declared only in
+      # tauri.bundle-mcp.conf.json (passed in `args` above); see the script
+      # for why it is not in tauri.conf.json.
+      - name: Stage kino-mcp as a sidecar
+        run: node scripts/stage-kino-mcp.mjs
+
       - name: Build and upload
         uses: tauri-apps/tauri-action@v0
         env:
@@ -130,33 +138,45 @@ jobs:
           # Publishes the latest.json manifest the updater endpoint points at.
           includeUpdaterJson: true
 
-      # The MCP server is a second binary in the same crate. The installers
-      # don't carry it - it isn't a Tauri sidecar - and tauri-action uploads
-      # only bundles, so without this the sole way to get `kino-mcp` is to
-      # compile it with a full Rust toolchain. That is not a reasonable ask of
-      # someone who installed a .deb.
-      - name: Build the MCP server
-        shell: bash
-        run: cargo build --release --manifest-path src-tauri/Cargo.toml --bin kino-mcp
+      # A sidecar that silently went missing would ship installers whose MCP
+      # panel points at nothing. Windows has no equivalent one-liner for an
+      # MSI's file table, so Linux stands in for both - they share the config.
+      - name: Check the .deb carries kino-mcp
+        if: runner.os == 'Linux'
+        run: |
+          # dpkg-deb lists members as `./usr/...` or `usr/...` depending on
+          # the version that built the archive; accept both.
+          for deb in src-tauri/target/release/bundle/deb/*.deb; do
+            dpkg-deb -c "$deb" | grep -qE ' (\./)?usr/bin/kino-mcp$' \
+              || { echo "::error::$deb does not contain usr/bin/kino-mcp"; exit 1; }
+          done
 
-      - name: Name it for this platform
+      # Headless servers still need kino-mcp without the desktop app. Release
+      # assets share one flat namespace, so the platform stays in the archive
+      # name - but the file inside is already called kino-mcp (and on Linux
+      # already executable), so there is nothing to rename. Packed from the
+      # staged sidecar - the same build the installers carry.
+      - name: Package the MCP server
         id: mcp
         shell: bash
         run: |
+          src=$(ls src-tauri/binaries/kino-mcp-*)
+          stage=$(mktemp -d)
           if [ "${{ runner.os }}" = "Windows" ]; then
-            src="src-tauri/target/release/kino-mcp.exe"
-            name="kino-mcp-windows-x86_64.exe"
+            cp "$src" "$stage/kino-mcp.exe"
+            name="kino-mcp-windows-x86_64.zip"
+            # 7z is a native Windows program; keep bash paths away from it.
+            (cd "$stage" && 7z a -tzip out.zip kino-mcp.exe)
+            mv "$stage/out.zip" "$name"
           else
-            src="src-tauri/target/release/kino-mcp"
-            name="kino-mcp-linux-x86_64"
+            install -m 755 "$src" "$stage/kino-mcp"
+            name="kino-mcp-linux-x86_64.tar.gz"
+            tar -C "$stage" -czf "$name" kino-mcp
           fi
-          test -f "$src" || { echo "::error::$src was not produced"; exit 1; }
-          cp "$src" "$name"
           echo "name=$name" >> "$GITHUB_OUTPUT"
 
-      # The installers have been signed since they existed; this binary was
-      # not, and it is the one the README tells people to chmod +x into
-      # /usr/local/bin. Same key, so a user who trusts one trusts the other.
+      # The installers are signed; the standalone archive is signed with the
+      # same key, so a user who trusts one trusts the other.
       - name: Sign the MCP server
         shell: bash
         env:
