@@ -7,11 +7,12 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 ## [Unreleased]
 
 ### Changed
-- **`kino-mcp` now comes with the app.** Every installer carries it next to
-  Kino - `/usr/bin/kino-mcp` from a .deb or .rpm, the install directory on
-  Windows - and it updates with the app. There is no separate download to
-  rename, `chmod` and move, and no way for it to fall a version behind. The MCP
-  panel shows where it is and puts that full path in the config it copies.
+- **The app now uses the `kino-mcp` it was installed with.** Every installer
+  has carried it next to Kino - `/usr/bin/kino-mcp` from a .deb or .rpm, the
+  install directory on Windows - but the README said it didn't, and told you to
+  download, rename, `chmod` and move a separate copy instead. The MCP panel now
+  finds the installed one, shows where it is and puts that full path in the
+  config it copies. It updates with the app, so it cannot fall a version behind.
 - **From an AppImage, the MCP panel installs it for you.** An AppImage runs from
   a new temporary directory every launch, so its own copy cannot go in a
   config; **Install kino-mcp** copies it to `~/.local/bin/kino-mcp`, and Kino
