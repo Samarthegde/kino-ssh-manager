@@ -369,14 +369,21 @@ export interface McpHostPolicy {
   rules_text: string;
 }
 
-/** Mirrors `McpBinaryCheck`. `matches` is null unless both halves are known. */
-export interface McpBinaryCheck {
-  asset: string;
-  expected: string | null;
-  path: string | null;
-  actual: string | null;
-  matches: boolean | null;
-  detail: string | null;
+/** Mirrors `McpBinaryStatus` in mcp_binary.rs. */
+export interface McpBinaryStatus {
+  /** The copy this install carries; null in a dev build without one. */
+  bundled: string | null;
+  /** The path to put in an assistant's config, once there is a stable one. */
+  command: string | null;
+  /** Running from an AppImage, whose own copy moves every launch. */
+  needs_install: boolean;
+  install_path: string;
+  /** An installed copy exists but is not the one this version carries. */
+  install_stale: boolean;
+  /** What a bare `kino-mcp` resolves to on PATH. */
+  on_path: string | null;
+  /** false when that is a different file from the bundled one. */
+  on_path_matches: boolean | null;
 }
 
 /** Mirrors `McpConfigView` in mcp_config.rs. Carries no secrets. */
@@ -762,9 +769,11 @@ interface VaultStore {
   /** The minisign key id the updater verifies against, read from the running
    *  config so it cannot drift from the key that actually gates an install. */
   updaterKeyId: () => Promise<string | null>;
-  /** What the kino-mcp on this PATH is, against what the release says it
-   *  should be. Both halves can legitimately be unknown. */
-  checkMcpBinary: () => Promise<McpBinaryCheck>;
+  /** Where kino-mcp is, and whether a bare `kino-mcp` on PATH is this
+   *  version's copy. Local only - no network. */
+  checkMcpBinary: () => Promise<McpBinaryStatus>;
+  /** Copy the bundled kino-mcp to a stable per-user path (AppImage). */
+  installMcpBinary: () => Promise<McpBinaryStatus>;
   changeMasterPassword: (currentPassword: string, newPassword: string) => Promise<void>;
   verifyHostKey: (host: Host) => Promise<HostKeyVerdict>;
   trustHostKey: (host: Host, fingerprint: string) => Promise<void>;
@@ -1507,7 +1516,8 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
   },
 
   updaterKeyId: () => invoke<string | null>("updater_key_id"),
-  checkMcpBinary: () => invoke<McpBinaryCheck>("check_mcp_binary"),
+  checkMcpBinary: () => invoke<McpBinaryStatus>("check_mcp_binary"),
+  installMcpBinary: () => invoke<McpBinaryStatus>("install_mcp_binary"),
   checkForUpdate: async () => {
     try {
       const info = await invoke<UpdateInfo>("check_for_update");

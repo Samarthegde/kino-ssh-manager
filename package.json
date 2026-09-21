@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "bundle": "node scripts/stage-kino-mcp.mjs && tauri build --config src-tauri/tauri.bundle-mcp.conf.json"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

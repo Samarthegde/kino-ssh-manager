@@ -16,6 +16,7 @@ mod key_sweep;
 mod keygen;
 mod local_session;
 pub mod mcp;
+mod mcp_binary;
 pub mod mcp_config;
 pub mod mcp_policy;
 mod metrics;
@@ -1688,7 +1689,7 @@ fn mcp_get_config(state: State<'_, AppState>) -> Result<mcp_config::McpConfigVie
         exposed_host_ids: config.exposed_host_ids,
         configured: config.configured,
         mcp_vault_path: mcp_config::mcp_vault_path().to_string_lossy().into_owned(),
-        binary_hint: "kino-mcp".to_string(),
+        binary_hint: mcp_binary::command_hint(),
     })
 }
 
@@ -1871,6 +1872,11 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            // An AppImage update would otherwise leave assistants running the
+            // previous version's kino-mcp. Off the main thread: it may hash
+            // and copy a 17 MB file.
+            std::thread::spawn(mcp_binary::refresh_installed_copy);
+
             use tauri::menu::{Menu, MenuItem};
             use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
@@ -2026,7 +2032,8 @@ pub fn run() {
             ai::ai_cancel,
             update::check_for_update,
             update::updater_key_id,
-            update::check_mcp_binary,
+            mcp_binary::check_mcp_binary,
+            mcp_binary::install_mcp_binary,
             start_recording,
             stop_recording,
             list_recordings,

@@ -4,6 +4,28 @@ All notable changes to Kino SSH Manager are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **`kino-mcp` now comes with the app.** Every installer carries it next to
+  Kino - `/usr/bin/kino-mcp` from a .deb or .rpm, the install directory on
+  Windows - and it updates with the app. There is no separate download to
+  rename, `chmod` and move, and no way for it to fall a version behind. The MCP
+  panel shows where it is and puts that full path in the config it copies.
+- **From an AppImage, the MCP panel installs it for you.** An AppImage runs from
+  a new temporary directory every launch, so its own copy cannot go in a
+  config; **Install kino-mcp** copies it to `~/.local/bin/kino-mcp`, and Kino
+  refreshes that copy whenever the AppImage updates.
+- **The MCP panel warns about an old `kino-mcp` on your PATH.** The previous
+  instructions put it in `/usr/local/bin`, which comes before `/usr/bin`, so a
+  config naming just `kino-mcp` would keep running it. The check is now local -
+  the copy that came with the signed installer is the reference - so it no
+  longer waits on GitHub.
+- **The standalone release assets are archives**:
+  `kino-mcp-linux-x86_64.tar.gz` and `kino-mcp-windows-x86_64.zip`, each holding
+  a file already named `kino-mcp`. They are for machines without the desktop
+  app, and are signed and attested as before.
+
 ## [0.9.2] - 2026-09-11
 
 This release exists mostly to fix 0.9.1, which could not save a host. If you

@@ -73,37 +73,54 @@ saved snippets, **on the hosts you explicitly tick and no others**.
 
 ### 1. Get the binary
 
-Every release attaches it, next to the installers on the
-[releases page](https://github.com/Samarthegde/kino-ssh-manager/releases):
+**It comes with the app.** Every installer carries `kino-mcp` alongside Kino
+itself, and it updates whenever the app does:
 
-| Platform | Asset |
+| Installed from | `kino-mcp` is at |
 | --- | --- |
-| Linux | `kino-mcp-linux-x86_64` |
-| Windows | `kino-mcp-windows-x86_64.exe` |
+| `.deb` / `.rpm` | `/usr/bin/kino-mcp` - already on your `PATH` |
+| `.msi` / `.exe` | the install directory, next to Kino |
+| `.AppImage` | inside the AppImage - see below |
 
-Every release also carries `kino-mcp-<platform>.sig`, a `SHA256SUMS` covering
-every asset, and its signature. Check before you run it - this binary can reach
-the hosts you expose to it:
+The MCP panel shows the exact path and puts it in the config it gives you to
+copy, so there is nothing to find by hand.
+
+An AppImage runs from a different temporary directory every launch, so a path
+into it stops working after a restart. From an AppImage, the panel offers
+**Install kino-mcp**, which copies it to `~/.local/bin/kino-mcp`; Kino then
+refreshes that copy each time the AppImage updates.
+
+If you followed an older version of these instructions, delete the
+`/usr/local/bin/kino-mcp` you put there. It comes before `/usr/bin` on `PATH`,
+so a config that just says `kino-mcp` would keep running the old file. The
+panel warns you when this is the case.
+
+#### On a machine without the desktop app
+
+Every release also attaches the server on its own, next to the installers on
+the [releases page](https://github.com/Samarthegde/kino-ssh-manager/releases):
+
+| Platform | Asset | Contains |
+| --- | --- | --- |
+| Linux | `kino-mcp-linux-x86_64.tar.gz` | `kino-mcp`, already executable |
+| Windows | `kino-mcp-windows-x86_64.zip` | `kino-mcp.exe` |
+
+Each has a `.sig` beside it, and the release's `SHA256SUMS` (itself signed)
+covers every asset. Check before you run it - this binary can reach the hosts
+you expose to it:
 
 ```bash
-# What GitHub Actions says it built, and from which commit
-gh attestation verify kino-mcp-linux-x86_64 --repo Samarthegde/kino-ssh-manager
+# What GitHub Actions says it built, and from which commit (needs gh 2.49+)
+gh attestation verify kino-mcp-linux-x86_64.tar.gz --repo Samarthegde/kino-ssh-manager
 
 # Or against the project's signing key. Tauri base64-wraps its signatures, so
 # decode it first - minisign reads `<file>.minisig` sitting next to the file.
-base64 -d kino-mcp-linux-x86_64.sig > kino-mcp-linux-x86_64.minisig
-minisign -Vm kino-mcp-linux-x86_64 -p minisign.pub
+base64 -d kino-mcp-linux-x86_64.tar.gz.sig > kino-mcp-linux-x86_64.tar.gz.minisig
+minisign -Vm kino-mcp-linux-x86_64.tar.gz -p minisign.pub
+
+# Then unpack it straight onto your PATH
+sudo tar -xzf kino-mcp-linux-x86_64.tar.gz -C /usr/local/bin
 ```
-
-Then make it executable and put it somewhere on your `PATH`:
-
-```bash
-chmod +x kino-mcp-linux-x86_64
-sudo mv kino-mcp-linux-x86_64 /usr/local/bin/kino-mcp
-```
-
-It is not inside the `.deb`/`.rpm`/`.AppImage`/`.msi` - it's a separate download,
-because it's a server you run rather than an app you launch.
 
 Building from source works too, if you'd rather:
 
@@ -111,6 +128,10 @@ Building from source works too, if you'd rather:
 cargo build --release --manifest-path src-tauri/Cargo.toml --bin kino-mcp
 # -> src-tauri/target/release/kino-mcp
 ```
+
+To build installers that carry it, use `npm run bundle` rather than
+`npm run tauri build` - it compiles `kino-mcp` first and stages it where the
+bundler looks for it.
 
 ### 2. Configure it in Kino
 
@@ -128,7 +149,9 @@ changes, so a rotated key or a removed host takes effect immediately.
 
 ### 3. Point a client at it
 
-The server speaks MCP over stdio. For Claude Desktop or Claude Code, add:
+The server speaks MCP over stdio. The MCP panel's **Copy** button gives you
+this with the full path to your `kino-mcp` filled in. For Claude Desktop or
+Claude Code, it looks like:
 
 ```json
 {
