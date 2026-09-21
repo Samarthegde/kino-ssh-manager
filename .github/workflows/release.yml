@@ -75,9 +75,9 @@ jobs:
       matrix:
         include:
           - platform: ubuntu-22.04
-            args: "--bundles deb,rpm,appimage --config src-tauri/tauri.bundle-mcp.conf.json"
+            args: "--bundles deb,rpm,appimage"
           - platform: windows-latest
-            args: "--config src-tauri/tauri.bundle-mcp.conf.json"
+            args: ""
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -113,14 +113,6 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      # kino-mcp ships inside every installer as a Tauri sidecar, landing next
-      # to the app - /usr/bin on Linux, the install directory on Windows - so
-      # nobody downloads, renames or moves it. The sidecar is declared only in
-      # tauri.bundle-mcp.conf.json (passed in `args` above); see the script
-      # for why it is not in tauri.conf.json.
-      - name: Stage kino-mcp as a sidecar
-        run: node scripts/stage-kino-mcp.mjs
-
       - name: Build and upload
         uses: tauri-apps/tauri-action@v0
         env:
@@ -138,9 +130,13 @@ jobs:
           # Publishes the latest.json manifest the updater endpoint points at.
           includeUpdaterJson: true
 
-      # A sidecar that silently went missing would ship installers whose MCP
-      # panel points at nothing. Windows has no equivalent one-liner for an
-      # MSI's file table, so Linux stands in for both - they share the config.
+      # Tauri bundles every [[bin]] in the crate, so kino-mcp lands next to the
+      # app in each installer without any config - which is also why it must
+      # NOT be declared as a sidecar too: WiX refuses the duplicate file and
+      # the MSI fails to link. This check catches the opposite failure, a
+      # change that stops it being bundled and leaves the MCP panel pointing
+      # at nothing. Windows has no one-liner for an MSI's file table, so the
+      # .deb stands in for both.
       - name: Check the .deb carries kino-mcp
         if: runner.os == 'Linux'
         run: |
@@ -155,21 +151,20 @@ jobs:
       # assets share one flat namespace, so the platform stays in the archive
       # name - but the file inside is already called kino-mcp (and on Linux
       # already executable), so there is nothing to rename. Packed from the
-      # staged sidecar - the same build the installers carry.
+      # build tauri-action just bundled, so it is the same binary.
       - name: Package the MCP server
         id: mcp
         shell: bash
         run: |
-          src=$(ls src-tauri/binaries/kino-mcp-*)
           stage=$(mktemp -d)
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cp "$src" "$stage/kino-mcp.exe"
+            cp src-tauri/target/release/kino-mcp.exe "$stage/kino-mcp.exe"
             name="kino-mcp-windows-x86_64.zip"
             # 7z is a native Windows program; keep bash paths away from it.
             (cd "$stage" && 7z a -tzip out.zip kino-mcp.exe)
             mv "$stage/out.zip" "$name"
           else
-            install -m 755 "$src" "$stage/kino-mcp"
+            install -m 755 src-tauri/target/release/kino-mcp "$stage/kino-mcp"
             name="kino-mcp-linux-x86_64.tar.gz"
             tar -C "$stage" -czf "$name" kino-mcp
           fi

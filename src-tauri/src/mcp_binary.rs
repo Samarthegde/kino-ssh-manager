@@ -1,9 +1,10 @@
 //! Where `kino-mcp` lives, and whether the one an assistant runs is ours.
 //!
-//! The installers carry `kino-mcp` as a Tauri sidecar, so it lands next to the
-//! app's own executable: `/usr/bin` for a .deb or .rpm, the install directory
-//! on Windows. Both paths are stable, so an assistant's config can name them
-//! directly and nothing has to be downloaded, renamed or moved.
+//! Tauri bundles every binary in the crate, so each installer carries
+//! `kino-mcp` next to the app's own executable: `/usr/bin` for a .deb or .rpm,
+//! the install directory on Windows. Both paths are stable, so an assistant's
+//! config can name them directly and nothing has to be downloaded, renamed or
+//! moved.
 //!
 //! The exception is an AppImage. It runs from a fresh `/tmp/.mount_XXXX` on
 //! every launch, so a path copied out of it is dead by the next restart. There

@@ -129,9 +129,8 @@ cargo build --release --manifest-path src-tauri/Cargo.toml --bin kino-mcp
 # -> src-tauri/target/release/kino-mcp
 ```
 
-To build installers that carry it, use `npm run bundle` rather than
-`npm run tauri build` - it compiles `kino-mcp` first and stages it where the
-bundler looks for it.
+`npm run tauri build` puts it in the installers it builds, too - Tauri bundles
+every binary in the crate.
 
 ### 2. Configure it in Kino
 
