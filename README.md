@@ -194,6 +194,24 @@ this snippet with a copy button.
 - **Guarded mode currently refuses rather than asks.** The approval prompt is
   not built yet, so a call that would need approval is declined with a message
   saying so. Use rules, or full access, until it lands.
+- **Every call is recorded.** `kino-mcp` writes each tool call to
+  `mcp_audit.jsonl.enc` beside the vault - what was called, on which host, the
+  command verbatim, whether it was allowed or refused and why, the exit code,
+  and which client asked. The refused calls are recorded too: a run of
+  refusals is what an assistant testing its limits looks like. Read it in
+  **Settings → Security → MCP activity**, where it can be filtered and
+  exported as JSONL.
+
+  Each record is sealed on its own line under the **MCP** password, so the
+  headless binary can write it without ever holding your master password, and
+  appending never rewrites what is already there. A line that will not decrypt
+  is shown as unreadable rather than skipped - that is what tampering looks
+  like, and it is also what changing the MCP password looks like.
+
+  The command is stored as it was sent, so a command containing a secret puts
+  that secret in the log. The file is encrypted, stays on this machine, and is
+  never uploaded: cloud sync carries a named list of files and this is not one
+  of them, and a profile export contains a single host and nothing else.
 - **Host keys are still enforced.** `kino-mcp` refuses any host whose key hasn't
   already been trusted in the GUI - it will not trust-on-first-use. Connect once
   from Kino before expecting MCP to reach a new host.

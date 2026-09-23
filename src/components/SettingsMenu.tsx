@@ -682,6 +682,12 @@ export function SettingsMenu({ onLock }: Props) {
                       buttonLabel="Open…"
                       onClick={() => setShowAudit("updates")}
                     />
+                    <ActionItem
+                      label="MCP activity"
+                      desc="What an AI assistant did over MCP: every tool call, on which host, allowed or refused, with the command as it was sent. Recorded by kino-mcp itself, encrypted under the MCP password."
+                      buttonLabel="Open…"
+                      onClick={() => setShowAudit("activity")}
+                    />
                   </Group>
                 </>
               )}

@@ -8,6 +8,7 @@
 //!   KINO_MCP_PASSWORD=mypass kino-mcp
 
 use ssh_manager_lib::mcp::KinoMcpServer;
+use ssh_manager_lib::mcp_audit::{audit_path, AuditLog};
 use ssh_manager_lib::mcp_config;
 
 #[tokio::main]
@@ -35,7 +36,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Err("KINO_MCP_PASSWORD cannot be empty".into());
     }
 
-    let vault = mcp_config::load_mcp_vault(&password).map_err(|e| {
+    let (vault, key) = mcp_config::load_mcp_vault_and_key(&password).map_err(|e| {
         format!(
             "Failed to decrypt the MCP vault: {}\n\
              \n\
@@ -59,7 +60,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         if snippet_count == 1 { "" } else { "s" },
     );
 
-    let server = KinoMcpServer::new(vault);
+    // Every call is recorded (KR-01-F8), under the same key as the vault -
+    // the only one this process has.
+    let server = KinoMcpServer::with_audit(vault, AuditLog::new(audit_path(), key));
 
     // Serve over stdio (the standard MCP transport for local tools).
     use rmcp::ServiceExt;

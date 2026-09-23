@@ -386,6 +386,38 @@ export interface McpBinaryStatus {
   on_path_matches: boolean | null;
 }
 
+/** Mirrors `AuditRecord` in mcp_audit.rs - one MCP tool call. */
+export interface McpAuditRecord {
+  /** Unix milliseconds. */
+  ts: number;
+  tool: string;
+  host_id: string | null;
+  host_name: string | null;
+  /** The command, path or snippet, verbatim. */
+  argument: string;
+  /** "allow" or "deny". */
+  decision: string;
+  rule_id: string | null;
+  exit_code: number | null;
+  bytes_out: number | null;
+  duration_ms: number;
+  client_name: string;
+  client_version: string;
+  /** Set when the call was allowed but failed anyway. */
+  error?: string | null;
+}
+
+/** Mirrors `AuditReport` in lib.rs. */
+export interface McpAuditReport {
+  /** Newest first. */
+  entries: McpAuditRecord[];
+  /** Lines that would not decrypt - tampering, or a changed MCP password. */
+  unreadable_lines: number[];
+  total: number;
+  truncated: boolean;
+  path: string;
+}
+
 /** Mirrors `McpConfigView` in mcp_config.rs. Carries no secrets. */
 export interface McpConfig {
   /** Ids of the hosts the MCP server is allowed to reach. */
@@ -787,6 +819,8 @@ interface VaultStore {
   deleteRecording: (filename: string) => Promise<void>;
   setRecordingState: (sessionId: string, isRecording: boolean) => void;
 
+  /** Every MCP tool call that was recorded, newest first. */
+  mcpAuditRead: (limit?: number) => Promise<McpAuditReport>;
   mcpGetConfig: () => Promise<McpConfig>;
   mcpSetPassword: (password: string) => Promise<void>;
   mcpSetExposedHosts: (hostIds: string[]) => Promise<void>;
@@ -2073,6 +2107,9 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
     invoke<void>("mcp_set_host_policy", { hostId, mode, rulesText }),
   mcpSetGlobalRules: (rulesText) =>
     invoke<void>("mcp_set_global_rules", { rulesText }),
+  mcpAuditRead: async (limit?: number) => {
+    return await invoke<McpAuditReport>("mcp_audit_read", { limit });
+  },
   mcpGetConfig: async () => {
     return await invoke<McpConfig>("mcp_get_config");
   },

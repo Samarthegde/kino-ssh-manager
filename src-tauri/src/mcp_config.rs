@@ -229,6 +229,38 @@ pub fn load_mcp_vault(password: &str) -> Result<McpVault, String> {
     load_mcp_vault_at(&mcp_vault_path(), password)
 }
 
+/// The vault *and* the key it was opened with, for the audit log.
+///
+/// The caller owns the key from here: `AuditLog` zeroizes it when it drops.
+/// Separate from `load_mcp_vault` so the common path keeps wiping the key
+/// rather than handing it out by default.
+pub fn load_mcp_vault_and_key(password: &str) -> Result<(McpVault, [u8; 32]), String> {
+    let path = mcp_vault_path();
+    let vault = load_mcp_vault_at(&path, password)?;
+    let key = mcp_key_for(&path, password)?;
+    Ok((vault, key))
+}
+
+/// Re-derive the MCP key from the salt stored in an MCP vault file.
+///
+/// The app reads the audit log with this: it has the MCP password (in
+/// `mcp_config.enc`) but derives from the vault file's own salt, so the two
+/// can never drift into different keys.
+pub fn mcp_key_for(vault_file: &PathBuf, password: &str) -> Result<[u8; 32], String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
+    let bytes = std::fs::read(vault_file).map_err(|e| format!("Cannot read MCP vault: {}", e))?;
+    let enc: vault::EncryptedFile =
+        serde_json::from_slice(&bytes).map_err(|e| format!("Corrupt MCP vault: {}", e))?;
+    let salt_vec = STANDARD
+        .decode(&enc.salt)
+        .map_err(|e| format!("Corrupt MCP vault salt: {}", e))?;
+    let salt: [u8; 16] = salt_vec
+        .try_into()
+        .map_err(|_| "Invalid salt length in MCP vault".to_string())?;
+    vault::derive_key(password, &salt)
+}
+
 /// The real work, taking a path so the binary's load path can be tested rather
 /// than approximated. The salt comes from the file itself: the headless binary
 /// has only the password, and nothing else to derive a key from.

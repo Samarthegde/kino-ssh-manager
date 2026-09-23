@@ -16,6 +16,7 @@ mod key_sweep;
 mod keygen;
 mod local_session;
 pub mod mcp;
+pub mod mcp_audit;
 mod mcp_binary;
 pub mod mcp_config;
 pub mod mcp_policy;
@@ -1662,6 +1663,73 @@ fn list_active_forwards(state: State<'_, AppState>) -> Vec<String> {
 
 // ── MCP commands ────────────────────────────────────────────────────────────
 
+/// What the audit viewer gets (KR-01-F9).
+#[derive(serde::Serialize)]
+struct AuditReport {
+    /// Newest first, which is the order anyone reads a log in.
+    entries: Vec<mcp_audit::AuditRecord>,
+    /// Line numbers that would not decrypt. Shown, never hidden: this is what
+    /// tampering looks like, and it is also what a changed MCP password looks
+    /// like, so the viewer says so rather than guessing which.
+    unreadable_lines: Vec<usize>,
+    /// Records in the file, before `limit` cut anything.
+    total: usize,
+    truncated: bool,
+    path: String,
+}
+
+/// Read the MCP audit log.
+///
+/// Async because deriving the MCP key is Argon2, which is deliberately slow -
+/// on the main thread that is a frozen window every time the panel opens.
+#[tauri::command]
+async fn mcp_audit_read(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<AuditReport, String> {
+    // The guard is dropped before the await: holding a std::sync::Mutex across
+    // one is how the 0.9.1 freeze happened.
+    let password = {
+        let key_guard = state.vault_key.lock().unwrap();
+        let key = key_guard.as_ref().ok_or("Vault is locked")?;
+        mcp_config::load_config(key)?
+            .password
+            .ok_or("No MCP password is set yet, so nothing has been recorded.")?
+    };
+
+    tokio::task::spawn_blocking(move || {
+        let path = mcp_audit::audit_path();
+        let mut key = mcp_config::mcp_key_for(&mcp_config::mcp_vault_path(), &password)?;
+        let entries = mcp_audit::read_all(&path, &key);
+        use zeroize::Zeroize;
+        key.zeroize();
+        let entries = entries?;
+
+        let unreadable_lines: Vec<usize> = entries
+            .iter()
+            .filter(|e| e.record.is_none())
+            .map(|e| e.line)
+            .collect();
+        let total = entries.len();
+        let limit = limit.unwrap_or(2000);
+        let mut records: Vec<mcp_audit::AuditRecord> =
+            entries.into_iter().filter_map(|e| e.record).collect();
+        records.reverse();
+        let truncated = records.len() > limit;
+        records.truncate(limit);
+
+        Ok(AuditReport {
+            entries: records,
+            unreadable_lines,
+            total,
+            truncated,
+            path: path.to_string_lossy().into_owned(),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 fn mcp_get_config(state: State<'_, AppState>) -> Result<mcp_config::McpConfigView, String> {
     let key_guard = state.vault_key.lock().unwrap();
@@ -2032,6 +2100,7 @@ pub fn run() {
             ai::ai_cancel,
             update::check_for_update,
             update::updater_key_id,
+            mcp_audit_read,
             mcp_binary::check_mcp_binary,
             mcp_binary::install_mcp_binary,
             start_recording,

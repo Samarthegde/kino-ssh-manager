@@ -6,6 +6,17 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 
 ## [Unreleased]
 
+### Added
+- **A record of what an assistant did over MCP.** `kino-mcp` now writes every
+  tool call to `mcp_audit.jsonl.enc`: the tool, the host, the command
+  verbatim, allowed or refused and why, the exit code, how long it took, how
+  much came back, and which client asked. Refused calls are recorded too.
+  **Settings → Security → MCP activity** shows it, filtered by host, by
+  allowed or refused, and by date, and exports the result as JSONL.
+  Each record is sealed on its own line under the MCP password - the headless
+  binary never holds your master password - and a line that will not decrypt
+  is reported rather than quietly skipped.
+
 ### Changed
 - **The app now uses the `kino-mcp` it was installed with.** Every installer
   has carried it next to Kino - `/usr/bin/kino-mcp` from a .deb or .rpm, the

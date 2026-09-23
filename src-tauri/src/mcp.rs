@@ -4,6 +4,7 @@
 //! can list hosts, execute commands, and transfer files on the hosts the
 //! user explicitly chose to share.
 
+use crate::mcp_audit::{AuditLog, AuditRecord};
 use crate::mcp_config::McpVault;
 use crate::mcp_policy::{self, Decision, HostPolicy, McpMode};
 use crate::ssh_session;
@@ -12,13 +13,22 @@ use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
 use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 /// The MCP server state. Holds the decrypted hosts and snippets that were
 /// exported from the Kino vault under the MCP password.
 #[derive(Clone)]
 pub struct KinoMcpServer {
     vault: Arc<McpVault>,
+    /// Where each call is recorded. `None` in tests and in any build that
+    /// could not open the log - a call the policy allows still runs, and the
+    /// failure is reported to stderr rather than swallowed.
+    audit: Option<Arc<AuditLog>>,
+    /// Who is connected, from the MCP handshake. `unknown` until `initialize`
+    /// arrives, and never omitted: a record that quietly drops the client is
+    /// one you cannot trace back to a machine.
+    client: Arc<Mutex<(String, String)>>,
     /// Built by the `#[tool_router]` macro and read by `#[tool_handler]`; the
     /// field looks unused to the compiler because both are generated.
     #[allow(dead_code)]
@@ -29,7 +39,62 @@ impl KinoMcpServer {
     pub fn new(vault: McpVault) -> Self {
         Self {
             vault: Arc::new(vault),
+            audit: None,
+            client: Arc::new(Mutex::new(("unknown".into(), "unknown".into()))),
             tool_router: Self::tool_router(),
+        }
+    }
+
+    /// The server as `kino-mcp` runs it: every call recorded.
+    pub fn with_audit(vault: McpVault, audit: AuditLog) -> Self {
+        Self {
+            audit: Some(Arc::new(audit)),
+            ..Self::new(vault)
+        }
+    }
+
+    fn client_id(&self) -> (String, String) {
+        self.client
+            .lock()
+            .map(|c| c.clone())
+            .unwrap_or_else(|_| ("unknown".into(), "unknown".into()))
+    }
+
+    /// Record one finished call.
+    ///
+    /// Best effort by design: if the log cannot be written, the call still
+    /// returns. The alternative - refusing calls the policy allowed because a
+    /// disk is full - trades a gap in the record for an outage.
+    fn record(
+        &self,
+        tool: &str,
+        host: Option<&Host>,
+        argument: &str,
+        started: Instant,
+        outcome: Outcome,
+    ) {
+        let Some(log) = &self.audit else { return };
+        let (client_name, client_version) = self.client_id();
+        let record = AuditRecord {
+            ts: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0),
+            tool: tool.to_string(),
+            host_id: host.map(|h| h.id.clone()),
+            host_name: host.map(|h| h.name.clone()),
+            argument: argument.to_string(),
+            decision: outcome.decision.to_string(),
+            rule_id: outcome.rule_id,
+            exit_code: outcome.exit_code,
+            bytes_out: outcome.bytes_out,
+            duration_ms: started.elapsed().as_millis() as u64,
+            client_name,
+            client_version,
+            error: outcome.error,
+        };
+        if let Err(e) = log.append(&record) {
+            eprintln!("[kino-mcp] could not write the audit record: {e}");
         }
     }
 
@@ -58,9 +123,47 @@ impl KinoMcpServer {
     ///
     /// This runs before any connection is opened, so a refused call costs the
     /// host nothing and leaves no trace on it.
-    fn gate(&self, host: &Host, tool: &str, argument: &str) -> Option<CallToolResult> {
+    fn gate(
+        &self,
+        host: &Host,
+        tool: &str,
+        argument: &str,
+        started: Instant,
+    ) -> Option<CallToolResult> {
         let policy = self.policy_for(host);
-        match mcp_policy::evaluate(&policy, &self.vault.global_rules, tool, argument) {
+        let decision = mcp_policy::evaluate(&policy, &self.vault.global_rules, tool, argument);
+        // Recorded here rather than in each tool: a refusal returns early, and
+        // the one call that forgot to record it would be the interesting one.
+        //
+        // A refusal with no rule behind it - the read-only default, or guarded
+        // mode with nobody to ask - records the reason in `rule_id`'s place.
+        // Otherwise the record says a call was refused without saying why,
+        // which is the one thing it exists to answer.
+        let why = match &decision {
+            Decision::Deny { reason, rule_id } => {
+                Some(rule_id.clone().unwrap_or_else(|| (*reason).to_string()))
+            }
+            Decision::Ask { rule_id } => Some(
+                rule_id
+                    .clone()
+                    .unwrap_or_else(|| "approval_unavailable".to_string()),
+            ),
+            Decision::Allow => None,
+        };
+        if let Some(rule_id) = why {
+            self.record(
+                tool,
+                Some(host),
+                argument,
+                started,
+                Outcome {
+                    decision: "deny",
+                    rule_id: Some(rule_id),
+                    ..Default::default()
+                },
+            );
+        }
+        match decision {
             Decision::Allow => None,
 
             // No approval broker exists yet, so guarded mode refuses rather
@@ -89,6 +192,38 @@ impl KinoMcpServer {
                 };
                 Some(refusal(host, tool, policy.mode, reason, rule_id, &message))
             }
+        }
+    }
+}
+
+/// How a call ended, for the record. Defaults to an allowed call that
+/// produced nothing worth noting, so each tool sets only what it knows.
+#[derive(Default)]
+struct Outcome {
+    /// `allow` or `deny`. A call refused because the host or snippet does not
+    /// exist is a `deny` too, with `error` saying which - it never reached a
+    /// policy, and calling it an allow would be a lie in the other direction.
+    decision: &'static str,
+    rule_id: Option<String>,
+    exit_code: Option<i32>,
+    bytes_out: Option<usize>,
+    error: Option<String>,
+}
+
+impl Outcome {
+    fn allowed() -> Outcome {
+        Outcome {
+            decision: "allow",
+            ..Default::default()
+        }
+    }
+
+    /// The call named something this server cannot see.
+    fn not_found(what: &str) -> Outcome {
+        Outcome {
+            decision: "deny",
+            error: Some(what.to_string()),
+            ..Default::default()
         }
     }
 }
@@ -169,6 +304,7 @@ impl KinoMcpServer {
         description = "List all SSH hosts available in the Kino vault. Returns name, hostname, port, username, group, and OS for each host."
     )]
     async fn list_hosts(&self) -> Result<CallToolResult, McpError> {
+        let started = Instant::now();
         let list: Vec<serde_json::Value> = self
             .vault
             .hosts
@@ -188,6 +324,16 @@ impl KinoMcpServer {
             })
             .collect();
         let json = serde_json::to_string_pretty(&list).unwrap_or_default();
+        self.record(
+            "list_hosts",
+            None,
+            "",
+            started,
+            Outcome {
+                bytes_out: Some(json.len()),
+                ..Outcome::allowed()
+            },
+        );
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
     }
 
@@ -199,9 +345,17 @@ impl KinoMcpServer {
         &self,
         Parameters(params): Parameters<HostParams>,
     ) -> Result<CallToolResult, McpError> {
+        let started = Instant::now();
         let h = match self.find_host(&params.host) {
             Some(h) => h,
             None => {
+                self.record(
+                    "get_host",
+                    None,
+                    &params.host,
+                    started,
+                    Outcome::not_found("host not found"),
+                );
                 return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                     "Host '{}' not found. Use list_hosts to see available hosts.",
                     params.host
@@ -229,9 +383,18 @@ impl KinoMcpServer {
             }).collect::<Vec<_>>(),
             "on_connect_snippets": h.on_connect_snippets,
         });
-        Ok(CallToolResult::success(vec![ContentBlock::text(
-            serde_json::to_string_pretty(&info).unwrap_or_default(),
-        )]))
+        let json = serde_json::to_string_pretty(&info).unwrap_or_default();
+        self.record(
+            "get_host",
+            Some(h),
+            "",
+            started,
+            Outcome {
+                bytes_out: Some(json.len()),
+                ..Outcome::allowed()
+            },
+        );
+        Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
     }
 
     /// Execute a command on a remote SSH host.
@@ -242,9 +405,17 @@ impl KinoMcpServer {
         &self,
         Parameters(params): Parameters<ExecParams>,
     ) -> Result<CallToolResult, McpError> {
+        let started = Instant::now();
         let h = match self.find_host(&params.host) {
             Some(h) => h,
             None => {
+                self.record(
+                    "ssh_exec",
+                    None,
+                    &params.command,
+                    started,
+                    Outcome::not_found("host not found"),
+                );
                 return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                     "Host '{}' not found. Use list_hosts to see available hosts.",
                     params.host
@@ -252,7 +423,7 @@ impl KinoMcpServer {
             }
         };
 
-        if let Some(refused) = self.gate(h, "ssh_exec", &params.command) {
+        if let Some(refused) = self.gate(h, "ssh_exec", &params.command, started) {
             return Ok(refused);
         }
 
@@ -261,6 +432,19 @@ impl KinoMcpServer {
         // the useful part, and collapsing them into an error string loses both.
         match ssh_session::exec_once_full(h, &params.command).await {
             Ok(out) => {
+                self.record(
+                    "ssh_exec",
+                    Some(h),
+                    &params.command,
+                    started,
+                    Outcome {
+                        // u32 on the wire, i32 in the record: a shell status
+                        // is 0-255, and i32 is what every reader expects.
+                        exit_code: out.code.map(|c| c as i32),
+                        bytes_out: Some(out.stdout.len() + out.stderr.len()),
+                        ..Outcome::allowed()
+                    },
+                );
                 let result = serde_json::json!({
                     "host": h.name,
                     "command": params.command,
@@ -273,10 +457,22 @@ impl KinoMcpServer {
                 )]))
             }
             // Only a transport/auth failure lands here; the command never ran.
-            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "Could not run the command on '{}': {}",
-                h.name, e
-            ))])),
+            Err(e) => {
+                self.record(
+                    "ssh_exec",
+                    Some(h),
+                    &params.command,
+                    started,
+                    Outcome {
+                        error: Some(e.to_string()),
+                        ..Outcome::allowed()
+                    },
+                );
+                Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                    "Could not run the command on '{}': {}",
+                    h.name, e
+                ))]))
+            }
         }
     }
 
@@ -288,27 +484,59 @@ impl KinoMcpServer {
         &self,
         Parameters(params): Parameters<PathParams>,
     ) -> Result<CallToolResult, McpError> {
+        let started = Instant::now();
         let h = match self.find_host(&params.host) {
             Some(h) => h,
             None => {
+                self.record(
+                    "sftp_list",
+                    None,
+                    &params.path,
+                    started,
+                    Outcome::not_found("host not found"),
+                );
                 return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                     "Host '{}' not found.",
                     params.host
-                ))]))
+                ))]));
             }
         };
 
-        if let Some(refused) = self.gate(h, "sftp_list", &params.path) {
+        if let Some(refused) = self.gate(h, "sftp_list", &params.path, started) {
             return Ok(refused);
         }
 
         let cmd = format!("ls -la {}", crate::exec::shell_quote(&params.path));
         match ssh_session::exec_once(h, &cmd).await {
-            Ok(output) => Ok(CallToolResult::success(vec![ContentBlock::text(output)])),
-            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "Failed to list '{}' on '{}': {}",
-                params.path, h.name, e
-            ))])),
+            Ok(output) => {
+                self.record(
+                    "sftp_list",
+                    Some(h),
+                    &params.path,
+                    started,
+                    Outcome {
+                        bytes_out: Some(output.len()),
+                        ..Outcome::allowed()
+                    },
+                );
+                Ok(CallToolResult::success(vec![ContentBlock::text(output)]))
+            }
+            Err(e) => {
+                self.record(
+                    "sftp_list",
+                    Some(h),
+                    &params.path,
+                    started,
+                    Outcome {
+                        error: Some(e.to_string()),
+                        ..Outcome::allowed()
+                    },
+                );
+                Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                    "Failed to list '{}' on '{}': {}",
+                    params.path, h.name, e
+                ))]))
+            }
         }
     }
 
@@ -320,23 +548,41 @@ impl KinoMcpServer {
         &self,
         Parameters(params): Parameters<PathParams>,
     ) -> Result<CallToolResult, McpError> {
+        let started = Instant::now();
         let h = match self.find_host(&params.host) {
             Some(h) => h,
             None => {
+                self.record(
+                    "sftp_read",
+                    None,
+                    &params.path,
+                    started,
+                    Outcome::not_found("host not found"),
+                );
                 return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                     "Host '{}' not found.",
                     params.host
-                ))]))
+                ))]));
             }
         };
 
-        if let Some(refused) = self.gate(h, "sftp_read", &params.path) {
+        if let Some(refused) = self.gate(h, "sftp_read", &params.path, started) {
             return Ok(refused);
         }
 
         let cmd = format!("cat {}", crate::exec::shell_quote(&params.path));
         match ssh_session::exec_once(h, &cmd).await {
             Ok(output) => {
+                self.record(
+                    "sftp_read",
+                    Some(h),
+                    &params.path,
+                    started,
+                    Outcome {
+                        bytes_out: Some(output.len()),
+                        ..Outcome::allowed()
+                    },
+                );
                 let result = serde_json::json!({
                     "path": params.path,
                     "host": h.name,
@@ -346,10 +592,22 @@ impl KinoMcpServer {
                     serde_json::to_string_pretty(&result).unwrap_or_default(),
                 )]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "Failed to read '{}' on '{}': {}",
-                params.path, h.name, e
-            ))])),
+            Err(e) => {
+                self.record(
+                    "sftp_read",
+                    Some(h),
+                    &params.path,
+                    started,
+                    Outcome {
+                        error: Some(e.to_string()),
+                        ..Outcome::allowed()
+                    },
+                );
+                Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                    "Failed to read '{}' on '{}': {}",
+                    params.path, h.name, e
+                ))]))
+            }
         }
     }
 
@@ -361,17 +619,25 @@ impl KinoMcpServer {
         &self,
         Parameters(params): Parameters<WriteParams>,
     ) -> Result<CallToolResult, McpError> {
+        let started = Instant::now();
         let h = match self.find_host(&params.host) {
             Some(h) => h,
             None => {
+                self.record(
+                    "sftp_write",
+                    None,
+                    &params.path,
+                    started,
+                    Outcome::not_found("host not found"),
+                );
                 return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                     "Host '{}' not found.",
                     params.host
-                ))]))
+                ))]));
             }
         };
 
-        if let Some(refused) = self.gate(h, "sftp_write", &params.path) {
+        if let Some(refused) = self.gate(h, "sftp_write", &params.path, started) {
             return Ok(refused);
         }
 
@@ -389,14 +655,40 @@ impl KinoMcpServer {
             crate::exec::shell_quote(&params.path)
         );
         match ssh_session::exec_once(h, &cmd).await {
-            Ok(_) => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-                "Successfully wrote to '{}' on '{}'",
-                params.path, h.name
-            ))])),
-            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "Failed to write '{}' on '{}': {}",
-                params.path, h.name, e
-            ))])),
+            Ok(_) => {
+                // The content's size, not the reply's: what was written is the
+                // part worth knowing afterwards.
+                self.record(
+                    "sftp_write",
+                    Some(h),
+                    &params.path,
+                    started,
+                    Outcome {
+                        bytes_out: Some(params.content.len()),
+                        ..Outcome::allowed()
+                    },
+                );
+                Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                    "Successfully wrote to '{}' on '{}'",
+                    params.path, h.name
+                ))]))
+            }
+            Err(e) => {
+                self.record(
+                    "sftp_write",
+                    Some(h),
+                    &params.path,
+                    started,
+                    Outcome {
+                        error: Some(e.to_string()),
+                        ..Outcome::allowed()
+                    },
+                );
+                Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                    "Failed to write '{}' on '{}': {}",
+                    params.path, h.name, e
+                ))]))
+            }
         }
     }
 
@@ -405,6 +697,7 @@ impl KinoMcpServer {
         description = "List all command snippets available in the Kino vault. Snippets are reusable blocks of shell commands."
     )]
     async fn list_snippets(&self) -> Result<CallToolResult, McpError> {
+        let started = Instant::now();
         let list: Vec<serde_json::Value> = self
             .vault
             .snippets
@@ -418,6 +711,16 @@ impl KinoMcpServer {
             })
             .collect();
         let json = serde_json::to_string_pretty(&list).unwrap_or_default();
+        self.record(
+            "list_snippets",
+            None,
+            "",
+            started,
+            Outcome {
+                bytes_out: Some(json.len()),
+                ..Outcome::allowed()
+            },
+        );
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
     }
 
@@ -429,13 +732,21 @@ impl KinoMcpServer {
         &self,
         Parameters(params): Parameters<RunSnippetParams>,
     ) -> Result<CallToolResult, McpError> {
+        let started = Instant::now();
         let h = match self.find_host(&params.host) {
             Some(h) => h,
             None => {
+                self.record(
+                    "run_snippet",
+                    None,
+                    &params.snippet,
+                    started,
+                    Outcome::not_found("host not found"),
+                );
                 return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                     "Host '{}' not found.",
                     params.host
-                ))]))
+                ))]));
             }
         };
 
@@ -448,20 +759,39 @@ impl KinoMcpServer {
         let snip = match snip {
             Some(s) => s,
             None => {
+                self.record(
+                    "run_snippet",
+                    Some(h),
+                    &params.snippet,
+                    started,
+                    Outcome::not_found("snippet not found"),
+                );
                 return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                     "Snippet '{}' not found. Use list_snippets to see available snippets.",
                     params.snippet
-                ))]))
+                ))]));
             }
         };
 
         // The snippet's *commands*, not its name: a rule is about what runs.
-        if let Some(refused) = self.gate(h, "run_snippet", &snip.commands) {
+        if let Some(refused) = self.gate(h, "run_snippet", &snip.commands, started) {
             return Ok(refused);
         }
 
         match ssh_session::exec_once(h, &snip.commands).await {
             Ok(output) => {
+                // The commands, not the snippet's name: the record has to say
+                // what ran, and a snippet can be edited afterwards.
+                self.record(
+                    "run_snippet",
+                    Some(h),
+                    &snip.commands,
+                    started,
+                    Outcome {
+                        bytes_out: Some(output.len()),
+                        ..Outcome::allowed()
+                    },
+                );
                 let result = serde_json::json!({
                     "snippet": snip.name,
                     "host": h.name,
@@ -471,10 +801,22 @@ impl KinoMcpServer {
                     serde_json::to_string_pretty(&result).unwrap_or_default(),
                 )]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "Failed to run snippet '{}' on '{}': {}",
-                snip.name, h.name, e
-            ))])),
+            Err(e) => {
+                self.record(
+                    "run_snippet",
+                    Some(h),
+                    &snip.commands,
+                    started,
+                    Outcome {
+                        error: Some(e.to_string()),
+                        ..Outcome::allowed()
+                    },
+                );
+                Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                    "Failed to run snippet '{}' on '{}': {}",
+                    snip.name, h.name, e
+                ))]))
+            }
         }
     }
 }
@@ -483,6 +825,40 @@ impl KinoMcpServer {
 impl ServerHandler for KinoMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    }
+
+    /// Remember who connected (KR-01-F12).
+    ///
+    /// Read from the peer after the handshake rather than by overriding
+    /// `initialize`, which would mean reimplementing protocol negotiation
+    /// around a helper rmcp keeps to itself.
+    ///
+    /// The client reports its own name and version, so this is a label, not an
+    /// identity: it says which assistant *claims* to be calling. That is what
+    /// makes a record traceable, and nothing is decided on it.
+    async fn on_initialized(
+        &self,
+        context: rmcp::service::NotificationContext<rmcp::service::RoleServer>,
+    ) {
+        let Some(info) = context.peer.peer_info() else {
+            return;
+        };
+        let name = info.client_info.name.trim();
+        let version = info.client_info.version.trim();
+        if let Ok(mut client) = self.client.lock() {
+            *client = (
+                if name.is_empty() {
+                    "unknown".into()
+                } else {
+                    name.to_string()
+                },
+                if version.is_empty() {
+                    "unknown".into()
+                } else {
+                    version.to_string()
+                },
+            );
+        }
     }
 }
 
@@ -560,6 +936,29 @@ mod tests {
         })
     }
 
+    /// The same server, recording to a log of its own.
+    fn recording_server(
+        mode: McpMode,
+        rules: &str,
+    ) -> (KinoMcpServer, tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp_audit.jsonl.enc");
+        let plain = server(mode, rules);
+        let s = KinoMcpServer::with_audit(
+            (*plain.vault).clone(),
+            crate::mcp_audit::AuditLog::new(path.clone(), [3u8; 32]),
+        );
+        (s, dir, path)
+    }
+
+    fn records(path: &std::path::PathBuf) -> Vec<crate::mcp_audit::AuditRecord> {
+        crate::mcp_audit::read_all(path, &[3u8; 32])
+            .unwrap()
+            .into_iter()
+            .filter_map(|e| e.record)
+            .collect()
+    }
+
     fn text(r: &CallToolResult) -> String {
         r.content
             .iter()
@@ -579,6 +978,125 @@ mod tests {
                 command: command.into(),
             })))
             .unwrap()
+    }
+
+    // ── The record (KR-01-F8) ───────────────────────────────────────────────
+    //
+    // The policy tests above prove a call is refused. These prove the refusal
+    // is *written down* - the question "what did it try at 2am?" is answerable
+    // only if the calls that were stopped are recorded too, not just the ones
+    // that ran.
+
+    #[test]
+    fn a_refused_call_is_recorded_with_the_command_that_was_attempted() {
+        let (s, _dir, path) = recording_server(McpMode::ReadOnly, "");
+        exec(&s, "rm -rf /var");
+
+        let recorded = records(&path);
+        assert_eq!(recorded.len(), 1);
+        let r = &recorded[0];
+        assert_eq!(r.decision, "deny");
+        assert_eq!(r.tool, "ssh_exec");
+        assert_eq!(r.argument, "rm -rf /var", "verbatim, not summarised");
+        assert_eq!(r.host_name.as_deref(), Some("web-prod"));
+        assert_eq!(
+            r.rule_id.as_deref(),
+            Some("default_deny"),
+            "a refusal with no rule behind it still says why"
+        );
+        assert!(r.ts > 0);
+    }
+
+    #[test]
+    fn an_allowed_call_that_fails_to_connect_is_recorded_as_allowed() {
+        // Port 1 on loopback: the policy let it through, the host refused the
+        // connection. "Refused by a rule" and "ran into a closed port" must
+        // not read alike in the record.
+        let (s, _dir, path) = recording_server(McpMode::Full, "");
+        exec(&s, "uptime");
+
+        let recorded = records(&path);
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].decision, "allow");
+        assert!(recorded[0].error.is_some(), "the transport failure is kept");
+        assert_eq!(recorded[0].argument, "uptime");
+    }
+
+    #[test]
+    fn a_guarded_refusal_records_that_nobody_could_be_asked() {
+        // Until the approval broker lands, guarded refuses. The record has to
+        // say that is why - not leave it looking like a rule said no.
+        let (s, _dir, path) = recording_server(McpMode::Guarded, "");
+        exec(&s, "systemctl restart nginx");
+        let recorded = records(&path);
+        assert_eq!(recorded[0].decision, "deny");
+        assert_eq!(recorded[0].rule_id.as_deref(), Some("approval_unavailable"));
+    }
+
+    #[test]
+    fn a_metadata_call_is_recorded_without_a_host() {
+        let (s, _dir, path) = recording_server(McpMode::ReadOnly, "");
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(s.list_hosts())
+            .unwrap();
+
+        let recorded = records(&path);
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].tool, "list_hosts");
+        assert_eq!(recorded[0].decision, "allow");
+        assert_eq!(recorded[0].host_id, None);
+    }
+
+    #[test]
+    fn a_call_naming_a_host_that_is_not_exposed_is_recorded() {
+        // How probing for hosts it cannot see looks from here.
+        let (s, _dir, path) = recording_server(McpMode::ReadOnly, "");
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(s.ssh_exec(Parameters(ExecParams {
+                host: "db-prod".into(),
+                command: "uptime".into(),
+            })))
+            .unwrap();
+
+        let recorded = records(&path);
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].decision, "deny");
+        assert_eq!(recorded[0].error.as_deref(), Some("host not found"));
+        assert_eq!(recorded[0].host_name, None);
+    }
+
+    #[test]
+    fn every_call_is_recorded_in_order() {
+        let (s, _dir, path) = recording_server(McpMode::ReadOnly, "");
+        exec(&s, "one");
+        exec(&s, "two");
+        exec(&s, "three");
+        let args: Vec<String> = records(&path).into_iter().map(|r| r.argument).collect();
+        assert_eq!(args, ["one", "two", "three"]);
+    }
+
+    #[test]
+    fn the_client_is_unknown_until_it_says_otherwise() {
+        // KR-01-F12: never omitted, so a record always names something.
+        let (s, _dir, path) = recording_server(McpMode::ReadOnly, "");
+        exec(&s, "uptime");
+        let recorded = records(&path);
+        assert_eq!(recorded[0].client_name, "unknown");
+        assert_eq!(recorded[0].client_version, "unknown");
+    }
+
+    #[test]
+    fn a_server_without_a_log_still_answers() {
+        // The desktop app's own tests, and any build where the log could not
+        // be opened: recording is best effort, refusing calls is not.
+        let r = exec(&server(McpMode::ReadOnly, ""), "uptime");
+        assert_eq!(r.is_error, Some(true));
     }
 
     #[test]
