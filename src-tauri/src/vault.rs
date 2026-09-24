@@ -162,7 +162,18 @@ pub fn save_encrypted<T: Serialize + ?Sized>(
 
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
     let json = serde_json::to_vec(&enc_file).map_err(|e| e.to_string())?;
-    std::fs::write(path, json).map_err(|e| e.to_string())?;
+
+    // Written beside the target and renamed over it, so a reader never sees a
+    // half-written file. `kino-mcp` re-reads `mcp_vault.enc` whenever it
+    // changes, and a plain write let it catch the file mid-rewrite - which
+    // looks exactly like a vault it cannot decrypt. A crash mid-write used to
+    // truncate the real thing; now it leaves a stray temp file instead.
+    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+    std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e.to_string()
+    })?;
     Ok(())
 }
 

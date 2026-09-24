@@ -57,6 +57,14 @@ pub struct McpConfig {
     /// removed from the list) never reached the file the AI actually reads.
     #[serde(default)]
     pub password: Option<String>,
+    /// How long an approval prompt stays answerable (KR-01-F5). Travels in
+    /// the exposed vault too: `kino-mcp` needs it, and cannot read this file.
+    #[serde(default = "default_approval_timeout")]
+    pub approval_timeout_secs: u32,
+}
+
+fn default_approval_timeout() -> u32 {
+    crate::mcp_approval::DEFAULT_TIMEOUT_SECS
 }
 
 /// One host's policy as the editor works with it: a mode, and the rules in
@@ -65,6 +73,9 @@ pub struct McpConfig {
 pub struct HostPolicyView {
     pub mode: String,
     pub rules_text: String,
+    /// Calls a minute, and bytes per call. 0 means no limit.
+    pub max_calls_per_min: u32,
+    pub max_bytes_per_call: usize,
 }
 
 /// The view returned to the frontend (no secrets).
@@ -79,6 +90,8 @@ pub struct McpConfigView {
     pub host_policies: HashMap<String, HostPolicyView>,
     /// The global rule block in its text form, ready for the editor.
     pub global_rules_text: String,
+    /// Seconds a guarded-mode prompt waits for an answer.
+    pub approval_timeout_secs: u32,
     /// Set when the settings exist but could not be read, so the panel can say
     /// why everything looks empty instead of implying it always was.
     pub problem: Option<String>,
@@ -94,6 +107,7 @@ pub fn build_mcp_vault(
     exposed_ids: &[String],
     host_policies: &HashMap<String, HostPolicy>,
     global_rules: &[Rule],
+    approval_timeout_secs: u32,
 ) -> McpVault {
     let hosts: Vec<Host> = all_hosts
         .iter()
@@ -130,6 +144,7 @@ pub fn build_mcp_vault(
         snippets,
         policies,
         global_rules: global_rules.to_vec(),
+        approval_timeout_secs,
     }
 }
 
@@ -187,6 +202,9 @@ pub fn save_config(config: &McpConfig, key: &[u8; 32], salt: &[u8; 16]) -> Resul
 pub struct McpVault {
     pub hosts: Vec<Host>,
     pub snippets: Vec<Snippet>,
+    /// Seconds an approval prompt waits before the call is refused.
+    #[serde(default = "default_approval_timeout")]
+    pub approval_timeout_secs: u32,
     /// One entry per exposed host, written explicitly even when it is the
     /// default, so the vault says what it means without the reader guessing.
     #[serde(default)]
@@ -198,21 +216,23 @@ pub struct McpVault {
 /// Build and write the MCP vault: filter hosts to only those in
 /// `exposed_host_ids`, include any snippets they reference, encrypt the
 /// bundle under the MCP password, and write to `mcp_vault.enc`.
+/// Takes the whole config rather than five of its fields: every one of them
+/// decides what an assistant can reach, and a caller that passes them
+/// separately can pass the wrong host's policies with the right host's list.
 pub fn export_mcp_vault(
     all_hosts: &[Host],
     all_snippets: &[Snippet],
-    exposed_ids: &[String],
-    host_policies: &HashMap<String, HostPolicy>,
-    global_rules: &[Rule],
+    config: &McpConfig,
     mcp_password: &str,
     mcp_salt: &[u8; 16],
 ) -> Result<(), String> {
     let vault = build_mcp_vault(
         all_hosts,
         all_snippets,
-        exposed_ids,
-        host_policies,
-        global_rules,
+        &config.exposed_host_ids,
+        &config.host_policies,
+        &config.global_rules,
+        config.approval_timeout_secs,
     );
     let mcp_key = vault::derive_key(mcp_password, mcp_salt)?;
     save_encrypted(&mcp_vault_path(), &vault, &mcp_key, mcp_salt)?;
@@ -227,6 +247,38 @@ pub fn export_mcp_vault(
 /// Load the MCP vault (used by the `kino-mcp` binary).
 pub fn load_mcp_vault(password: &str) -> Result<McpVault, String> {
     load_mcp_vault_at(&mcp_vault_path(), password)
+}
+
+/// The vault *and* the key it was opened with, for the audit log.
+///
+/// The caller owns the key from here: `AuditLog` zeroizes it when it drops.
+/// Separate from `load_mcp_vault` so the common path keeps wiping the key
+/// rather than handing it out by default.
+pub fn load_mcp_vault_and_key(password: &str) -> Result<(McpVault, [u8; 32]), String> {
+    let path = mcp_vault_path();
+    let vault = load_mcp_vault_at(&path, password)?;
+    let key = mcp_key_for(&path, password)?;
+    Ok((vault, key))
+}
+
+/// Re-derive the MCP key from the salt stored in an MCP vault file.
+///
+/// The app reads the audit log with this: it has the MCP password (in
+/// `mcp_config.enc`) but derives from the vault file's own salt, so the two
+/// can never drift into different keys.
+pub fn mcp_key_for(vault_file: &PathBuf, password: &str) -> Result<[u8; 32], String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
+    let bytes = std::fs::read(vault_file).map_err(|e| format!("Cannot read MCP vault: {}", e))?;
+    let enc: vault::EncryptedFile =
+        serde_json::from_slice(&bytes).map_err(|e| format!("Corrupt MCP vault: {}", e))?;
+    let salt_vec = STANDARD
+        .decode(&enc.salt)
+        .map_err(|e| format!("Corrupt MCP vault salt: {}", e))?;
+    let salt: [u8; 16] = salt_vec
+        .try_into()
+        .map_err(|_| "Invalid salt length in MCP vault".to_string())?;
+    vault::derive_key(password, &salt)
 }
 
 /// The real work, taking a path so the binary's load path can be tested rather
@@ -370,6 +422,7 @@ mod tests {
             HostPolicy {
                 mode: McpMode::Guarded,
                 rules: vec![],
+                ..Default::default()
             },
         );
         config.host_policies.insert(
@@ -377,6 +430,7 @@ mod tests {
             HostPolicy {
                 mode: McpMode::Full,
                 rules: vec![],
+                ..Default::default()
             },
         );
         save_encrypted(&path, &config, &key, &[3u8; 16]).unwrap();
@@ -396,6 +450,7 @@ mod tests {
             &["h1".to_string()],
             &no_policies(),
             &[],
+            crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
         );
         assert_eq!(v.hosts.len(), 1);
         assert_eq!(v.hosts[0].name, "web-prod");
@@ -410,6 +465,7 @@ mod tests {
             &[],
             &no_policies(),
             &[],
+            crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
         );
         assert!(v.hosts.is_empty());
         assert!(v.snippets.is_empty());
@@ -423,6 +479,7 @@ mod tests {
             &["deleted".to_string()],
             &no_policies(),
             &[],
+            crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
         );
         assert!(v.hosts.is_empty());
     }
@@ -435,6 +492,7 @@ mod tests {
             &["h1".to_string()],
             &no_policies(),
             &[],
+            crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
         );
         assert_eq!(v.snippets.len(), 1);
         assert_eq!(v.snippets[0].name, "setup");
@@ -448,6 +506,7 @@ mod tests {
             &["h2".to_string()],
             &no_policies(),
             &[],
+            crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
         );
         assert!(v2.snippets.is_empty());
     }
@@ -462,6 +521,7 @@ mod tests {
             &["h1".to_string(), "h2".to_string()],
             &no_policies(),
             &[],
+            crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
         );
         assert_eq!(v.policies.len(), 2);
         assert_eq!(v.policies["h1"].mode, McpMode::ReadOnly);
@@ -476,6 +536,7 @@ mod tests {
             HostPolicy {
                 mode: McpMode::Full,
                 rules: crate::mcp_policy::parse_rules("deny rm -rf *", "host").unwrap(),
+                ..Default::default()
             },
         );
         let v = build_mcp_vault(
@@ -484,6 +545,7 @@ mod tests {
             &["h1".to_string()],
             &policies,
             &crate::mcp_policy::parse_rules("deny shutdown *", "global").unwrap(),
+            crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
         );
         assert_eq!(v.policies["h1"].mode, McpMode::Full);
         assert_eq!(v.policies["h1"].rules.len(), 1);
@@ -500,6 +562,7 @@ mod tests {
             HostPolicy {
                 mode: McpMode::Full,
                 rules: vec![],
+                ..Default::default()
             },
         );
         let v = build_mcp_vault(
@@ -508,6 +571,7 @@ mod tests {
             &["h1".to_string()],
             &policies,
             &[],
+            crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
         );
         assert!(!v.policies.contains_key("h2"));
         assert_eq!(v.policies.len(), 1);
@@ -523,6 +587,7 @@ mod tests {
             &["h1".to_string()],
             &no_policies(),
             &[],
+            crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
         );
         assert_eq!(v.hosts[0].password.as_deref(), Some("secret"));
     }
@@ -567,6 +632,7 @@ mod tests {
             snippets,
             policies: no_policies(),
             global_rules: vec![],
+            approval_timeout_secs: crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
         };
         save_encrypted(&path, &vault, &key, &salt).unwrap();
         let loaded: McpVault = load_encrypted(&path, &key).unwrap();
@@ -590,6 +656,7 @@ mod tests {
             &["h1".to_string()],
             &no_policies(),
             &[],
+            crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
         );
         save_encrypted(&path, &built, &key, &salt).unwrap();
 
@@ -611,6 +678,7 @@ mod tests {
             &["h1".to_string()],
             &no_policies(),
             &[],
+            crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
         );
         save_encrypted(&path, &built, &key, &salt).unwrap();
 
@@ -629,6 +697,7 @@ mod tests {
             snippets: vec![],
             policies: no_policies(),
             global_rules: vec![],
+            approval_timeout_secs: crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
         };
         save_encrypted(&path, &vault, &key, &salt).unwrap();
 

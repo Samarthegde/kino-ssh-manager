@@ -80,6 +80,7 @@ itself, and it updates whenever the app does:
 | --- | --- |
 | `.deb` / `.rpm` | `/usr/bin/kino-mcp` - already on your `PATH` |
 | `.msi` / `.exe` | the install directory, next to Kino |
+| `.app` / `.dmg` | inside the `.app` bundle, next to the main binary |
 | `.AppImage` | inside the AppImage - see below |
 
 The MCP panel shows the exact path and puts it in the config it gives you to
@@ -104,6 +105,7 @@ the [releases page](https://github.com/Samarthegde/kino-ssh-manager/releases):
 | --- | --- | --- |
 | Linux | `kino-mcp-linux-x86_64.tar.gz` | `kino-mcp`, already executable |
 | Windows | `kino-mcp-windows-x86_64.zip` | `kino-mcp.exe` |
+| macOS | `kino-mcp-macos-aarch64.tar.gz` | `kino-mcp`, already executable |
 
 Each has a `.sig` beside it, and the release's `SHA256SUMS` (itself signed)
 covers every asset. Check before you run it - this binary can reach the hosts
@@ -144,7 +146,13 @@ every binary in the crate.
   entirely, so the assistant cannot see it, name it, or reach it.
 
 Kino rewrites `mcp_vault.enc` whenever a host, a snippet or the exposure list
-changes, so a rotated key or a removed host takes effect immediately.
+changes, and a running `kino-mcp` picks the change up on its next call - so
+unticking a host, tightening a mode or adding a rule takes effect without
+restarting your assistant. It checks the file's timestamp per call and only
+re-reads when it actually changed, because deriving the key is deliberately
+slow. Changing the **MCP password** is the exception: that rewrites the file
+under a new key, and the running server refuses every call, saying so, until
+it is restarted with the new password.
 
 ### 3. Point a client at it
 
@@ -191,9 +199,51 @@ this snippet with a copy button.
   mistaken for it: a deny rule catches `rm -rf /`, and catches nothing that
   assembles itself at runtime. The read-only default is the boundary that
   actually holds, because it refuses what it was not told to permit.
-- **Guarded mode currently refuses rather than asks.** The approval prompt is
-  not built yet, so a call that would need approval is declined with a message
-  saying so. Use rules, or full access, until it lands.
+- **Guarded mode asks you.** A call no rule covers stops, and Kino shows the
+  command exactly as it was sent, with the host, the client that asked and a
+  countdown. You can approve it once, approve it for as long as that
+  `kino-mcp` keeps running, or refuse. Refusing is the default, and nothing
+  runs while the prompt is up.
+
+  If Kino is closed, or the vault is locked, the call is refused
+  **immediately** and the refusal says which of the two it was, rather than
+  leaving an assistant waiting two minutes for a prompt nobody can see. Same
+  if nobody answers in time. The prompt arrives over a Unix socket beside the
+  vault, mode `0600`, so another user on the machine cannot answer for you.
+  Windows has no channel yet: there, a guarded call is still refused, with a
+  message saying so.
+- **Each host has limits.** 60 calls a minute and 256 KiB returned per call by
+  default, both editable per host next to its rules. Over the rate, calls are
+  refused with `rate_limited` until the minute passes; over the size, the reply
+  is cut and says `…[truncated N bytes]` in the output itself, so an assistant
+  cannot summarise a log from its first page and present that as the whole. The
+  audit record keeps the untruncated size. 0 turns either limit off, and the
+  count is per host and held in memory, so restarting `kino-mcp` clears it.
+- **Commands on guarded and full hosts are recorded.** `ssh_exec` and
+  `run_snippet` write an asciicast into *Kino Recordings*, named after the
+  host, and the activity view has a Replay button for each. It is a
+  transcript rather than a live capture: an MCP call hands back its output at
+  the end, so the cast is the command and then its output, without the pauses
+  between. Read-only hosts are not recorded - they run only what a rule
+  already named.
+- **Every call is recorded.** `kino-mcp` writes each tool call to
+  `mcp_audit.jsonl.enc` beside the vault - what was called, on which host, the
+  command verbatim, whether it was allowed or refused and why, the exit code,
+  and which client asked. The refused calls are recorded too: a run of
+  refusals is what an assistant testing its limits looks like. Read it in
+  **Settings → Security → MCP activity**, where it can be filtered and
+  exported as JSONL.
+
+  Each record is sealed on its own line under the **MCP** password, so the
+  headless binary can write it without ever holding your master password, and
+  appending never rewrites what is already there. A line that will not decrypt
+  is shown as unreadable rather than skipped - that is what tampering looks
+  like, and it is also what changing the MCP password looks like.
+
+  The command is stored as it was sent, so a command containing a secret puts
+  that secret in the log. The file is encrypted, stays on this machine, and is
+  never uploaded: cloud sync carries a named list of files and this is not one
+  of them, and a profile export contains a single host and nothing else.
 - **Host keys are still enforced.** `kino-mcp` refuses any host whose key hasn't
   already been trusted in the GUI - it will not trust-on-first-use. Connect once
   from Kino before expecting MCP to reach a new host.
@@ -250,7 +300,7 @@ First launch asks you to create a vault. The master password has no recovery - i
 ```bash
 npm run tauri build
 ```
-Output lands in `src-tauri/target/release/bundle/` - `.deb`, `.rpm` and `.AppImage` on Linux, `.msi` and `.exe` on Windows.
+Output lands in `src-tauri/target/release/bundle/` - `.deb`, `.rpm` and `.AppImage` on Linux, `.msi` and `.exe` on Windows, and `.app` and `.dmg` on macOS.
 
 ### A throwaway vault, for demos and testing
 Kino keeps everything under the platform's local data directory, which on Linux follows `XDG_DATA_HOME`. Pointing that elsewhere gives you a completely separate, empty vault, leaving your real one untouched:

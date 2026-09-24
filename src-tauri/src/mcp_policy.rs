@@ -95,13 +95,47 @@ pub struct Rule {
     pub note: Option<String>,
 }
 
+/// Calls per minute a host allows before refusing (KR-01-F11).
+pub const DEFAULT_CALLS_PER_MIN: u32 = 60;
+/// Bytes one call may return before the rest is cut with a marker.
+pub const DEFAULT_BYTES_PER_CALL: usize = 256 * 1024;
+
+fn default_calls_per_min() -> u32 {
+    DEFAULT_CALLS_PER_MIN
+}
+
+fn default_bytes_per_call() -> usize {
+    DEFAULT_BYTES_PER_CALL
+}
+
 /// The policy attached to one exposed host.
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct HostPolicy {
     #[serde(default)]
     pub mode: McpMode,
     #[serde(default)]
     pub rules: Vec<Rule>,
+    /// 0 means no limit. The `serde` defaults matter: a vault written before
+    /// these existed has neither field, and without them both would read as
+    /// 0 - every limit silently off on exactly the hosts nobody revisited.
+    #[serde(default = "default_calls_per_min")]
+    pub max_calls_per_min: u32,
+    #[serde(default = "default_bytes_per_call")]
+    pub max_bytes_per_call: usize,
+}
+
+/// Hand-written rather than derived: a derived `Default` would give 0 for both
+/// limits, and 0 means *no limit* - the opposite of what a host with no policy
+/// should get.
+impl Default for HostPolicy {
+    fn default() -> Self {
+        HostPolicy {
+            mode: McpMode::default(),
+            rules: Vec::new(),
+            max_calls_per_min: DEFAULT_CALLS_PER_MIN,
+            max_bytes_per_call: DEFAULT_BYTES_PER_CALL,
+        }
+    }
 }
 
 /// What the policy decided, and enough about why to say so usefully.
@@ -285,6 +319,24 @@ pub fn rules_to_text(rules: &[Rule]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_policy_saved_before_limits_existed_gets_the_defaults() {
+        // Every vault written before KR-01-F11 has neither field. Without the
+        // serde defaults both would read as 0, which means "no limit" - the
+        // limits would be off on exactly the hosts nobody has revisited.
+        let old = r#"{"mode":"read_only","rules":[]}"#;
+        let p: super::HostPolicy = serde_json::from_str(old).unwrap();
+        assert_eq!(p.max_calls_per_min, super::DEFAULT_CALLS_PER_MIN);
+        assert_eq!(p.max_bytes_per_call, super::DEFAULT_BYTES_PER_CALL);
+    }
+
+    #[test]
+    fn a_host_with_no_policy_at_all_gets_the_defaults_too() {
+        let p = super::HostPolicy::default();
+        assert_eq!(p.max_calls_per_min, 60);
+        assert_eq!(p.max_bytes_per_call, 256 * 1024);
+    }
+
     use super::*;
 
     fn rule(effect: &str, pattern: &str) -> Rule {
@@ -298,7 +350,11 @@ mod tests {
     }
 
     fn policy(mode: McpMode, rules: Vec<Rule>) -> HostPolicy {
-        HostPolicy { mode, rules }
+        HostPolicy {
+            mode,
+            rules,
+            ..Default::default()
+        }
     }
 
     // ── The default is the whole point ──────────────────────────────────────

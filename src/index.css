@@ -3485,6 +3485,70 @@ textarea.mono {
 .patch-table tr:last-child td { border-bottom: 0; }
 .patch-table tr.security td:first-child { color: var(--red); }
 
+/* The approval prompt. Above every other modal: something is blocked on it,
+ * and it expires on its own. */
+.approval-overlay { z-index: 300; }
+.approval-modal { max-width: 620px; }
+
+.approval-countdown {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--subtle);
+  padding: 2px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+}
+
+.approval-countdown.urgent { color: var(--red); border-color: var(--red); }
+.approval-body { padding: 0 16px 8px; }
+
+/* The command, in full. Wrapped rather than truncated: a command elided in
+ * the middle is exactly the one somebody approves by mistake. */
+.approval-command {
+  margin: 10px 0;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--red);
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 220px;
+  overflow-y: auto;
+  color: var(--text);
+}
+
+/* Deny sits apart from the two approvals, so the dangerous pair is never
+ * where the harmless button was a moment ago. */
+.approval-foot { display: flex; justify-content: space-between; gap: 12px; }
+.approval-approve { display: flex; gap: 8px; }
+
+/* Per-host limits, under the rule editor they belong to. */
+.mcp-limits { display: flex; gap: 12px; margin-top: 6px; }
+.mcp-limits-hint { margin-top: 10px; }
+.mcp-limit { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--subtle); }
+.mcp-limit input { width: 80px; margin: 0; padding: 2px 6px; }
+
+/* The record of what an assistant did. Wide, and read newest-first, so the
+ * command gets the room and everything else stays out of its way. */
+.activity-table td { font-size: 11.5px; }
+.activity-when { white-space: nowrap; color: var(--subtle); }
+.activity-client { color: var(--subtle); opacity: 0.7; font-size: 10.5px; }
+
+/* The command, verbatim: wrapped rather than truncated, because a command cut
+ * off at the column width is exactly the part worth reading. */
+.activity-what {
+  max-width: 360px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  color: var(--text);
+}
+
+.activity-detail { color: var(--subtle); font-size: 10.5px; margin-top: 2px; }
+.activity-replay { margin-top: 4px; padding: 1px 8px; font-size: 10.5px; }
+.activity-filter { width: auto; margin: 0 6px 0 0; padding: 2px 6px; font-size: 11.5px; }
+
 /* ── Production guard ────────────────────────────────────────────────────────
  * The frame goes on the terminal viewport, not the tab. A tab is small, it is
  * one of several, and it is not where you are looking when you type.
@@ -6078,21 +6142,19 @@ textarea.mono,
 
 /* ── MCP server ──────────────────────────────────────────────────────────────*/
 
-.mcp-modal {
-  width: min(680px, 96vw);
-  max-width: none;
-  height: min(720px, 92vh);
-  max-height: 92vh;
-  display: flex;
-  flex-direction: column;
-}
-
 .mcp-body {
   flex: 1;
   min-height: 0;
   overflow: auto;
   padding-top: 12px;
 }
+
+/* MCP lives in Settings rather than a modal: it had outgrown one. The client
+ * config alone is a path plus JSON, which a 680px column could only scroll
+ * sideways, and the rule editor sat below the fold on a laptop. */
+.mcp-inline { display: flex; flex-direction: column; max-width: 860px; }
+.mcp-inline .mcp-body { overflow: visible; padding-top: 0; }
+.mcp-inline .mcp-foot { padding: 14px 0 4px; border-top: 1px solid var(--rule); }
 
 .mcp-intro {
   font-family: var(--font-sans);
@@ -6262,8 +6324,41 @@ textarea.mono,
   color: var(--red);
 }
 
+/* The open row, so it is obvious which host the editor below belongs to. */
+.mcp-host.editing {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border-left-color: var(--accent);
+}
+
+.mcp-rules-toggle { display: inline-flex; align-items: center; gap: 6px; }
+.mcp-rules-toggle .mcp-badge { margin: 0; }
+
+.mcp-chevron {
+  display: inline-block;
+  font-size: 9px;
+  transform: rotate(-90deg);
+  transition: transform 140ms ease;
+}
+
+.mcp-rules-toggle.open .mcp-chevron { transform: rotate(0deg); }
+
+/* A panel attached to its host, rather than a textarea floating under the
+ * list where it read as part of the next row. */
 .mcp-rules {
-  padding-left: 25px;
+  margin: 4px 0 2px 25px;
+  padding: 10px 12px;
+  border-left: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+}
+
+.mcp-rules-title {
+  margin: 0 0 6px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--subtle);
 }
 
 .mcp-rules .mcp-hint { margin: 0 0 6px; }
@@ -6308,8 +6403,10 @@ textarea.mono,
   border: 1px solid var(--rule);
   padding: 11px 13px;
   margin: 0 0 8px;
-  overflow-x: auto;
-  white-space: pre;
+  /* Wrapped, not side-scrolled: the value worth reading here is the full path
+     to kino-mcp, and a horizontal scrollbar hides exactly the end of it. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .mcp-config-actions {

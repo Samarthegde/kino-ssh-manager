@@ -2,21 +2,24 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
 import { pasteToSession } from "../terminalRegistry";
+import { ReplayModal } from "./ReplayModal";
 import {
   AuditReport,
   HostAudit,
   HostPatches,
   HostProbe,
   KeyOnDisk,
+  McpAuditRecord,
+  McpAuditReport,
   RotateOutcome,
   SshGrade,
   SweepReport,
   useVaultStore,
 } from "../store";
 
-/** Which check the panel opens on. The settings menu lists all four, so each
+/** Which check the panel opens on. The settings menu lists all five, so each
  *  entry has to land on the one it names. */
-export type SecurityView = "keys" | "disk" | "transport" | "updates";
+export type SecurityView = "keys" | "disk" | "transport" | "updates" | "activity";
 
 interface Props {
   onClose: () => void;
@@ -93,6 +96,7 @@ export function SecurityPanel({ onClose, initialView = "keys" }: Props) {
     writeTextFile,
     checkPatches,
     connectToHost,
+    mcpAuditRead,
     hosts,
   } = useVaultStore();
   const [view, setView] = useState<SecurityView>(initialView);
@@ -105,6 +109,14 @@ export function SecurityPanel({ onClose, initialView = "keys" }: Props) {
   const [progress, setProgress] = useState<string>("");
   const [outcome, setOutcome] = useState<{ id: string; result: RotateOutcome } | null>(null);
   const [showClean, setShowClean] = useState(false);
+  const [activity, setActivity] = useState<McpAuditReport | null>(null);
+  /** The cast being watched, if any. */
+  const [replaying, setReplaying] = useState<string | null>(null);
+  const [loadingActivity, setLoadingActivity] = useState(false);
+  /** Filters for the record (KR-01-F9). "" means every one. */
+  const [actHost, setActHost] = useState("");
+  const [actDecision, setActDecision] = useState("");
+  const [actDays, setActDays] = useState("");
   const [patches, setPatches] = useState<HostPatches[] | null>(null);
   const [scanningPatches, setScanningPatches] = useState(false);
   const [openPatch, setOpenPatch] = useState<string | null>(null);
@@ -142,6 +154,53 @@ export function SecurityPanel({ onClose, initialView = "keys" }: Props) {
   }, [auditKeys]);
 
   useEffect(() => { void load(); }, [load]);
+
+  const loadActivity = useCallback(async () => {
+    setLoadingActivity(true);
+    try {
+      setActivity(await mcpAuditRead());
+      setError(null);
+    } catch (e) {
+      // "No MCP password is set yet" is the ordinary state for anyone not
+      // using MCP, so it reads as a fact, not a failure.
+      setActivity(null);
+      setError(String(e));
+    } finally {
+      setLoadingActivity(false);
+    }
+  }, [mcpAuditRead]);
+
+  // Only when the tab is opened: reading the log derives an Argon2 key, which
+  // is not worth doing for someone looking at vault keys.
+  useEffect(() => {
+    if (view === "activity" && !activity && !loadingActivity) void loadActivity();
+  }, [view, activity, loadingActivity, loadActivity]);
+
+  /** The records after the filters, newest first (the backend's order). */
+  const activityRows = useMemo(() => {
+    const rows = activity?.entries ?? [];
+    const since = actDays ? Date.now() - Number(actDays) * 86_400_000 : 0;
+    return rows.filter(
+      (r) =>
+        (!actHost || r.host_id === actHost) &&
+        (!actDecision || r.decision === actDecision) &&
+        (!since || r.ts >= since)
+    );
+  }, [activity, actHost, actDecision, actDays]);
+
+  async function exportActivity() {
+    if (!activityRows.length) return;
+    const stamp = new Date().toISOString().slice(0, 10);
+    const path = await save({
+      title: "Export MCP activity",
+      defaultPath: `kino-mcp-activity-${stamp}.jsonl`,
+      filters: [{ name: "JSONL", extensions: ["jsonl"] }],
+    });
+    if (!path) return;
+    // Decrypted, one record per line, exactly what was filtered on screen.
+    await writeTextFile(path, activityRows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+    setExported(`Exported ${activityRows.length} record${activityRows.length === 1 ? "" : "s"} to ${path}`);
+  }
 
   // The backend narrates rotation step by step; without it the button would sit
   // there for the length of two SSH handshakes with nothing to show for itself.
@@ -786,9 +845,105 @@ export function SecurityPanel({ onClose, initialView = "keys" }: Props) {
     });
   }
 
+  function renderActivity() {
+    if (!activity) {
+      return (
+        <div className="docker-empty">
+          Nothing has been recorded yet. The record starts once an MCP password is set and an
+          assistant connects.
+        </div>
+      );
+    }
+    if (activity.total === 0) {
+      return (
+        <div className="docker-empty">
+          No MCP calls recorded yet. Every call an assistant makes lands here - including the
+          ones a policy refuses.
+        </div>
+      );
+    }
+    if (activityRows.length === 0) {
+      return <div className="docker-empty">No records match these filters.</div>;
+    }
+    return (
+      <table className="patch-table activity-table">
+        <thead>
+          <tr>
+            <th>When</th>
+            <th>Host</th>
+            <th>Tool</th>
+            <th>What</th>
+            <th>Result</th>
+          </tr>
+        </thead>
+        <tbody>
+          {activityRows.map((r, i) => (
+            <tr key={`${r.ts}-${i}`}>
+              <td className="mono activity-when">{new Date(r.ts).toLocaleString()}</td>
+              <td>
+                {r.host_name ?? "-"}
+                <div className="activity-client">
+                  {r.client_name} {r.client_version}
+                </div>
+              </td>
+              <td className="mono">{r.tool}</td>
+              <td className="activity-what mono">{r.argument || "-"}</td>
+              <td>
+                {renderOutcomeCell(r)}
+                {r.recording && (
+                  <button
+                    className="btn btn-sm activity-replay"
+                    onClick={() => setReplaying(r.recording!)}
+                  >
+                    Replay
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+  }
+
+  /** Refused, ran, or ran and broke - three different things. */
+  function renderOutcomeCell(r: McpAuditRecord) {
+    if (r.decision === "deny") {
+      return (
+        <>
+          <span className="audit-chip sev-high">refused</span>
+          {r.rule_id && <div className="activity-detail">rule {r.rule_id}</div>}
+          {r.error && <div className="activity-detail">{r.error}</div>}
+        </>
+      );
+    }
+    if (r.error) {
+      return (
+        <>
+          <span className="audit-chip sev-medium">failed</span>
+          <div className="activity-detail">{r.error}</div>
+        </>
+      );
+    }
+    return (
+      <>
+        <span className="audit-chip sev-low">
+          {r.exit_code === null || r.exit_code === 0 ? "ran" : `exit ${r.exit_code}`}
+        </span>
+        <div className="activity-detail">
+          {r.bytes_out !== null && `${r.bytes_out} B · `}
+          {r.duration_ms} ms
+        </div>
+      </>
+    );
+  }
+
   return (
     <div className="modal-overlay" onClick={() => { if (!rotatingId) onClose(); }}>
       <div className="modal audit-modal" onClick={(e) => e.stopPropagation()}>
+        {replaying && (
+          <ReplayModal filename={replaying} onClose={() => setReplaying(null)} />
+        )}
         <div className="modal-header">
           <h2>Security</h2>
           <button className="icon-btn" onClick={onClose} disabled={!!rotatingId}>✕</button>
@@ -819,10 +974,70 @@ export function SecurityPanel({ onClose, initialView = "keys" }: Props) {
           >
             Updates
           </button>
+          <button
+            className={`audit-tab ${view === "activity" ? "on" : ""}`}
+            onClick={() => setView("activity")}
+          >
+            MCP activity
+          </button>
         </div>
 
         <div className="audit-toolbar">
-          {view === "updates" ? (
+          {view === "activity" ? (
+            <>
+              <div className="audit-summary">
+                <select
+                  className="mcp-input activity-filter"
+                  value={actHost}
+                  onChange={(e) => setActHost(e.target.value)}
+                >
+                  <option value="">Every host</option>
+                  {hosts.map((h) => (
+                    <option key={h.id} value={h.id}>
+                      {h.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="mcp-input activity-filter"
+                  value={actDecision}
+                  onChange={(e) => setActDecision(e.target.value)}
+                >
+                  <option value="">Allowed and refused</option>
+                  <option value="allow">Allowed</option>
+                  <option value="deny">Refused</option>
+                </select>
+                <select
+                  className="mcp-input activity-filter"
+                  value={actDays}
+                  onChange={(e) => setActDays(e.target.value)}
+                >
+                  <option value="">All time</option>
+                  <option value="1">Last 24 hours</option>
+                  <option value="7">Last 7 days</option>
+                  <option value="30">Last 30 days</option>
+                </select>
+                <span className="audit-scope">
+                  {activityRows.length} of {activity?.total ?? 0} record
+                  {(activity?.total ?? 0) === 1 ? "" : "s"}
+                </span>
+              </div>
+              <button
+                className="btn btn-sm"
+                onClick={() => void exportActivity()}
+                disabled={!activityRows.length}
+              >
+                Export
+              </button>
+              <button
+                className="btn btn-sm"
+                onClick={() => void loadActivity()}
+                disabled={loadingActivity}
+              >
+                Reload
+              </button>
+            </>
+          ) : view === "updates" ? (
             <>
               {patches && (
                 <div className="audit-summary">
@@ -928,7 +1143,24 @@ export function SecurityPanel({ onClose, initialView = "keys" }: Props) {
         {error && <p className="form-error">{error}</p>}
 
         <div className="audit-body">
-          {view === "updates" ? (
+          {view === "activity" && !!activity?.unreadable_lines.length && (
+            <div className="mcp-warn">
+              {activity.unreadable_lines.length} record
+              {activity.unreadable_lines.length === 1 ? "" : "s"} could not be read (line
+              {activity.unreadable_lines.length === 1 ? " " : "s "}
+              {activity.unreadable_lines.slice(0, 10).join(", ")}
+              {activity.unreadable_lines.length > 10 && ", …"}). Either the MCP password changed
+              since they were written, or the file was altered. They are counted here but cannot
+              be shown.
+            </div>
+          )}
+          {view === "activity" ? (
+            loadingActivity && !activity ? (
+              <div className="docker-empty">Reading the record…</div>
+            ) : (
+              renderActivity()
+            )
+          ) : view === "updates" ? (
             scanningPatches && !patches ? (
               <div className="docker-empty">Asking each host…</div>
             ) : (
@@ -974,7 +1206,9 @@ export function SecurityPanel({ onClose, initialView = "keys" }: Props) {
         </div>
 
         <p className="audit-footnote">
-          {view === "updates"
+          {view === "activity"
+            ? "Every MCP tool call is recorded, including the refused ones - a run of refusals is what an assistant testing its limits looks like. Each record is encrypted on its own line under the MCP password, so kino-mcp can write it without ever holding your master password, and a line that will not decrypt is reported rather than hidden."
+            : view === "updates"
             ? "The answer comes from each host's own package manager, never a vulnerability database, so this works with no internet beyond SSH itself. Applying opens a terminal with the command ready rather than running it: an upgrade needs sudo and may stop to ask something only you can answer."
             : view === "disk"
             ? "Keys are read and described, never decrypted and never copied. A key with no passphrase is protected only by the filesystem, and anything running as you can read it - which is what a compromised package in your project would do first."

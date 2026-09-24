@@ -1,9 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { McpBinaryStatus, McpConfig, McpMode, useVaultStore } from "../store";
-
-interface Props {
-  onClose: () => void;
-}
 
 /**
  * The MCP server's control panel.
@@ -28,15 +24,35 @@ const MODE_BLURB: Record<McpMode, string> = {
   full: "No policy at all. The assistant has the access you have.",
 };
 
-type PolicyDraft = { mode: McpMode; rulesText: string };
+/** Rules the user has actually written - blank lines and comments are not
+ *  rules, and a badge that counts them would be lying. */
+function ruleCount(text: string): number {
+  return text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("#")).length;
+}
 
-export function McpSettingsModal({ onClose }: Props) {
+type PolicyDraft = {
+  mode: McpMode;
+  rulesText: string;
+  /** Calls a minute and KiB per call, as typed. 0 means no limit. */
+  callsPerMin: number;
+  kibPerCall: number;
+};
+
+/** What a host gets before anyone edits it - the backend's own defaults. */
+const DEFAULT_CALLS_PER_MIN = 60;
+const DEFAULT_KIB_PER_CALL = 256;
+
+export function McpSettingsPanel() {
   const {
     mcpGetConfig,
     mcpSetPassword,
     mcpSetExposedHosts,
     mcpSetHostPolicy,
     mcpSetGlobalRules,
+    mcpSetApprovalTimeout,
     checkMcpBinary,
     installMcpBinary,
     hosts,
@@ -57,9 +73,19 @@ export function McpSettingsModal({ onClose }: Props) {
   const [copied, setCopied] = useState(false);
   const [policies, setPolicies] = useState<Record<string, PolicyDraft>>({});
   const [globalRules, setGlobalRules] = useState("");
+  const [approvalTimeout, setApprovalTimeout] = useState(120);
   const [editingRules, setEditingRules] = useState<string | null>(null);
   /** A host whose jump to full access is waiting to be confirmed by name. */
   const [pendingFull, setPendingFull] = useState<string | null>(null);
+  const rulesRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // The editor opens *below* the host that was clicked, which on a long list
+  // is easy to miss entirely - the button looked like it had done nothing.
+  // Moving focus into it settles that: the caret is where the typing goes,
+  // and the browser scrolls it into view for us.
+  useEffect(() => {
+    if (editingRules) rulesRef.current?.focus();
+  }, [editingRules]);
 
   useEffect(() => {
     mcpGetConfig()
@@ -68,10 +94,17 @@ export function McpSettingsModal({ onClose }: Props) {
         setExposed(new Set(c.exposed_host_ids));
         const drafts: Record<string, PolicyDraft> = {};
         for (const [id, p] of Object.entries(c.host_policies)) {
-          drafts[id] = { mode: p.mode, rulesText: p.rules_text };
+          drafts[id] = {
+            mode: p.mode,
+            rulesText: p.rules_text,
+            callsPerMin: p.max_calls_per_min,
+            // Bytes on the wire, KiB in the box: nobody wants to type 262144.
+            kibPerCall: Math.round(p.max_bytes_per_call / 1024),
+          };
         }
         setPolicies(drafts);
         setGlobalRules(c.global_rules_text);
+        setApprovalTimeout(c.approval_timeout_secs || 120);
       })
       .catch((e) => setError(String(e)));
   }, [mcpGetConfig]);
@@ -81,7 +114,14 @@ export function McpSettingsModal({ onClose }: Props) {
   /** A host with no saved policy is read-only. The panel says so rather than
    *  showing a blank, because the default is the thing worth being sure of. */
   function draft(id: string): PolicyDraft {
-    return policies[id] ?? { mode: "read_only", rulesText: "" };
+    return (
+      policies[id] ?? {
+        mode: "read_only",
+        rulesText: "",
+        callsPerMin: DEFAULT_CALLS_PER_MIN,
+        kibPerCall: DEFAULT_KIB_PER_CALL,
+      }
+    );
   }
 
   function setDraft(id: string, patch: Partial<PolicyDraft>) {
@@ -121,10 +161,11 @@ export function McpSettingsModal({ onClose }: Props) {
       if (password) await mcpSetPassword(password);
       await mcpSetExposedHosts(Array.from(exposed));
       await mcpSetGlobalRules(globalRules);
+      await mcpSetApprovalTimeout(approvalTimeout);
       // Only the exposed hosts: a policy for a host nobody shares is noise.
       for (const id of exposed) {
         const d = draft(id);
-        await mcpSetHostPolicy(id, d.mode, d.rulesText);
+        await mcpSetHostPolicy(id, d.mode, d.rulesText, d.callsPerMin, d.kibPerCall * 1024);
       }
       setConfig(await mcpGetConfig());
       setPassword("");
@@ -171,14 +212,8 @@ export function McpSettingsModal({ onClose }: Props) {
   }
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal mcp-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <h2>MCP server</h2>
-          <button className="icon-btn" onClick={onClose}>✕</button>
-        </div>
-
-        <div className="mcp-body">
+    <div className="mcp-inline">
+      <div className="mcp-body">
           <p className="mcp-intro">
             Lets an AI assistant list hosts, run commands and read or write files over SSH -
             but only on the hosts you tick below. Everything else in your vault stays invisible
@@ -245,7 +280,12 @@ export function McpSettingsModal({ onClose }: Props) {
                   const on = exposed.has(h.id);
                   const d = draft(h.id);
                   return (
-                    <div key={h.id} className={`mcp-host ${on ? "on" : ""}`}>
+                    <div
+                      key={h.id}
+                      className={`mcp-host ${on ? "on" : ""} ${
+                        editingRules === h.id ? "editing" : ""
+                      }`}
+                    >
                       <label className="mcp-host-tick">
                         <input type="checkbox" checked={on} onChange={() => toggleHost(h.id)} />
                         <span className="mcp-host-name">{h.name}</span>
@@ -274,12 +314,24 @@ export function McpSettingsModal({ onClose }: Props) {
                               </option>
                             ))}
                           </select>
+                          {/* A disclosure, not a button that appears to do
+                              nothing: it says which way it will go, and how
+                              many rules are already there to be found. */}
                           <button
                             type="button"
-                            className="btn btn-sm"
+                            className={`btn btn-sm mcp-rules-toggle ${
+                              editingRules === h.id ? "open" : ""
+                            }`}
+                            aria-expanded={editingRules === h.id}
                             onClick={() => setEditingRules(editingRules === h.id ? null : h.id)}
                           >
-                            Rules
+                            <span className="mcp-chevron" aria-hidden="true">
+                              ▾
+                            </span>
+                            {editingRules === h.id ? "Hide rules" : "Rules & limits"}
+                            {ruleCount(d.rulesText) > 0 && editingRules !== h.id && (
+                              <span className="mcp-badge">{ruleCount(d.rulesText)}</span>
+                            )}
                           </button>
                           <span className="mcp-mode-blurb">{MODE_BLURB[d.mode]}</span>
                         </div>
@@ -313,6 +365,7 @@ export function McpSettingsModal({ onClose }: Props) {
 
                       {on && editingRules === h.id && (
                         <div className="mcp-rules">
+                          <p className="mcp-rules-title">Rules for {h.name}</p>
                           <p className="mcp-hint">
                             One rule per line: <code>allow</code>, <code>deny</code> or{" "}
                             <code>ask</code>, then a pattern. <code>*</code> matches anything;
@@ -322,18 +375,78 @@ export function McpSettingsModal({ onClose }: Props) {
                             mistakes, not someone determined to get around them.
                           </p>
                           <textarea
+                            ref={rulesRef}
                             rows={4}
                             className="mcp-rules-text mono"
                             value={d.rulesText}
                             onChange={(e) => setDraft(h.id, { rulesText: e.target.value })}
                             placeholder={"allow systemctl status *\ndeny rm -rf *"}
                           />
+
+                          <p className="mcp-hint mcp-limits-hint">
+                            Limits for this host. An assistant in a retry loop opens a connection
+                            per call, and a single read of a large log costs real money on its
+                            way into the model. 0 turns a limit off.
+                          </p>
+                          <div className="mcp-limits">
+                            <label className="mcp-limit">
+                              <span>Calls a minute</span>
+                              <input
+                                type="number"
+                                min={0}
+                                className="mcp-input"
+                                value={d.callsPerMin}
+                                onChange={(e) =>
+                                  setDraft(h.id, {
+                                    callsPerMin: Math.max(0, Number(e.target.value) || 0),
+                                  })
+                                }
+                              />
+                            </label>
+                            <label className="mcp-limit">
+                              <span>KiB per call</span>
+                              <input
+                                type="number"
+                                min={0}
+                                className="mcp-input"
+                                value={d.kibPerCall}
+                                onChange={(e) =>
+                                  setDraft(h.id, {
+                                    kibPerCall: Math.max(0, Number(e.target.value) || 0),
+                                  })
+                                }
+                              />
+                            </label>
+                          </div>
                         </div>
                       )}
                     </div>
                   );
                 })
               )}
+            </div>
+          </section>
+
+          <section className="mcp-section">
+            <p className="mcp-section-title">Guarded mode</p>
+            <p className="mcp-hint">
+              A call on a guarded host that no rule covers stops and asks you here, showing the
+              command as it was sent. Nothing runs until you approve it, and if nobody answers in
+              time it is refused. Kino has to be running and unlocked - otherwise the call is
+              refused straight away rather than waiting.
+            </p>
+            <div className="mcp-limits">
+              <label className="mcp-limit">
+                <span>Seconds to answer</span>
+                <input
+                  type="number"
+                  min={10}
+                  max={600}
+                  className="mcp-input"
+                  value={approvalTimeout}
+                  onChange={(e) => setApprovalTimeout(Number(e.target.value) || 120)}
+                />
+              </label>
             </div>
           </section>
 
@@ -440,7 +553,6 @@ export function McpSettingsModal({ onClose }: Props) {
           >
             {saving ? "Saving…" : saved ? "Saved" : "Save"}
           </button>
-          <button className="btn btn-sm" onClick={onClose}>Close</button>
           {pendingFull !== null && (
             <p className="mcp-hint" style={{ margin: 0 }}>
               Confirm or cancel full access above before saving.
@@ -449,7 +561,6 @@ export function McpSettingsModal({ onClose }: Props) {
           {!configured && !password && (
             <span className="mcp-hint">Set a password to enable the server.</span>
           )}
-        </div>
       </div>
     </div>
   );

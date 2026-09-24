@@ -367,6 +367,9 @@ export type McpMode = "read_only" | "guarded" | "full";
 export interface McpHostPolicy {
   mode: McpMode;
   rules_text: string;
+  /** Calls a minute, and bytes returned per call. 0 means no limit. */
+  max_calls_per_min: number;
+  max_bytes_per_call: number;
 }
 
 /** Mirrors `McpBinaryStatus` in mcp_binary.rs. */
@@ -386,6 +389,55 @@ export interface McpBinaryStatus {
   on_path_matches: boolean | null;
 }
 
+/** Mirrors `ApprovalRequest` in mcp_approval.rs: a call waiting on a person. */
+export interface McpApprovalRequest {
+  v: number;
+  id: string;
+  tool: string;
+  host_id: string;
+  host_name: string;
+  /** The command, path or snippet body, verbatim. Shown unwrapped. */
+  argument: string;
+  client_name: string;
+  client_version: string;
+  /** Seconds before kino-mcp refuses it on its own. */
+  timeout_secs: number;
+}
+
+/** Mirrors `AuditRecord` in mcp_audit.rs - one MCP tool call. */
+export interface McpAuditRecord {
+  /** Unix milliseconds. */
+  ts: number;
+  tool: string;
+  host_id: string | null;
+  host_name: string | null;
+  /** The command, path or snippet, verbatim. */
+  argument: string;
+  /** "allow" or "deny". */
+  decision: string;
+  rule_id: string | null;
+  exit_code: number | null;
+  bytes_out: number | null;
+  duration_ms: number;
+  client_name: string;
+  client_version: string;
+  /** The asciicast of this call, if one was written. A filename, not a path. */
+  recording?: string | null;
+  /** Set when the call was allowed but failed anyway. */
+  error?: string | null;
+}
+
+/** Mirrors `AuditReport` in lib.rs. */
+export interface McpAuditReport {
+  /** Newest first. */
+  entries: McpAuditRecord[];
+  /** Lines that would not decrypt - tampering, or a changed MCP password. */
+  unreadable_lines: number[];
+  total: number;
+  truncated: boolean;
+  path: string;
+}
+
 /** Mirrors `McpConfigView` in mcp_config.rs. Carries no secrets. */
 export interface McpConfig {
   /** Ids of the hosts the MCP server is allowed to reach. */
@@ -394,6 +446,8 @@ export interface McpConfig {
   host_policies: Record<string, McpHostPolicy>;
   /** The global rule block, in the text form the editor uses. */
   global_rules_text: string;
+  /** Seconds a guarded-mode prompt waits before kino-mcp refuses. */
+  approval_timeout_secs: number;
   /** Set when saved settings exist but could not be read. */
   problem?: string | null;
   /** True once an MCP password has been set. */
@@ -787,13 +841,28 @@ interface VaultStore {
   deleteRecording: (filename: string) => Promise<void>;
   setRecordingState: (sessionId: string, isRecording: boolean) => void;
 
+  /** Answer a guarded-mode prompt. False if it had already expired. */
+  respondToApproval: (
+    id: string,
+    decision: "approve_once" | "approve_session" | "deny"
+  ) => Promise<boolean>;
+  /** Every MCP tool call that was recorded, newest first. */
+  mcpAuditRead: (limit?: number) => Promise<McpAuditReport>;
   mcpGetConfig: () => Promise<McpConfig>;
   mcpSetPassword: (password: string) => Promise<void>;
   mcpSetExposedHosts: (hostIds: string[]) => Promise<void>;
   /** Rules arrive as typed text; the backend parses them, so a bad pattern is
    *  refused here rather than silently matching nothing later. */
-  mcpSetHostPolicy: (hostId: string, mode: McpMode, rulesText: string) => Promise<void>;
+  mcpSetHostPolicy: (
+    hostId: string,
+    mode: McpMode,
+    rulesText: string,
+    maxCallsPerMin?: number,
+    maxBytesPerCall?: number
+  ) => Promise<void>;
   mcpSetGlobalRules: (rulesText: string) => Promise<void>;
+  /** Seconds a guarded-mode prompt waits. Clamped to 10..600 by the backend. */
+  mcpSetApprovalTimeout: (seconds: number) => Promise<void>;
 }
 
 const AUTO_SYNC_KEY = "ssh-mgr:autosync";
@@ -2069,10 +2138,24 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
     });
   },
 
-  mcpSetHostPolicy: (hostId, mode, rulesText) =>
-    invoke<void>("mcp_set_host_policy", { hostId, mode, rulesText }),
+  mcpSetHostPolicy: (hostId, mode, rulesText, maxCallsPerMin, maxBytesPerCall) =>
+    invoke<void>("mcp_set_host_policy", {
+      hostId,
+      mode,
+      rulesText,
+      maxCallsPerMin,
+      maxBytesPerCall,
+    }),
   mcpSetGlobalRules: (rulesText) =>
     invoke<void>("mcp_set_global_rules", { rulesText }),
+  mcpSetApprovalTimeout: (seconds) =>
+    invoke<void>("mcp_set_approval_timeout", { seconds }),
+  respondToApproval: async (id, decision) => {
+    return await invoke<boolean>("mcp_approval_respond", { id, decision });
+  },
+  mcpAuditRead: async (limit?: number) => {
+    return await invoke<McpAuditReport>("mcp_audit_read", { limit });
+  },
   mcpGetConfig: async () => {
     return await invoke<McpConfig>("mcp_get_config");
   },
