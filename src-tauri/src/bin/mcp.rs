@@ -61,8 +61,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Every call is recorded (KR-01-F8), under the same key as the vault -
-    // the only one this process has.
-    let server = KinoMcpServer::with_audit(vault, AuditLog::new(audit_path(), key));
+    // the only one this process has. The same key re-reads the vault when the
+    // app rewrites it, so a policy change lands without a restart (issue #22).
+    let server = KinoMcpServer::with_audit(vault, AuditLog::new(audit_path(), key))
+        .reloading_from(mcp_config::mcp_vault_path(), key);
 
     // Serve over stdio (the standard MCP transport for local tools).
     use rmcp::ServiceExt;

@@ -16,14 +16,44 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
 use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
+
+/// What it takes to notice the exposed vault changed (issue #22).
+///
+/// The app rewrites `mcp_vault.enc` whenever a host, a rule or a mode
+/// changes, and a server that read it once at startup kept serving the old
+/// policy - including a host that had since been unticked. Re-reading per
+/// call would mean Argon2 per call, which is deliberately slow, so the key
+/// derived at startup is kept and the file is only `stat`ed: Argon2 once,
+/// AES only when something actually changed.
+struct Reload {
+    path: std::path::PathBuf,
+    /// The key derived at startup. A *changed* MCP password rewrites the file
+    /// under a new salt, so this key stops working - which is a refusal, not
+    /// a reason to carry on with the old policy.
+    key: [u8; 32],
+    /// Modified time and length of the copy currently loaded.
+    stamp: Mutex<Option<(std::time::SystemTime, u64)>>,
+}
+
+impl Drop for Reload {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.key.zeroize();
+    }
+}
 
 /// The MCP server state. Holds the decrypted hosts and snippets that were
 /// exported from the Kino vault under the MCP password.
 #[derive(Clone)]
 pub struct KinoMcpServer {
-    vault: Arc<McpVault>,
+    /// Swapped wholesale when the file changes, so a call either sees the old
+    /// policy or the new one, never half of each.
+    vault: Arc<RwLock<Arc<McpVault>>>,
+    /// How to notice a change. `None` in tests and anywhere the vault came
+    /// from memory rather than a file.
+    reload: Option<Arc<Reload>>,
     /// Where each call is recorded. `None` in tests and in any build that
     /// could not open the log - a call the policy allows still runs, and the
     /// failure is reported to stderr rather than swallowed.
@@ -52,7 +82,8 @@ pub struct KinoMcpServer {
 impl KinoMcpServer {
     pub fn new(vault: McpVault) -> Self {
         Self {
-            vault: Arc::new(vault),
+            vault: Arc::new(RwLock::new(Arc::new(vault))),
+            reload: None,
             audit: None,
             client: Arc::new(Mutex::new(("unknown".into(), "unknown".into()))),
             calls: Arc::new(Mutex::new(HashMap::new())),
@@ -76,6 +107,54 @@ impl KinoMcpServer {
             audit: Some(Arc::new(audit)),
             ..Self::new(vault)
         }
+    }
+
+    /// Watch `path` for changes, re-reading it with `key` (issue #22).
+    ///
+    /// Without this the server serves whatever it read at startup for as long
+    /// as it runs, so revoking access in Kino did nothing until the assistant
+    /// was restarted - and nothing said so.
+    pub fn reloading_from(mut self, path: std::path::PathBuf, key: [u8; 32]) -> Self {
+        let stamp = stamp_of(&path);
+        self.reload = Some(Arc::new(Reload {
+            path,
+            key,
+            stamp: Mutex::new(stamp),
+        }));
+        self
+    }
+
+    /// The vault as it stands. Cheap: an `Arc` clone.
+    fn vault(&self) -> Arc<McpVault> {
+        self.vault.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Re-read the exposed vault if it changed since the last call.
+    ///
+    /// An error here refuses the call. The alternative - carrying on with the
+    /// copy in memory - is precisely the bug: the file changing is often
+    /// someone *removing* access, and serving the old policy because the new
+    /// one could not be read would be the least safe reading of it.
+    fn refresh(&self) -> Result<(), String> {
+        let Some(reload) = &self.reload else {
+            return Ok(());
+        };
+        let now = stamp_of(&reload.path);
+        {
+            let seen = reload.stamp.lock().unwrap_or_else(|e| e.into_inner());
+            if *seen == now {
+                return Ok(());
+            }
+        }
+
+        // Missing, mid-write, or written under a different password.
+        let fresh: McpVault = crate::vault::load_encrypted(&reload.path, &reload.key)
+            .map_err(|_| "unreadable".to_string())?;
+
+        *self.vault.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(fresh);
+        *reload.stamp.lock().unwrap_or_else(|e| e.into_inner()) = now;
+        eprintln!("[kino-mcp] reloaded the exposed vault after a change");
+        Ok(())
     }
 
     /// Count this call against the host's minute, and say whether it goes on.
@@ -139,7 +218,7 @@ impl KinoMcpServer {
             argument: argument.to_string(),
             client_name: self.client_id().0,
             client_version: self.client_id().1,
-            timeout_secs: self.vault.approval_timeout_secs,
+            timeout_secs: self.vault().approval_timeout_secs,
         };
 
         match mcp_approval::ask_at(&self.approval_socket, &request).await {
@@ -318,19 +397,24 @@ impl KinoMcpServer {
     }
 
     /// Find a host by name (case-insensitive) or by id.
-    fn find_host(&self, name_or_id: &str) -> Option<&Host> {
+    ///
+    /// Returns a copy rather than a borrow: the vault behind it can be
+    /// swapped by a reload, and a reference into the old one would keep a
+    /// revoked host alive for the length of a call.
+    fn find_host(&self, name_or_id: &str) -> Option<Host> {
         let lower = name_or_id.to_lowercase();
-        self.vault
+        self.vault()
             .hosts
             .iter()
             .find(|h| h.id == name_or_id || h.name.to_lowercase() == lower)
+            .cloned()
     }
 
     /// The policy for a host. A host with no entry is read-only: the vault
     /// writes one for every exposed host, so a missing entry means something
     /// went wrong, and the safe reading of that is "less access, not more".
     fn policy_for(&self, host: &Host) -> HostPolicy {
-        self.vault
+        self.vault()
             .policies
             .get(&host.id)
             .cloned()
@@ -387,7 +471,8 @@ impl KinoMcpServer {
             ));
         }
 
-        let decision = mcp_policy::evaluate(&policy, &self.vault.global_rules, tool, argument);
+        let vault = self.vault();
+        let decision = mcp_policy::evaluate(&policy, &vault.global_rules, tool, argument);
         // Recorded here rather than in each tool: a refusal returns early, and
         // the one call that forgot to record it would be the interesting one.
         //
@@ -441,6 +526,28 @@ impl KinoMcpServer {
             }
         }
     }
+}
+
+/// Modified time and length, which is what "has this file changed?" means
+/// here. Missing counts as a state of its own, so a vault that is deleted and
+/// restored is noticed.
+fn stamp_of(path: &std::path::Path) -> Option<(std::time::SystemTime, u64)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
+/// What a call gets when the exposed vault changed into something this server
+/// cannot read - almost always a changed MCP password.
+fn vault_unreadable() -> CallToolResult {
+    CallToolResult::error(vec![ContentBlock::text(
+        serde_json::to_string_pretty(&serde_json::json!({
+            "error": "vault_unreadable",
+            "message": "Kino's exposed vault changed and this server can no longer read it. \
+                        The MCP password was probably changed - restart kino-mcp with the new \
+                        one. Nothing was run.",
+        }))
+        .unwrap_or_default(),
+    )])
 }
 
 /// How a call ended, for the record. Defaults to an allowed call that
@@ -553,8 +660,12 @@ impl KinoMcpServer {
     )]
     async fn list_hosts(&self) -> Result<CallToolResult, McpError> {
         let started = Instant::now();
-        let list: Vec<serde_json::Value> = self
-            .vault
+        // The vault may have changed since the last call (issue #22).
+        if self.refresh().is_err() {
+            return Ok(vault_unreadable());
+        }
+        let vault = self.vault();
+        let list: Vec<serde_json::Value> = vault
             .hosts
             .iter()
             .map(|h| {
@@ -594,7 +705,11 @@ impl KinoMcpServer {
         Parameters(params): Parameters<HostParams>,
     ) -> Result<CallToolResult, McpError> {
         let started = Instant::now();
-        let h = match self.find_host(&params.host) {
+        // The vault may have changed since the last call (issue #22).
+        if self.refresh().is_err() {
+            return Ok(vault_unreadable());
+        }
+        let found = match self.find_host(&params.host) {
             Some(h) => h,
             None => {
                 self.record(
@@ -610,6 +725,7 @@ impl KinoMcpServer {
                 ))]));
             }
         };
+        let h = &found;
         let info = serde_json::json!({
             "name": h.name,
             "hostname": h.hostname,
@@ -654,7 +770,11 @@ impl KinoMcpServer {
         Parameters(params): Parameters<ExecParams>,
     ) -> Result<CallToolResult, McpError> {
         let started = Instant::now();
-        let h = match self.find_host(&params.host) {
+        // The vault may have changed since the last call (issue #22).
+        if self.refresh().is_err() {
+            return Ok(vault_unreadable());
+        }
+        let found = match self.find_host(&params.host) {
             Some(h) => h,
             None => {
                 self.record(
@@ -670,6 +790,7 @@ impl KinoMcpServer {
                 ))]));
             }
         };
+        let h = &found;
 
         if let Some(refused) = self.gate(h, "ssh_exec", &params.command, started).await {
             return Ok(refused);
@@ -756,7 +877,11 @@ impl KinoMcpServer {
         Parameters(params): Parameters<PathParams>,
     ) -> Result<CallToolResult, McpError> {
         let started = Instant::now();
-        let h = match self.find_host(&params.host) {
+        // The vault may have changed since the last call (issue #22).
+        if self.refresh().is_err() {
+            return Ok(vault_unreadable());
+        }
+        let found = match self.find_host(&params.host) {
             Some(h) => h,
             None => {
                 self.record(
@@ -772,6 +897,7 @@ impl KinoMcpServer {
                 ))]));
             }
         };
+        let h = &found;
 
         if let Some(refused) = self.gate(h, "sftp_list", &params.path, started).await {
             return Ok(refused);
@@ -823,7 +949,11 @@ impl KinoMcpServer {
         Parameters(params): Parameters<PathParams>,
     ) -> Result<CallToolResult, McpError> {
         let started = Instant::now();
-        let h = match self.find_host(&params.host) {
+        // The vault may have changed since the last call (issue #22).
+        if self.refresh().is_err() {
+            return Ok(vault_unreadable());
+        }
+        let found = match self.find_host(&params.host) {
             Some(h) => h,
             None => {
                 self.record(
@@ -839,6 +969,7 @@ impl KinoMcpServer {
                 ))]));
             }
         };
+        let h = &found;
 
         if let Some(refused) = self.gate(h, "sftp_read", &params.path, started).await {
             return Ok(refused);
@@ -895,7 +1026,11 @@ impl KinoMcpServer {
         Parameters(params): Parameters<WriteParams>,
     ) -> Result<CallToolResult, McpError> {
         let started = Instant::now();
-        let h = match self.find_host(&params.host) {
+        // The vault may have changed since the last call (issue #22).
+        if self.refresh().is_err() {
+            return Ok(vault_unreadable());
+        }
+        let found = match self.find_host(&params.host) {
             Some(h) => h,
             None => {
                 self.record(
@@ -911,6 +1046,7 @@ impl KinoMcpServer {
                 ))]));
             }
         };
+        let h = &found;
 
         if let Some(refused) = self.gate(h, "sftp_write", &params.path, started).await {
             return Ok(refused);
@@ -973,8 +1109,12 @@ impl KinoMcpServer {
     )]
     async fn list_snippets(&self) -> Result<CallToolResult, McpError> {
         let started = Instant::now();
-        let list: Vec<serde_json::Value> = self
-            .vault
+        // The vault may have changed since the last call (issue #22).
+        if self.refresh().is_err() {
+            return Ok(vault_unreadable());
+        }
+        let vault = self.vault();
+        let list: Vec<serde_json::Value> = vault
             .snippets
             .iter()
             .map(|s| {
@@ -1008,7 +1148,11 @@ impl KinoMcpServer {
         Parameters(params): Parameters<RunSnippetParams>,
     ) -> Result<CallToolResult, McpError> {
         let started = Instant::now();
-        let h = match self.find_host(&params.host) {
+        // The vault may have changed since the last call (issue #22).
+        if self.refresh().is_err() {
+            return Ok(vault_unreadable());
+        }
+        let found = match self.find_host(&params.host) {
             Some(h) => h,
             None => {
                 self.record(
@@ -1024,10 +1168,11 @@ impl KinoMcpServer {
                 ))]));
             }
         };
+        let h = &found;
 
         let lower = params.snippet.to_lowercase();
-        let snip = self
-            .vault
+        let vault = self.vault();
+        let snip = vault
             .snippets
             .iter()
             .find(|s| s.id == params.snippet || s.name.to_lowercase() == lower);
@@ -1225,7 +1370,7 @@ mod tests {
         max_bytes_per_call: usize,
     ) -> (KinoMcpServer, tempfile::TempDir, std::path::PathBuf) {
         let (s, dir, path) = recording_server(McpMode::Full, "");
-        let mut vault = (*s.vault).clone();
+        let mut vault = (*s.vault()).clone();
         vault.policies.insert(
             "h1".to_string(),
             HostPolicy {
@@ -1251,7 +1396,7 @@ mod tests {
         let path = dir.path().join("mcp_audit.jsonl.enc");
         let plain = server(mode, rules);
         let s = KinoMcpServer::with_audit(
-            (*plain.vault).clone(),
+            (*plain.vault()).clone(),
             crate::mcp_audit::AuditLog::new(path.clone(), [3u8; 32]),
         );
         (s, dir, path)
@@ -1403,6 +1548,150 @@ mod tests {
         // be opened: recording is best effort, refusing calls is not.
         let r = exec(&server(McpMode::ReadOnly, ""), "uptime");
         assert_eq!(r.is_error, Some(true));
+    }
+
+    // ── Noticing the vault changed (issue #22) ──────────────────────────────
+    //
+    // The app rewrites mcp_vault.enc on every change. A server that read it
+    // once at startup kept serving the old policy for as long as it ran, so
+    // revoking access in Kino did nothing until the assistant was restarted -
+    // and nothing said so.
+
+    const VAULT_KEY: [u8; 32] = [5u8; 32];
+
+    fn vault_of(mode: McpMode, hosts: Vec<Host>) -> McpVault {
+        let mut policies = HashMap::new();
+        for h in &hosts {
+            policies.insert(
+                h.id.clone(),
+                HostPolicy {
+                    mode,
+                    ..Default::default()
+                },
+            );
+        }
+        McpVault {
+            hosts,
+            snippets: vec![],
+            policies,
+            global_rules: vec![],
+            approval_timeout_secs: crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
+        }
+    }
+
+    fn write_vault(path: &std::path::Path, key: &[u8; 32], vault: &McpVault) {
+        // mtime has a resolution; two writes in the same tick would look
+        // identical to a stat, and the point here is the change being seen.
+        std::thread::sleep(std::time::Duration::from_millis(12));
+        crate::vault::save_encrypted(&path.to_path_buf(), vault, key, &[7u8; 16]).unwrap();
+    }
+
+    /// A server reading its vault from `path`, as kino-mcp does.
+    fn reloading_server(path: &std::path::Path, vault: McpVault) -> KinoMcpServer {
+        write_vault(path, &VAULT_KEY, &vault);
+        KinoMcpServer::new(vault)
+            .reloading_from(path.to_path_buf(), VAULT_KEY)
+            .asking_at("/nonexistent/kino-test-approval.sock".into())
+    }
+
+    #[test]
+    fn a_policy_change_lands_without_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp_vault.enc");
+        let s = reloading_server(&path, vault_of(McpMode::ReadOnly, vec![host()]));
+
+        assert!(text(&exec(&s, "uptime")).contains("policy_denied"));
+
+        // What saving in Kino does.
+        write_vault(&path, &VAULT_KEY, &vault_of(McpMode::Full, vec![host()]));
+
+        // Port 1 on loopback: a transport error means the gate let it past,
+        // which is the only way to show that without a real host.
+        let body = text(&exec(&s, "uptime"));
+        assert!(!body.contains("policy_denied"), "{body}");
+    }
+
+    #[test]
+    fn revoking_access_takes_effect_without_a_restart() {
+        // The direction that matters: tightening. Serving the old policy here
+        // means an assistant keeps access somebody has already taken away.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp_vault.enc");
+        let s = reloading_server(&path, vault_of(McpMode::Full, vec![host()]));
+        assert!(!text(&exec(&s, "uptime")).contains("policy_denied"));
+
+        write_vault(
+            &path,
+            &VAULT_KEY,
+            &vault_of(McpMode::ReadOnly, vec![host()]),
+        );
+
+        let body = text(&exec(&s, "uptime"));
+        assert!(body.contains("policy_denied"), "{body}");
+    }
+
+    #[test]
+    fn unticking_a_host_makes_it_disappear_without_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp_vault.enc");
+        let s = reloading_server(&path, vault_of(McpMode::Full, vec![host()]));
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        assert!(text(&rt.block_on(s.list_hosts()).unwrap()).contains("web-prod"));
+
+        write_vault(&path, &VAULT_KEY, &vault_of(McpMode::Full, vec![]));
+
+        let listed = text(&rt.block_on(s.list_hosts()).unwrap());
+        assert!(!listed.contains("web-prod"), "{listed}");
+        // And its credentials are gone with it.
+        assert!(text(&exec(&s, "uptime")).contains("not found"));
+    }
+
+    #[test]
+    fn a_vault_it_can_no_longer_read_refuses_instead_of_serving_the_old_one() {
+        // A changed MCP password rewrites the file under a new salt. Carrying
+        // on with the copy in memory would be the least safe reading of it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp_vault.enc");
+        let s = reloading_server(&path, vault_of(McpMode::Full, vec![host()]));
+        assert!(!text(&exec(&s, "uptime")).contains("policy_denied"));
+
+        write_vault(&path, &[9u8; 32], &vault_of(McpMode::Full, vec![host()]));
+
+        let body = text(&exec(&s, "uptime"));
+        assert!(body.contains("vault_unreadable"), "{body}");
+        assert!(body.contains("restart kino-mcp"), "{body}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unchanged_vault_is_not_read_again() {
+        // Argon2 is slow on purpose, so the file is only stat-ed per call and
+        // decrypted when it changed. Making the file unreadable without
+        // touching mtime or length: if calls still work, it was not re-read.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp_vault.enc");
+        let s = reloading_server(&path, vault_of(McpMode::ReadOnly, vec![host()]));
+        assert!(text(&exec(&s, "uptime")).contains("policy_denied"));
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let body = text(&exec(&s, "uptime"));
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        assert!(body.contains("policy_denied"), "{body}");
+        assert!(!body.contains("vault_unreadable"), "{body}");
+    }
+
+    #[test]
+    fn a_server_with_no_file_behind_it_still_works() {
+        // The tests above, and any embedding that hands over a vault from
+        // memory: no path, nothing to reload, nothing to go wrong.
+        let s = server(McpMode::ReadOnly, "");
+        assert!(text(&exec(&s, "uptime")).contains("policy_denied"));
     }
 
     // ── Recording what ran (KR-01-F10) ──────────────────────────────────────

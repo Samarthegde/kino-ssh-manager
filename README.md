@@ -146,7 +146,13 @@ every binary in the crate.
   entirely, so the assistant cannot see it, name it, or reach it.
 
 Kino rewrites `mcp_vault.enc` whenever a host, a snippet or the exposure list
-changes, so a rotated key or a removed host takes effect immediately.
+changes, and a running `kino-mcp` picks the change up on its next call - so
+unticking a host, tightening a mode or adding a rule takes effect without
+restarting your assistant. It checks the file's timestamp per call and only
+re-reads when it actually changed, because deriving the key is deliberately
+slow. Changing the **MCP password** is the exception: that rewrites the file
+under a new key, and the running server refuses every call, saying so, until
+it is restarted with the new password.
 
 ### 3. Point a client at it
 

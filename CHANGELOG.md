@@ -36,6 +36,20 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
   silently. Setting either to 0 turns it off. Hosts configured before this
   release get the defaults, not "no limit".
 
+### Fixed
+- **`kino-mcp` no longer serves a policy you already changed** ([#22]). It read
+  the exposed vault once at startup, so revoking full access, adding a `deny`
+  rule or unticking a host did nothing until the assistant was restarted - and
+  nothing said so. It now notices the file changed and re-reads it before the
+  next call. The check is a timestamp comparison, so the slow part (deriving
+  the key) still happens only once. If the file changes into something it
+  cannot read - a changed MCP password - it refuses every call and says why,
+  rather than carrying on with the older, more permissive copy.
+- **The vault files are written atomically.** A rewrite was a plain write, so a
+  reader could catch the file half-written, and a crash mid-write truncated it.
+
+[#22]: https://github.com/Samarthegde/kino-ssh-manager/issues/22
+
 ### Changed
 - **The app now uses the `kino-mcp` it was installed with.** Every installer
   has carried it next to Kino - `/usr/bin/kino-mcp` from a .deb or .rpm, the
@@ -251,6 +265,20 @@ are on 0.9.1, upgrade.
   the open call rather than afterwards, so the key never sits readable by
   everyone for even a moment, and an existing file is refused rather than
   overwritten.
+
+### Fixed
+- **`kino-mcp` no longer serves a policy you already changed** ([#22]). It read
+  the exposed vault once at startup, so revoking full access, adding a `deny`
+  rule or unticking a host did nothing until the assistant was restarted - and
+  nothing said so. It now notices the file changed and re-reads it before the
+  next call. The check is a timestamp comparison, so the slow part (deriving
+  the key) still happens only once. If the file changes into something it
+  cannot read - a changed MCP password - it refuses every call and says why,
+  rather than carrying on with the older, more permissive copy.
+- **The vault files are written atomically.** A rewrite was a plain write, so a
+  reader could catch the file half-written, and a crash mid-write truncated it.
+
+[#22]: https://github.com/Samarthegde/kino-ssh-manager/issues/22
 
 ### Changed
 - **A copilot suggestion no longer runs on a single click.** The **Run** button
@@ -627,6 +655,20 @@ are on 0.9.1, upgrade.
   now positioned against the window instead, and flips above the button when
   there isn't room below.
 
+### Fixed
+- **`kino-mcp` no longer serves a policy you already changed** ([#22]). It read
+  the exposed vault once at startup, so revoking full access, adding a `deny`
+  rule or unticking a host did nothing until the assistant was restarted - and
+  nothing said so. It now notices the file changed and re-reads it before the
+  next call. The check is a timestamp comparison, so the slow part (deriving
+  the key) still happens only once. If the file changes into something it
+  cannot read - a changed MCP password - it refuses every call and says why,
+  rather than carrying on with the older, more permissive copy.
+- **The vault files are written atomically.** A rewrite was a plain write, so a
+  reader could catch the file half-written, and a crash mid-write truncated it.
+
+[#22]: https://github.com/Samarthegde/kino-ssh-manager/issues/22
+
 ### Changed
 - **Terminal throughput** - heavy output (a build log, `cat` on a large file, a
   chatty tail) no longer stalls the terminal. Two independent bottlenecks were
@@ -678,6 +720,20 @@ are on 0.9.1, upgrade.
   require auth (a relay's static token, or a kino-control manager token). It is
   sent as an `Authorization` header rather than a query parameter, so it stays
   out of relay and proxy access logs.
+
+### Fixed
+- **`kino-mcp` no longer serves a policy you already changed** ([#22]). It read
+  the exposed vault once at startup, so revoking full access, adding a `deny`
+  rule or unticking a host did nothing until the assistant was restarted - and
+  nothing said so. It now notices the file changed and re-reads it before the
+  next call. The check is a timestamp comparison, so the slow part (deriving
+  the key) still happens only once. If the file changes into something it
+  cannot read - a changed MCP password - it refuses every call and says why,
+  rather than carrying on with the older, more permissive copy.
+- **The vault files are written atomically.** A rewrite was a plain write, so a
+  reader could catch the file half-written, and a crash mid-write truncated it.
+
+[#22]: https://github.com/Samarthegde/kino-ssh-manager/issues/22
 
 ### Changed
 - **New look: "Kino Projection"** - the app now shares one film-poster design
@@ -759,6 +815,20 @@ are on 0.9.1, upgrade.
 - **Choose an existing group** - the host editor's Folder / Group field offers a
   dropdown of groups already in use, preventing near-duplicates.
 
+### Fixed
+- **`kino-mcp` no longer serves a policy you already changed** ([#22]). It read
+  the exposed vault once at startup, so revoking full access, adding a `deny`
+  rule or unticking a host did nothing until the assistant was restarted - and
+  nothing said so. It now notices the file changed and re-reads it before the
+  next call. The check is a timestamp comparison, so the slow part (deriving
+  the key) still happens only once. If the file changes into something it
+  cannot read - a changed MCP password - it refuses every call and says why,
+  rather than carrying on with the older, more permissive copy.
+- **The vault files are written atomically.** A rewrite was a plain write, so a
+  reader could catch the file half-written, and a crash mid-write truncated it.
+
+[#22]: https://github.com/Samarthegde/kino-ssh-manager/issues/22
+
 ### Changed
 - The AI copilot is now OpenRouter-only. The previous Claude (Anthropic) and
   Gemini (Google) providers - including the Anthropic sign-in flow - have been
@@ -787,6 +857,20 @@ are on 0.9.1, upgrade.
   standalone password you share out-of-band, with a built-in password generator.
   Importing an encrypted profile prompts for the password. Plain (unencrypted)
   export is still available and clearly marked.
+
+### Fixed
+- **`kino-mcp` no longer serves a policy you already changed** ([#22]). It read
+  the exposed vault once at startup, so revoking full access, adding a `deny`
+  rule or unticking a host did nothing until the assistant was restarted - and
+  nothing said so. It now notices the file changed and re-reads it before the
+  next call. The check is a timestamp comparison, so the slow part (deriving
+  the key) still happens only once. If the file changes into something it
+  cannot read - a changed MCP password - it refuses every call and says why,
+  rather than carrying on with the older, more permissive copy.
+- **The vault files are written atomically.** A rewrite was a plain write, so a
+  reader could catch the file half-written, and a crash mid-write truncated it.
+
+[#22]: https://github.com/Samarthegde/kino-ssh-manager/issues/22
 
 ### Changed
 - **Host editor redesigned as a stepper** - the long Add/Edit Host form is now
@@ -823,6 +907,20 @@ are on 0.9.1, upgrade.
   extension and the editor follows the app's active theme.
 
 ## [0.4.2] - 2026-06-29
+
+### Fixed
+- **`kino-mcp` no longer serves a policy you already changed** ([#22]). It read
+  the exposed vault once at startup, so revoking full access, adding a `deny`
+  rule or unticking a host did nothing until the assistant was restarted - and
+  nothing said so. It now notices the file changed and re-reads it before the
+  next call. The check is a timestamp comparison, so the slow part (deriving
+  the key) still happens only once. If the file changes into something it
+  cannot read - a changed MCP password - it refuses every call and says why,
+  rather than carrying on with the older, more permissive copy.
+- **The vault files are written atomically.** A rewrite was a plain write, so a
+  reader could catch the file half-written, and a crash mid-write truncated it.
+
+[#22]: https://github.com/Samarthegde/kino-ssh-manager/issues/22
 
 ### Changed
 - **Full-screen Docker panel** - the Docker management modal now opens maximized,
@@ -867,6 +965,20 @@ are on 0.9.1, upgrade.
 - **Collapsible, resizable sidebar** - hide it from the header toggle or drag
   its edge to resize; the width and collapsed state persist.
 
+### Fixed
+- **`kino-mcp` no longer serves a policy you already changed** ([#22]). It read
+  the exposed vault once at startup, so revoking full access, adding a `deny`
+  rule or unticking a host did nothing until the assistant was restarted - and
+  nothing said so. It now notices the file changed and re-reads it before the
+  next call. The check is a timestamp comparison, so the slow part (deriving
+  the key) still happens only once. If the file changes into something it
+  cannot read - a changed MCP password - it refuses every call and says why,
+  rather than carrying on with the older, more permissive copy.
+- **The vault files are written atomically.** A rewrite was a plain write, so a
+  reader could catch the file half-written, and a crash mid-write truncated it.
+
+[#22]: https://github.com/Samarthegde/kino-ssh-manager/issues/22
+
 ### Changed
 - **Async networking backend** - the SSH/SFTP/forwarding stack was rewritten
   from the synchronous `ssh2` (libssh2) to the asynchronous `russh` (Tokio).
@@ -910,6 +1022,20 @@ are on 0.9.1, upgrade.
   dialog.
 - **Windows installers** (`.msi` / `.exe`) are now built and published alongside
   the Linux packages.
+
+### Fixed
+- **`kino-mcp` no longer serves a policy you already changed** ([#22]). It read
+  the exposed vault once at startup, so revoking full access, adding a `deny`
+  rule or unticking a host did nothing until the assistant was restarted - and
+  nothing said so. It now notices the file changed and re-reads it before the
+  next call. The check is a timestamp comparison, so the slow part (deriving
+  the key) still happens only once. If the file changes into something it
+  cannot read - a changed MCP password - it refuses every call and says why,
+  rather than carrying on with the older, more permissive copy.
+- **The vault files are written atomically.** A rewrite was a plain write, so a
+  reader could catch the file half-written, and a crash mid-write truncated it.
+
+[#22]: https://github.com/Samarthegde/kino-ssh-manager/issues/22
 
 ### Changed
 - Refreshed UI: softer shapes, focus rings, button depth, animated modals, and a
