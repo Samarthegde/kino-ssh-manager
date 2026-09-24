@@ -80,6 +80,7 @@ itself, and it updates whenever the app does:
 | --- | --- |
 | `.deb` / `.rpm` | `/usr/bin/kino-mcp` - already on your `PATH` |
 | `.msi` / `.exe` | the install directory, next to Kino |
+| `.app` / `.dmg` | inside the `.app` bundle, next to the main binary |
 | `.AppImage` | inside the AppImage - see below |
 
 The MCP panel shows the exact path and puts it in the config it gives you to
@@ -104,6 +105,7 @@ the [releases page](https://github.com/Samarthegde/kino-ssh-manager/releases):
 | --- | --- | --- |
 | Linux | `kino-mcp-linux-x86_64.tar.gz` | `kino-mcp`, already executable |
 | Windows | `kino-mcp-windows-x86_64.zip` | `kino-mcp.exe` |
+| macOS | `kino-mcp-macos-aarch64.tar.gz` | `kino-mcp`, already executable |
 
 Each has a `.sig` beside it, and the release's `SHA256SUMS` (itself signed)
 covers every asset. Check before you run it - this binary can reach the hosts
@@ -194,6 +196,13 @@ this snippet with a copy button.
 - **Guarded mode currently refuses rather than asks.** The approval prompt is
   not built yet, so a call that would need approval is declined with a message
   saying so. Use rules, or full access, until it lands.
+- **Each host has limits.** 60 calls a minute and 256 KiB returned per call by
+  default, both editable per host next to its rules. Over the rate, calls are
+  refused with `rate_limited` until the minute passes; over the size, the reply
+  is cut and says `…[truncated N bytes]` in the output itself, so an assistant
+  cannot summarise a log from its first page and present that as the whole. The
+  audit record keeps the untruncated size. 0 turns either limit off, and the
+  count is per host and held in memory, so restarting `kino-mcp` clears it.
 - **Every call is recorded.** `kino-mcp` writes each tool call to
   `mcp_audit.jsonl.enc` beside the vault - what was called, on which host, the
   command verbatim, whether it was allowed or refused and why, the exit code,
@@ -268,7 +277,7 @@ First launch asks you to create a vault. The master password has no recovery - i
 ```bash
 npm run tauri build
 ```
-Output lands in `src-tauri/target/release/bundle/` - `.deb`, `.rpm` and `.AppImage` on Linux, `.msi` and `.exe` on Windows.
+Output lands in `src-tauri/target/release/bundle/` - `.deb`, `.rpm` and `.AppImage` on Linux, `.msi` and `.exe` on Windows, and `.app` and `.dmg` on macOS.
 
 ### A throwaway vault, for demos and testing
 Kino keeps everything under the platform's local data directory, which on Linux follows `XDG_DATA_HOME`. Pointing that elsewhere gives you a completely separate, empty vault, leaving your real one untouched:

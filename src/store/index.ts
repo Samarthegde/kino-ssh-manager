@@ -367,6 +367,9 @@ export type McpMode = "read_only" | "guarded" | "full";
 export interface McpHostPolicy {
   mode: McpMode;
   rules_text: string;
+  /** Calls a minute, and bytes returned per call. 0 means no limit. */
+  max_calls_per_min: number;
+  max_bytes_per_call: number;
 }
 
 /** Mirrors `McpBinaryStatus` in mcp_binary.rs. */
@@ -826,7 +829,13 @@ interface VaultStore {
   mcpSetExposedHosts: (hostIds: string[]) => Promise<void>;
   /** Rules arrive as typed text; the backend parses them, so a bad pattern is
    *  refused here rather than silently matching nothing later. */
-  mcpSetHostPolicy: (hostId: string, mode: McpMode, rulesText: string) => Promise<void>;
+  mcpSetHostPolicy: (
+    hostId: string,
+    mode: McpMode,
+    rulesText: string,
+    maxCallsPerMin?: number,
+    maxBytesPerCall?: number
+  ) => Promise<void>;
   mcpSetGlobalRules: (rulesText: string) => Promise<void>;
 }
 
@@ -2103,8 +2112,14 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
     });
   },
 
-  mcpSetHostPolicy: (hostId, mode, rulesText) =>
-    invoke<void>("mcp_set_host_policy", { hostId, mode, rulesText }),
+  mcpSetHostPolicy: (hostId, mode, rulesText, maxCallsPerMin, maxBytesPerCall) =>
+    invoke<void>("mcp_set_host_policy", {
+      hostId,
+      mode,
+      rulesText,
+      maxCallsPerMin,
+      maxBytesPerCall,
+    }),
   mcpSetGlobalRules: (rulesText) =>
     invoke<void>("mcp_set_global_rules", { rulesText }),
   mcpAuditRead: async (limit?: number) => {

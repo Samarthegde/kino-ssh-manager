@@ -19,6 +19,7 @@ pub mod mcp;
 pub mod mcp_audit;
 mod mcp_binary;
 pub mod mcp_config;
+pub mod mcp_limits;
 pub mod mcp_policy;
 mod metrics;
 mod notes;
@@ -1749,6 +1750,8 @@ fn mcp_get_config(state: State<'_, AppState>) -> Result<mcp_config::McpConfigVie
                     mcp_config::HostPolicyView {
                         mode: p.mode.as_str().to_string(),
                         rules_text: mcp_policy::rules_to_text(&p.rules),
+                        max_calls_per_min: p.max_calls_per_min,
+                        max_bytes_per_call: p.max_bytes_per_call,
                     },
                 )
             })
@@ -1798,6 +1801,8 @@ fn mcp_set_host_policy(
     host_id: String,
     mode: String,
     rules_text: String,
+    max_calls_per_min: Option<u32>,
+    max_bytes_per_call: Option<usize>,
 ) -> Result<(), String> {
     let mode = match mode.as_str() {
         "read_only" => mcp_policy::McpMode::ReadOnly,
@@ -1812,9 +1817,22 @@ fn mcp_set_host_policy(
         let salt = state.vault_salt.lock().unwrap();
         let salt = salt.as_ref().ok_or("Vault is locked")?;
         let mut config = mcp_config::load_for_edit(key);
-        config
+        // An omitted limit keeps whatever the host already had, so a panel
+        // that only edits the rules cannot quietly reset it.
+        let existing = config
             .host_policies
-            .insert(host_id, mcp_policy::HostPolicy { mode, rules });
+            .get(&host_id)
+            .cloned()
+            .unwrap_or_default();
+        config.host_policies.insert(
+            host_id,
+            mcp_policy::HostPolicy {
+                mode,
+                rules,
+                max_calls_per_min: max_calls_per_min.unwrap_or(existing.max_calls_per_min),
+                max_bytes_per_call: max_bytes_per_call.unwrap_or(existing.max_bytes_per_call),
+            },
+        );
         mcp_config::save_config(&config, key, salt)?;
     }
     sync_mcp_vault(&state)
@@ -2362,6 +2380,7 @@ mod lock_tests {
             mcp_policy::HostPolicy {
                 mode: mcp_policy::McpMode::Guarded,
                 rules: vec![],
+                ..Default::default()
             },
         );
         mcp_config::save_config(&mcp, &old_key, &salt).unwrap();

@@ -17,6 +17,13 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
   binary never holds your master password - and a line that will not decrypt
   is reported rather than quietly skipped.
 
+- **Per-host limits on MCP calls.** 60 calls a minute and 256 KiB per call by
+  default, edited beside each host's rules. A host over its rate refuses with
+  `rate_limited` rather than opening another connection, and output over the
+  size is cut with an explicit `…[truncated N bytes]` marker rather than
+  silently. Setting either to 0 turns it off. Hosts configured before this
+  release get the defaults, not "no limit".
+
 ### Changed
 - **The app now uses the `kino-mcp` it was installed with.** Every installer
   has carried it next to Kino - `/usr/bin/kino-mcp` from a .deb or .rpm, the

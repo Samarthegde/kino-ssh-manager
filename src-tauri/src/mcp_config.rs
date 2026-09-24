@@ -65,6 +65,9 @@ pub struct McpConfig {
 pub struct HostPolicyView {
     pub mode: String,
     pub rules_text: String,
+    /// Calls a minute, and bytes per call. 0 means no limit.
+    pub max_calls_per_min: u32,
+    pub max_bytes_per_call: usize,
 }
 
 /// The view returned to the frontend (no secrets).
@@ -402,6 +405,7 @@ mod tests {
             HostPolicy {
                 mode: McpMode::Guarded,
                 rules: vec![],
+                ..Default::default()
             },
         );
         config.host_policies.insert(
@@ -409,6 +413,7 @@ mod tests {
             HostPolicy {
                 mode: McpMode::Full,
                 rules: vec![],
+                ..Default::default()
             },
         );
         save_encrypted(&path, &config, &key, &[3u8; 16]).unwrap();
@@ -508,6 +513,7 @@ mod tests {
             HostPolicy {
                 mode: McpMode::Full,
                 rules: crate::mcp_policy::parse_rules("deny rm -rf *", "host").unwrap(),
+                ..Default::default()
             },
         );
         let v = build_mcp_vault(
@@ -532,6 +538,7 @@ mod tests {
             HostPolicy {
                 mode: McpMode::Full,
                 rules: vec![],
+                ..Default::default()
             },
         );
         let v = build_mcp_vault(

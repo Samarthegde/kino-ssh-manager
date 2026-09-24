@@ -6,6 +6,7 @@
 
 use crate::mcp_audit::{AuditLog, AuditRecord};
 use crate::mcp_config::McpVault;
+use crate::mcp_limits::{self, Window};
 use crate::mcp_policy::{self, Decision, HostPolicy, McpMode};
 use crate::ssh_session;
 use crate::vault::Host;
@@ -13,6 +14,7 @@ use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
 use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -29,6 +31,9 @@ pub struct KinoMcpServer {
     /// arrives, and never omitted: a record that quietly drops the client is
     /// one you cannot trace back to a machine.
     client: Arc<Mutex<(String, String)>>,
+    /// One sliding minute of call times per host id (KR-01-F11). In memory:
+    /// `mcp_limits` says why that is the honest place for it.
+    calls: Arc<Mutex<HashMap<String, Window>>>,
     /// Built by the `#[tool_router]` macro and read by `#[tool_handler]`; the
     /// field looks unused to the compiler because both are generated.
     #[allow(dead_code)]
@@ -41,6 +46,7 @@ impl KinoMcpServer {
             vault: Arc::new(vault),
             audit: None,
             client: Arc::new(Mutex::new(("unknown".into(), "unknown".into()))),
+            calls: Arc::new(Mutex::new(HashMap::new())),
             tool_router: Self::tool_router(),
         }
     }
@@ -51,6 +57,27 @@ impl KinoMcpServer {
             audit: Some(Arc::new(audit)),
             ..Self::new(vault)
         }
+    }
+
+    /// Count this call against the host's minute, and say whether it goes on.
+    fn admit(&self, host: &Host, max_per_min: u32) -> bool {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        // A poisoned lock must not become a way past the limit.
+        let Ok(mut calls) = self.calls.lock() else {
+            return false;
+        };
+        calls
+            .entry(host.id.clone())
+            .or_default()
+            .admit(now, max_per_min)
+    }
+
+    /// Cut output to what this host's policy allows, saying so in the text.
+    fn cap(&self, host: &Host, text: String) -> mcp_limits::Capped {
+        mcp_limits::cap(text, self.policy_for(host).max_bytes_per_call)
     }
 
     fn client_id(&self) -> (String, String) {
@@ -131,6 +158,36 @@ impl KinoMcpServer {
         started: Instant,
     ) -> Option<CallToolResult> {
         let policy = self.policy_for(host);
+
+        // Rate first. A host being hammered should stop answering whether or
+        // not the next command would have been allowed, and deciding this
+        // costs no connection either way.
+        if !self.admit(host, policy.max_calls_per_min) {
+            self.record(
+                tool,
+                Some(host),
+                argument,
+                started,
+                Outcome {
+                    decision: "deny",
+                    rule_id: Some("rate_limited".to_string()),
+                    ..Default::default()
+                },
+            );
+            return Some(refusal(
+                host,
+                tool,
+                policy.mode,
+                "rate_limited",
+                Some("rate_limited".to_string()),
+                &format!(
+                    "'{}' has already taken {} calls this minute, which is its limit. Wait, \
+                     or raise it in Kino - Settings - MCP Server.",
+                    host.name, policy.max_calls_per_min
+                ),
+            ));
+        }
+
         let decision = mcp_policy::evaluate(&policy, &self.vault.global_rules, tool, argument);
         // Recorded here rather than in each tool: a refusal returns early, and
         // the one call that forgot to record it would be the interesting one.
@@ -432,6 +489,20 @@ impl KinoMcpServer {
         // the useful part, and collapsing them into an error string loses both.
         match ssh_session::exec_once_full(h, &params.command).await {
             Ok(out) => {
+                // The record keeps what the host produced; the reply keeps
+                // what fits. stderr gets what is left of the budget rather
+                // than a second full allowance, so the cap means one call.
+                let produced = out.stdout.len() + out.stderr.len();
+                let limit = self.policy_for(h).max_bytes_per_call;
+                let stdout = mcp_limits::cap(out.stdout, limit);
+                let stderr = mcp_limits::cap(
+                    out.stderr,
+                    if limit == 0 {
+                        0
+                    } else {
+                        limit.saturating_sub(stdout.text.len()).max(1)
+                    },
+                );
                 self.record(
                     "ssh_exec",
                     Some(h),
@@ -441,15 +512,15 @@ impl KinoMcpServer {
                         // u32 on the wire, i32 in the record: a shell status
                         // is 0-255, and i32 is what every reader expects.
                         exit_code: out.code.map(|c| c as i32),
-                        bytes_out: Some(out.stdout.len() + out.stderr.len()),
+                        bytes_out: Some(produced),
                         ..Outcome::allowed()
                     },
                 );
                 let result = serde_json::json!({
                     "host": h.name,
                     "command": params.command,
-                    "stdout": out.stdout,
-                    "stderr": out.stderr,
+                    "stdout": stdout.text,
+                    "stderr": stderr.text,
                     "exit_code": out.code,
                 });
                 Ok(CallToolResult::success(vec![ContentBlock::text(
@@ -509,17 +580,20 @@ impl KinoMcpServer {
         let cmd = format!("ls -la {}", crate::exec::shell_quote(&params.path));
         match ssh_session::exec_once(h, &cmd).await {
             Ok(output) => {
+                let capped = self.cap(h, output);
                 self.record(
                     "sftp_list",
                     Some(h),
                     &params.path,
                     started,
                     Outcome {
-                        bytes_out: Some(output.len()),
+                        bytes_out: Some(capped.original),
                         ..Outcome::allowed()
                     },
                 );
-                Ok(CallToolResult::success(vec![ContentBlock::text(output)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(
+                    capped.text,
+                )]))
             }
             Err(e) => {
                 self.record(
@@ -573,20 +647,21 @@ impl KinoMcpServer {
         let cmd = format!("cat {}", crate::exec::shell_quote(&params.path));
         match ssh_session::exec_once(h, &cmd).await {
             Ok(output) => {
+                let capped = self.cap(h, output);
                 self.record(
                     "sftp_read",
                     Some(h),
                     &params.path,
                     started,
                     Outcome {
-                        bytes_out: Some(output.len()),
+                        bytes_out: Some(capped.original),
                         ..Outcome::allowed()
                     },
                 );
                 let result = serde_json::json!({
                     "path": params.path,
                     "host": h.name,
-                    "content": output,
+                    "content": capped.text,
                 });
                 Ok(CallToolResult::success(vec![ContentBlock::text(
                     serde_json::to_string_pretty(&result).unwrap_or_default(),
@@ -780,6 +855,7 @@ impl KinoMcpServer {
 
         match ssh_session::exec_once(h, &snip.commands).await {
             Ok(output) => {
+                let capped = self.cap(h, output);
                 // The commands, not the snippet's name: the record has to say
                 // what ran, and a snippet can be edited afterwards.
                 self.record(
@@ -788,14 +864,14 @@ impl KinoMcpServer {
                     &snip.commands,
                     started,
                     Outcome {
-                        bytes_out: Some(output.len()),
+                        bytes_out: Some(capped.original),
                         ..Outcome::allowed()
                     },
                 );
                 let result = serde_json::json!({
                     "snippet": snip.name,
                     "host": h.name,
-                    "output": output,
+                    "output": capped.text,
                 });
                 Ok(CallToolResult::success(vec![ContentBlock::text(
                     serde_json::to_string_pretty(&result).unwrap_or_default(),
@@ -922,6 +998,7 @@ mod tests {
             HostPolicy {
                 mode,
                 rules: parse_rules(rules, "host").unwrap(),
+                ..Default::default()
             },
         );
         KinoMcpServer::new(McpVault {
@@ -934,6 +1011,29 @@ mod tests {
             policies,
             global_rules: vec![],
         })
+    }
+
+    /// A server whose host carries the given limits.
+    fn limited_server(
+        max_calls_per_min: u32,
+        max_bytes_per_call: usize,
+    ) -> (KinoMcpServer, tempfile::TempDir, std::path::PathBuf) {
+        let (s, dir, path) = recording_server(McpMode::Full, "");
+        let mut vault = (*s.vault).clone();
+        vault.policies.insert(
+            "h1".to_string(),
+            HostPolicy {
+                mode: McpMode::Full,
+                rules: vec![],
+                max_calls_per_min,
+                max_bytes_per_call,
+            },
+        );
+        let s = KinoMcpServer::with_audit(
+            vault,
+            crate::mcp_audit::AuditLog::new(path.clone(), [3u8; 32]),
+        );
+        (s, dir, path)
     }
 
     /// The same server, recording to a log of its own.
@@ -1097,6 +1197,71 @@ mod tests {
         // be opened: recording is best effort, refusing calls is not.
         let r = exec(&server(McpMode::ReadOnly, ""), "uptime");
         assert_eq!(r.is_error, Some(true));
+    }
+
+    // ── Rate and size limits (KR-01-F11) ────────────────────────────────────
+
+    #[test]
+    fn a_host_over_its_rate_limit_stops_answering() {
+        let (s, _dir, _path) = limited_server(2, 0);
+        // Full access, so nothing but the rate limit can refuse these.
+        exec(&s, "uptime");
+        exec(&s, "uptime");
+        let third = exec(&s, "uptime");
+        let body = text(&third);
+        assert_eq!(third.is_error, Some(true));
+        assert!(body.contains("\"reason\": \"rate_limited\""), "{body}");
+    }
+
+    #[test]
+    fn the_rate_limit_applies_per_host_not_per_tool() {
+        // Switching tools must not buy a fresh allowance.
+        let (s, _dir, _path) = limited_server(1, 0);
+        exec(&s, "uptime");
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let r = rt
+            .block_on(s.sftp_read(Parameters(PathParams {
+                host: "web-prod".into(),
+                path: "/etc/hostname".into(),
+            })))
+            .unwrap();
+        assert!(text(&r).contains("rate_limited"), "{}", text(&r));
+    }
+
+    #[test]
+    fn a_rate_limited_call_is_recorded() {
+        let (s, _dir, path) = limited_server(1, 0);
+        exec(&s, "uptime");
+        exec(&s, "uptime");
+        let recorded = records(&path);
+        assert_eq!(recorded.len(), 2);
+        assert_eq!(recorded[1].decision, "deny");
+        assert_eq!(recorded[1].rule_id.as_deref(), Some("rate_limited"));
+    }
+
+    #[test]
+    fn a_rate_limit_of_zero_never_refuses() {
+        let (s, _dir, _path) = limited_server(0, 0);
+        for _ in 0..50 {
+            let r = exec(&s, "uptime");
+            assert!(!text(&r).contains("rate_limited"));
+        }
+    }
+
+    #[test]
+    fn output_is_cut_to_the_hosts_limit_and_says_so() {
+        let (s, _dir, _path) = limited_server(0, 100);
+        let capped = s.cap(&host(), "x".repeat(500));
+        assert!(capped.truncated);
+        assert_eq!(capped.original, 500, "the record keeps the real size");
+        assert!(
+            capped.text.contains("truncated 400 bytes"),
+            "{}",
+            capped.text
+        );
     }
 
     #[test]

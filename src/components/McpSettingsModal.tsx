@@ -28,7 +28,17 @@ const MODE_BLURB: Record<McpMode, string> = {
   full: "No policy at all. The assistant has the access you have.",
 };
 
-type PolicyDraft = { mode: McpMode; rulesText: string };
+type PolicyDraft = {
+  mode: McpMode;
+  rulesText: string;
+  /** Calls a minute and KiB per call, as typed. 0 means no limit. */
+  callsPerMin: number;
+  kibPerCall: number;
+};
+
+/** What a host gets before anyone edits it - the backend's own defaults. */
+const DEFAULT_CALLS_PER_MIN = 60;
+const DEFAULT_KIB_PER_CALL = 256;
 
 export function McpSettingsModal({ onClose }: Props) {
   const {
@@ -68,7 +78,13 @@ export function McpSettingsModal({ onClose }: Props) {
         setExposed(new Set(c.exposed_host_ids));
         const drafts: Record<string, PolicyDraft> = {};
         for (const [id, p] of Object.entries(c.host_policies)) {
-          drafts[id] = { mode: p.mode, rulesText: p.rules_text };
+          drafts[id] = {
+            mode: p.mode,
+            rulesText: p.rules_text,
+            callsPerMin: p.max_calls_per_min,
+            // Bytes on the wire, KiB in the box: nobody wants to type 262144.
+            kibPerCall: Math.round(p.max_bytes_per_call / 1024),
+          };
         }
         setPolicies(drafts);
         setGlobalRules(c.global_rules_text);
@@ -81,7 +97,14 @@ export function McpSettingsModal({ onClose }: Props) {
   /** A host with no saved policy is read-only. The panel says so rather than
    *  showing a blank, because the default is the thing worth being sure of. */
   function draft(id: string): PolicyDraft {
-    return policies[id] ?? { mode: "read_only", rulesText: "" };
+    return (
+      policies[id] ?? {
+        mode: "read_only",
+        rulesText: "",
+        callsPerMin: DEFAULT_CALLS_PER_MIN,
+        kibPerCall: DEFAULT_KIB_PER_CALL,
+      }
+    );
   }
 
   function setDraft(id: string, patch: Partial<PolicyDraft>) {
@@ -124,7 +147,7 @@ export function McpSettingsModal({ onClose }: Props) {
       // Only the exposed hosts: a policy for a host nobody shares is noise.
       for (const id of exposed) {
         const d = draft(id);
-        await mcpSetHostPolicy(id, d.mode, d.rulesText);
+        await mcpSetHostPolicy(id, d.mode, d.rulesText, d.callsPerMin, d.kibPerCall * 1024);
       }
       setConfig(await mcpGetConfig());
       setPassword("");
@@ -328,6 +351,42 @@ export function McpSettingsModal({ onClose }: Props) {
                             onChange={(e) => setDraft(h.id, { rulesText: e.target.value })}
                             placeholder={"allow systemctl status *\ndeny rm -rf *"}
                           />
+
+                          <p className="mcp-hint mcp-limits-hint">
+                            Limits for this host. An assistant in a retry loop opens a connection
+                            per call, and a single read of a large log costs real money on its
+                            way into the model. 0 turns a limit off.
+                          </p>
+                          <div className="mcp-limits">
+                            <label className="mcp-limit">
+                              <span>Calls a minute</span>
+                              <input
+                                type="number"
+                                min={0}
+                                className="mcp-input"
+                                value={d.callsPerMin}
+                                onChange={(e) =>
+                                  setDraft(h.id, {
+                                    callsPerMin: Math.max(0, Number(e.target.value) || 0),
+                                  })
+                                }
+                              />
+                            </label>
+                            <label className="mcp-limit">
+                              <span>KiB per call</span>
+                              <input
+                                type="number"
+                                min={0}
+                                className="mcp-input"
+                                value={d.kibPerCall}
+                                onChange={(e) =>
+                                  setDraft(h.id, {
+                                    kibPerCall: Math.max(0, Number(e.target.value) || 0),
+                                  })
+                                }
+                              />
+                            </label>
+                          </div>
                         </div>
                       )}
                     </div>
