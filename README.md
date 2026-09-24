@@ -193,9 +193,19 @@ this snippet with a copy button.
   mistaken for it: a deny rule catches `rm -rf /`, and catches nothing that
   assembles itself at runtime. The read-only default is the boundary that
   actually holds, because it refuses what it was not told to permit.
-- **Guarded mode currently refuses rather than asks.** The approval prompt is
-  not built yet, so a call that would need approval is declined with a message
-  saying so. Use rules, or full access, until it lands.
+- **Guarded mode asks you.** A call no rule covers stops, and Kino shows the
+  command exactly as it was sent, with the host, the client that asked and a
+  countdown. You can approve it once, approve it for as long as that
+  `kino-mcp` keeps running, or refuse. Refusing is the default, and nothing
+  runs while the prompt is up.
+
+  If Kino is closed, or the vault is locked, the call is refused
+  **immediately** and the refusal says which of the two it was, rather than
+  leaving an assistant waiting two minutes for a prompt nobody can see. Same
+  if nobody answers in time. The prompt arrives over a Unix socket beside the
+  vault, mode `0600`, so another user on the machine cannot answer for you.
+  Windows has no channel yet: there, a guarded call is still refused, with a
+  message saying so.
 - **Each host has limits.** 60 calls a minute and 256 KiB returned per call by
   default, both editable per host next to its rules. Over the rate, calls are
   refused with `rate_limited` until the minute passes; over the size, the reply
@@ -203,6 +213,13 @@ this snippet with a copy button.
   cannot summarise a log from its first page and present that as the whole. The
   audit record keeps the untruncated size. 0 turns either limit off, and the
   count is per host and held in memory, so restarting `kino-mcp` clears it.
+- **Commands on guarded and full hosts are recorded.** `ssh_exec` and
+  `run_snippet` write an asciicast into *Kino Recordings*, named after the
+  host, and the activity view has a Replay button for each. It is a
+  transcript rather than a live capture: an MCP call hands back its output at
+  the end, so the cast is the command and then its output, without the pauses
+  between. Read-only hosts are not recorded - they run only what a rule
+  already named.
 - **Every call is recorded.** `kino-mcp` writes each tool call to
   `mcp_audit.jsonl.enc` beside the vault - what was called, on which host, the
   command verbatim, whether it was allowed or refused and why, the exit code,

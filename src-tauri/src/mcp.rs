@@ -4,6 +4,7 @@
 //! can list hosts, execute commands, and transfer files on the hosts the
 //! user explicitly chose to share.
 
+use crate::mcp_approval::{self, ApprovalRequest, Verdict};
 use crate::mcp_audit::{AuditLog, AuditRecord};
 use crate::mcp_config::McpVault;
 use crate::mcp_limits::{self, Window};
@@ -14,7 +15,7 @@ use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
 use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -34,6 +35,14 @@ pub struct KinoMcpServer {
     /// One sliding minute of call times per host id (KR-01-F11). In memory:
     /// `mcp_limits` says why that is the honest place for it.
     calls: Arc<Mutex<HashMap<String, Window>>>,
+    /// Calls approved for the rest of this session (KR-01-F6). Held in the
+    /// process, so restarting `kino-mcp` revokes every one of them - which is
+    /// the revocation the settings never have to offer.
+    approved: Arc<Mutex<HashSet<String>>>,
+    /// Where the app is listening. A field rather than a call to
+    /// `socket_path()` so tests cannot reach the socket of a Kino that is
+    /// actually running and put a prompt on someone's screen.
+    approval_socket: std::path::PathBuf,
     /// Built by the `#[tool_router]` macro and read by `#[tool_handler]`; the
     /// field looks unused to the compiler because both are generated.
     #[allow(dead_code)]
@@ -47,8 +56,18 @@ impl KinoMcpServer {
             audit: None,
             client: Arc::new(Mutex::new(("unknown".into(), "unknown".into()))),
             calls: Arc::new(Mutex::new(HashMap::new())),
+            approved: Arc::new(Mutex::new(HashSet::new())),
+            approval_socket: mcp_approval::socket_path(),
             tool_router: Self::tool_router(),
         }
+    }
+
+    /// Point approvals at another socket. Tests only: the real one belongs to
+    /// whichever Kino is running, and a test must never prompt a person.
+    #[cfg(test)]
+    fn asking_at(mut self, socket: std::path::PathBuf) -> Self {
+        self.approval_socket = socket;
+        self
     }
 
     /// The server as `kino-mcp` runs it: every call recorded.
@@ -73,6 +92,178 @@ impl KinoMcpServer {
             .entry(host.id.clone())
             .or_default()
             .admit(now, max_per_min)
+    }
+
+    /// Put the call to a person, and act on the answer (KR-01-F5, F6, F7).
+    ///
+    /// Returns `None` when it may proceed. Everything else is a refusal that
+    /// names the reason, because "denied" alone sends someone searching their
+    /// rules for a rule that was never involved.
+    async fn ask_a_person(
+        &self,
+        host: &Host,
+        tool: &str,
+        argument: &str,
+        started: Instant,
+        rule_id: Option<String>,
+    ) -> Option<CallToolResult> {
+        let key = Self::approval_key(host, tool, argument);
+        if self
+            .approved
+            .lock()
+            .map(|a| a.contains(&key))
+            .unwrap_or(false)
+        {
+            // Already approved for this session. Still recorded: "approved
+            // once, ran nine times" has to be visible in the log.
+            self.record(
+                tool,
+                Some(host),
+                argument,
+                started,
+                Outcome {
+                    decision: "approved",
+                    rule_id: Some("approved_for_session".to_string()),
+                    ..Default::default()
+                },
+            );
+            return None;
+        }
+
+        let request = ApprovalRequest {
+            v: mcp_approval::PROTOCOL,
+            id: uuid::Uuid::new_v4().to_string(),
+            tool: tool.to_string(),
+            host_id: host.id.clone(),
+            host_name: host.name.clone(),
+            argument: argument.to_string(),
+            client_name: self.client_id().0,
+            client_version: self.client_id().1,
+            timeout_secs: self.vault.approval_timeout_secs,
+        };
+
+        match mcp_approval::ask_at(&self.approval_socket, &request).await {
+            Verdict::Session => {
+                if let Ok(mut approved) = self.approved.lock() {
+                    approved.insert(key);
+                }
+                self.record(
+                    tool,
+                    Some(host),
+                    argument,
+                    started,
+                    Outcome {
+                        decision: "approved",
+                        rule_id: Some("approved_for_session".to_string()),
+                        ..Default::default()
+                    },
+                );
+                None
+            }
+            Verdict::Once => {
+                self.record(
+                    tool,
+                    Some(host),
+                    argument,
+                    started,
+                    Outcome {
+                        decision: "approved",
+                        rule_id,
+                        ..Default::default()
+                    },
+                );
+                None
+            }
+            Verdict::Denied(reason) => {
+                self.record(
+                    tool,
+                    Some(host),
+                    argument,
+                    started,
+                    Outcome {
+                        // The log distinguishes a person saying no from a
+                        // prompt nobody reached in time.
+                        decision: if reason == "denied_by_user" {
+                            "denied_by_user"
+                        } else {
+                            "deny"
+                        },
+                        rule_id: Some(reason.to_string()),
+                        ..Default::default()
+                    },
+                );
+                Some(refusal(
+                    host,
+                    tool,
+                    self.policy_for(host).mode,
+                    reason,
+                    None,
+                    &mcp_approval::explain(reason, &host.name, tool),
+                ))
+            }
+        }
+    }
+
+    /// Write an asciicast of one command and its output (KR-01-F10).
+    ///
+    /// Only for guarded and full hosts: a read-only host runs nothing a rule
+    /// did not already name, and recording every `sftp_read` would bury the
+    /// few casts worth watching.
+    ///
+    /// This is a transcript, not a live capture - `exec_once_full` hands back
+    /// the whole output at the end, so the cast is the command, then its
+    /// output, with none of the pauses in between. Honest for reading back
+    /// what an assistant did; it is not a replay of a session, because an MCP
+    /// call is not one.
+    fn record_cast(&self, host: &Host, command: &str, output: &str) -> Option<String> {
+        self.record_cast_in(&crate::recorder::recordings_dir(), host, command, output)
+    }
+
+    /// The same, into a given directory, so tests write casts of their own
+    /// rather than into the folder holding someone's real recordings.
+    fn record_cast_in(
+        &self,
+        dir: &std::path::Path,
+        host: &Host,
+        command: &str,
+        output: &str,
+    ) -> Option<String> {
+        if matches!(self.policy_for(host).mode, McpMode::ReadOnly) {
+            return None;
+        }
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        // The host name goes in the filename, so it has to survive being one:
+        // anything that is not a letter, digit, dash or underscore becomes a
+        // dash rather than a directory separator.
+        let safe: String = host
+            .name
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '-' })
+            .collect();
+        let name = format!(
+            "mcp-{stamp}-{safe}-{}.cast",
+            &uuid::Uuid::new_v4().to_string()[..8]
+        );
+        let path = dir.join(&name);
+
+        let write = || -> Result<(), String> {
+            let mut recorder =
+                crate::recorder::Recorder::with_command(&path, 120, 30, Some(command))?;
+            // The command first, as an input event: a cast that opens on
+            // output leaves the reader guessing what produced it.
+            recorder.record_input(format!("{command}\r\n").as_bytes())?;
+            recorder.record_output(output.as_bytes())
+        };
+        match write() {
+            Ok(()) => Some(name),
+            Err(e) => {
+                eprintln!("[kino-mcp] could not write the recording: {e}");
+                None
+            }
+        }
     }
 
     /// Cut output to what this host's policy allows, saying so in the text.
@@ -118,6 +309,7 @@ impl KinoMcpServer {
             duration_ms: started.elapsed().as_millis() as u64,
             client_name,
             client_version,
+            recording: outcome.recording,
             error: outcome.error,
         };
         if let Err(e) = log.append(&record) {
@@ -150,7 +342,14 @@ impl KinoMcpServer {
     ///
     /// This runs before any connection is opened, so a refused call costs the
     /// host nothing and leaves no trace on it.
-    fn gate(
+    /// What a session approval remembers: this command, this tool, this host.
+    /// Exact text, because "approve nginx restarts" is a rule, and rules are
+    /// written in the panel where they can be read back.
+    fn approval_key(host: &Host, tool: &str, argument: &str) -> String {
+        format!("{}\u{0}{}\u{0}{}", host.id, tool, argument)
+    }
+
+    async fn gate(
         &self,
         host: &Host,
         tool: &str,
@@ -192,20 +391,17 @@ impl KinoMcpServer {
         // Recorded here rather than in each tool: a refusal returns early, and
         // the one call that forgot to record it would be the interesting one.
         //
-        // A refusal with no rule behind it - the read-only default, or guarded
-        // mode with nobody to ask - records the reason in `rule_id`'s place.
-        // Otherwise the record says a call was refused without saying why,
-        // which is the one thing it exists to answer.
+        // A refusal with no rule behind it - the read-only default - records
+        // the reason in `rule_id`'s place, so a refusal always says why.
+        //
+        // `Ask` is deliberately not recorded here: it has not been decided
+        // yet, and `ask_a_person` records whichever way it goes. Recording it
+        // in both places put a denial in front of every approval.
         let why = match &decision {
             Decision::Deny { reason, rule_id } => {
                 Some(rule_id.clone().unwrap_or_else(|| (*reason).to_string()))
             }
-            Decision::Ask { rule_id } => Some(
-                rule_id
-                    .clone()
-                    .unwrap_or_else(|| "approval_unavailable".to_string()),
-            ),
-            Decision::Allow => None,
+            Decision::Ask { .. } | Decision::Allow => None,
         };
         if let Some(rule_id) = why {
             self.record(
@@ -223,17 +419,11 @@ impl KinoMcpServer {
         match decision {
             Decision::Allow => None,
 
-            // No approval broker exists yet, so guarded mode refuses rather
-            // than blocking forever on an answer nothing can give. When the
-            // broker lands this arm asks the desktop app instead; the rest of
-            // the decision is already correct.
-            Decision::Ask { rule_id } => Some(refusal(
-                host, tool, policy.mode, "approval_unavailable", rule_id,
-                &format!(
-                    "'{}' is in guarded mode, so a person has to approve this call.                      Approval isn't available in this version - either add an allow rule                      for it in Kino, or run it yourself.",
-                    host.name
-                ),
-            )),
+            // Guarded mode's reason to exist: stop and ask a person.
+            Decision::Ask { rule_id } => {
+                self.ask_a_person(host, tool, argument, started, rule_id)
+                    .await
+            }
 
             Decision::Deny { reason, rule_id } => {
                 let message = match reason {
@@ -265,6 +455,7 @@ struct Outcome {
     exit_code: Option<i32>,
     bytes_out: Option<usize>,
     error: Option<String>,
+    recording: Option<String>,
 }
 
 impl Outcome {
@@ -480,7 +671,7 @@ impl KinoMcpServer {
             }
         };
 
-        if let Some(refused) = self.gate(h, "ssh_exec", &params.command, started) {
+        if let Some(refused) = self.gate(h, "ssh_exec", &params.command, started).await {
             return Ok(refused);
         }
 
@@ -503,6 +694,14 @@ impl KinoMcpServer {
                         limit.saturating_sub(stdout.text.len()).max(1)
                     },
                 );
+                // The cast keeps the whole output even where the reply was
+                // cut: the record is for a person reading later, not for a
+                // context window.
+                let recording = self.record_cast(
+                    h,
+                    &params.command,
+                    &format!("{}{}", stdout.text, stderr.text),
+                );
                 self.record(
                     "ssh_exec",
                     Some(h),
@@ -513,6 +712,7 @@ impl KinoMcpServer {
                         // is 0-255, and i32 is what every reader expects.
                         exit_code: out.code.map(|c| c as i32),
                         bytes_out: Some(produced),
+                        recording,
                         ..Outcome::allowed()
                     },
                 );
@@ -573,7 +773,7 @@ impl KinoMcpServer {
             }
         };
 
-        if let Some(refused) = self.gate(h, "sftp_list", &params.path, started) {
+        if let Some(refused) = self.gate(h, "sftp_list", &params.path, started).await {
             return Ok(refused);
         }
 
@@ -640,7 +840,7 @@ impl KinoMcpServer {
             }
         };
 
-        if let Some(refused) = self.gate(h, "sftp_read", &params.path, started) {
+        if let Some(refused) = self.gate(h, "sftp_read", &params.path, started).await {
             return Ok(refused);
         }
 
@@ -712,7 +912,7 @@ impl KinoMcpServer {
             }
         };
 
-        if let Some(refused) = self.gate(h, "sftp_write", &params.path, started) {
+        if let Some(refused) = self.gate(h, "sftp_write", &params.path, started).await {
             return Ok(refused);
         }
 
@@ -849,13 +1049,14 @@ impl KinoMcpServer {
         };
 
         // The snippet's *commands*, not its name: a rule is about what runs.
-        if let Some(refused) = self.gate(h, "run_snippet", &snip.commands, started) {
+        if let Some(refused) = self.gate(h, "run_snippet", &snip.commands, started).await {
             return Ok(refused);
         }
 
         match ssh_session::exec_once(h, &snip.commands).await {
             Ok(output) => {
                 let capped = self.cap(h, output);
+                let recording = self.record_cast(h, &snip.commands, &capped.text);
                 // The commands, not the snippet's name: the record has to say
                 // what ran, and a snippet can be edited afterwards.
                 self.record(
@@ -865,6 +1066,7 @@ impl KinoMcpServer {
                     started,
                     Outcome {
                         bytes_out: Some(capped.original),
+                        recording,
                         ..Outcome::allowed()
                     },
                 );
@@ -1010,7 +1212,11 @@ mod tests {
             }],
             policies,
             global_rules: vec![],
+            approval_timeout_secs: crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
         })
+        // Nothing is listening here, which is what a test wants: the real
+        // socket belongs to whatever Kino is running on this machine.
+        .asking_at("/nonexistent/kino-test-approval.sock".into())
     }
 
     /// A server whose host carries the given limits.
@@ -1123,14 +1329,14 @@ mod tests {
     }
 
     #[test]
-    fn a_guarded_refusal_records_that_nobody_could_be_asked() {
-        // Until the approval broker lands, guarded refuses. The record has to
-        // say that is why - not leave it looking like a rule said no.
+    fn a_guarded_refusal_records_why_nobody_was_asked() {
+        // With no app listening, guarded refuses. The record has to say that
+        // is why, rather than leaving it looking like a rule said no.
         let (s, _dir, path) = recording_server(McpMode::Guarded, "");
         exec(&s, "systemctl restart nginx");
         let recorded = records(&path);
         assert_eq!(recorded[0].decision, "deny");
-        assert_eq!(recorded[0].rule_id.as_deref(), Some("approval_unavailable"));
+        assert_eq!(recorded[0].rule_id.as_deref(), Some("app_not_running"));
     }
 
     #[test]
@@ -1197,6 +1403,229 @@ mod tests {
         // be opened: recording is best effort, refusing calls is not.
         let r = exec(&server(McpMode::ReadOnly, ""), "uptime");
         assert_eq!(r.is_error, Some(true));
+    }
+
+    // ── Recording what ran (KR-01-F10) ──────────────────────────────────────
+
+    #[test]
+    fn a_command_on_a_full_host_is_recorded_as_a_cast() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = server(McpMode::Full, "");
+        let name = s
+            .record_cast_in(
+                dir.path(),
+                &host(),
+                "systemctl status nginx",
+                "active (running)",
+            )
+            .expect("a cast should have been written");
+
+        let cast = std::fs::read_to_string(dir.path().join(&name)).unwrap();
+        let mut lines = cast.lines();
+
+        let header: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+        assert_eq!(header["version"], 3);
+        assert_eq!(
+            header["command"], "systemctl status nginx",
+            "the cast says what it is of"
+        );
+
+        let input: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+        assert_eq!(input[1], "i", "the command is an input event");
+        assert!(input[2]
+            .as_str()
+            .unwrap()
+            .contains("systemctl status nginx"));
+
+        let output: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+        assert_eq!(output[1], "o");
+        assert_eq!(output[2], "active (running)");
+    }
+
+    #[test]
+    fn a_read_only_host_is_not_recorded() {
+        // It can only run what a rule already named, and a cast per sftp_read
+        // would bury the few worth watching.
+        let dir = tempfile::tempdir().unwrap();
+        let s = server(McpMode::ReadOnly, "allow uptime");
+        assert_eq!(
+            s.record_cast_in(dir.path(), &host(), "uptime", "up 3 days"),
+            None
+        );
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_hosts_name_cannot_escape_the_recordings_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = server(McpMode::Full, "");
+        let sneaky = Host {
+            name: "../../etc/cron.d/evil".into(),
+            ..host()
+        };
+        let name = s
+            .record_cast_in(dir.path(), &sneaky, "uptime", "up")
+            .unwrap();
+        assert!(!name.contains('/'), "{name}");
+        assert!(dir.path().join(&name).is_file());
+    }
+
+    // ── Asking a person (KR-01-F5, F6) ──────────────────────────────────────
+    //
+    // A stand-in app on a socket of this test's own, answering the way the
+    // window will. What is being tested is the *server's* half: that Ask
+    // reaches a person, that the answer is obeyed, that a session approval is
+    // remembered, and that each outcome is recorded as what it was.
+
+    struct FakeApp {
+        prompts: Arc<Mutex<Vec<crate::mcp_approval::ApprovalRequest>>>,
+        socket: std::path::PathBuf,
+        _dir: tempfile::TempDir,
+    }
+
+    /// An app that answers everything with `decision`.
+    fn fake_app(decision: &'static str) -> FakeApp {
+        use crate::mcp_approval::broker::{self, Broker};
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("approval.sock");
+        let listener = broker::bind(&socket).unwrap();
+        let broker_handle = Broker::new();
+        let prompts = Arc::new(Mutex::new(Vec::new()));
+
+        let seen = prompts.clone();
+        let answering = broker_handle.clone();
+        tokio::spawn(async move {
+            broker::serve(
+                answering.clone(),
+                listener,
+                || true,
+                move |request| {
+                    seen.lock().unwrap().push(request.clone());
+                    // The click, as fast as a person never is.
+                    let b = answering.clone();
+                    tokio::spawn(async move {
+                        b.respond(&request.id, decision);
+                    });
+                },
+            )
+            .await;
+        });
+
+        FakeApp {
+            prompts,
+            socket,
+            _dir: dir,
+        }
+    }
+
+    /// Run one guarded command against `app`, on a server that records.
+    async fn guarded_call(
+        app: &FakeApp,
+        command: &str,
+    ) -> (CallToolResult, std::path::PathBuf, tempfile::TempDir) {
+        let (s, dir, path) = recording_server(McpMode::Guarded, "");
+        let s = s.asking_at(app.socket.clone());
+        let r = s
+            .ssh_exec(Parameters(ExecParams {
+                host: "web-prod".into(),
+                command: command.into(),
+            }))
+            .await
+            .unwrap();
+        (r, path, dir)
+    }
+
+    #[tokio::test]
+    async fn an_approved_call_gets_past_the_gate() {
+        let app = fake_app("approve_once");
+        let (r, path, _dir) = guarded_call(&app, "systemctl restart nginx").await;
+
+        // Port 1 on loopback: a transport error means the gate let it through,
+        // which is the only way to prove that without a real host.
+        let body = text(&r);
+        assert!(!body.contains("policy_denied"), "{body}");
+        assert_eq!(app.prompts.lock().unwrap().len(), 1, "a person was asked");
+
+        let recorded = records(&path);
+        assert_eq!(
+            recorded
+                .iter()
+                .map(|r| r.decision.as_str())
+                .collect::<Vec<_>>(),
+            ["approved", "allow"],
+            "the approval, then the call it allowed - and no denial in front of them"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_prompt_carries_the_command_verbatim() {
+        // KR-01-F6: the person approves what will actually run, not a summary.
+        let app = fake_app("deny");
+        guarded_call(&app, "rm -rf /var/log/*.gz").await;
+        let prompt = app.prompts.lock().unwrap()[0].clone();
+        assert_eq!(prompt.argument, "rm -rf /var/log/*.gz");
+        assert_eq!(prompt.host_name, "web-prod");
+        assert_eq!(prompt.tool, "ssh_exec");
+    }
+
+    #[tokio::test]
+    async fn a_refused_approval_stops_the_call_and_says_who_refused() {
+        let app = fake_app("deny");
+        let (r, path, _dir) = guarded_call(&app, "systemctl restart nginx").await;
+        let body = text(&r);
+        assert_eq!(r.is_error, Some(true));
+        assert!(body.contains("denied_by_user"), "{body}");
+        assert_eq!(records(&path)[0].decision, "denied_by_user");
+    }
+
+    #[tokio::test]
+    async fn approving_for_the_session_stops_the_asking() {
+        let app = fake_app("approve_session");
+        let (s, _dir, path) = recording_server(McpMode::Guarded, "");
+        let s = s.asking_at(app.socket.clone());
+
+        for _ in 0..3 {
+            s.ssh_exec(Parameters(ExecParams {
+                host: "web-prod".into(),
+                command: "systemctl restart nginx".into(),
+            }))
+            .await
+            .unwrap();
+        }
+
+        assert_eq!(
+            app.prompts.lock().unwrap().len(),
+            1,
+            "asked once, not three times"
+        );
+        // Each call leaves two records: the approval, then what the call did.
+        // "Approved once, ran three times" has to be visible in the log.
+        let approvals = records(&path)
+            .into_iter()
+            .filter(|r| r.decision == "approved")
+            .count();
+        assert_eq!(approvals, 3, "every call is recorded, asked for or not");
+    }
+
+    #[tokio::test]
+    async fn a_session_approval_covers_only_the_command_it_was_given_for() {
+        let app = fake_app("approve_session");
+        let (s, _dir, _path) = recording_server(McpMode::Guarded, "");
+        let s = s.asking_at(app.socket.clone());
+
+        for command in ["systemctl restart nginx", "rm -rf /var"] {
+            s.ssh_exec(Parameters(ExecParams {
+                host: "web-prod".into(),
+                command: command.into(),
+            }))
+            .await
+            .unwrap();
+        }
+        assert_eq!(
+            app.prompts.lock().unwrap().len(),
+            2,
+            "a different command is a different question"
+        );
     }
 
     // ── Rate and size limits (KR-01-F11) ────────────────────────────────────
@@ -1340,14 +1769,14 @@ mod tests {
     }
 
     #[test]
-    fn guarded_says_plainly_that_approval_does_not_exist_yet() {
+    fn guarded_with_no_app_to_ask_refuses_and_says_which() {
+        // KR-01-F7. The message has to separate "Kino is not running" from
+        // "a rule refused this": they are fixed in completely different places.
         let r = exec(&server(McpMode::Guarded, ""), "uptime");
         let body = text(&r);
-        assert!(
-            body.contains("\"reason\": \"approval_unavailable\""),
-            "{body}"
-        );
+        assert!(body.contains("\"reason\": \"app_not_running\""), "{body}");
         assert!(body.contains("guarded mode"), "{body}");
+        assert!(body.contains("not running"), "{body}");
     }
 
     #[test]
@@ -1373,6 +1802,7 @@ mod tests {
             snippets: vec![],
             policies: HashMap::new(),
             global_rules: vec![],
+            approval_timeout_secs: crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
         });
         assert!(text(&exec(&s, "uptime")).contains("\"reason\": \"default_deny\""));
     }

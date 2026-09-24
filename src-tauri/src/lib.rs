@@ -16,6 +16,7 @@ mod key_sweep;
 mod keygen;
 mod local_session;
 pub mod mcp;
+pub mod mcp_approval;
 pub mod mcp_audit;
 mod mcp_binary;
 pub mod mcp_config;
@@ -57,6 +58,9 @@ pub struct AppState {
     pub metrics_streams: metrics::MetricsStreams,
     pub docker_log_streams: docker::LogStreams,
     pub ai_cancels: ai::AiCancels,
+    /// Approval prompts waiting on an answer (KR-01-F5). Present on every
+    /// platform; only the socket that feeds it is Unix-only.
+    pub approvals: Arc<mcp_approval::broker::Broker>,
 }
 
 // ── Vault commands ────────────────────────────────────────────────────────────
@@ -110,6 +114,9 @@ fn unlock_vault(state: State<'_, AppState>, password: String) -> Result<Vec<Host
 #[tauri::command]
 fn lock_vault(state: State<'_, AppState>) {
     cloud::deactivate();
+    // A prompt on screen is unanswerable now - the command could not run even
+    // if approved - so it is refused rather than left to time out (KR-01-F7).
+    state.approvals.deny_all("vault_locked");
     // Wipe the derived key from memory rather than just dropping it.
     if let Some(mut key) = state.vault_key.lock().unwrap().take() {
         use zeroize::Zeroize;
@@ -1445,13 +1452,7 @@ async fn start_recording(
     session_id: String,
     filename: String,
 ) -> Result<(), String> {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| ".".to_string());
-    let path = std::path::PathBuf::from(home)
-        .join("Videos")
-        .join("Kino Recordings")
-        .join(filename);
+    let path = recorder::recordings_dir().join(filename);
 
     let path_str = path.to_string_lossy().to_string();
 
@@ -1511,12 +1512,7 @@ struct RecordingInfo {
 
 #[tauri::command]
 async fn list_recordings() -> Result<Vec<RecordingInfo>, String> {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| ".".to_string());
-    let dir = std::path::PathBuf::from(home)
-        .join("Videos")
-        .join("Kino Recordings");
+    let dir = recorder::recordings_dir();
 
     if !dir.exists() {
         return Ok(vec![]);
@@ -1554,25 +1550,13 @@ async fn list_recordings() -> Result<Vec<RecordingInfo>, String> {
 
 #[tauri::command]
 async fn read_recording(filename: String) -> Result<String, String> {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| ".".to_string());
-    let path = std::path::PathBuf::from(home)
-        .join("Videos")
-        .join("Kino Recordings")
-        .join(filename);
+    let path = recorder::recordings_dir().join(filename);
     std::fs::read_to_string(path).map_err(|e| format!("Failed to read recording: {}", e))
 }
 
 #[tauri::command]
 async fn delete_recording(filename: String) -> Result<(), String> {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| ".".to_string());
-    let path = std::path::PathBuf::from(home)
-        .join("Videos")
-        .join("Kino Recordings")
-        .join(filename);
+    let path = recorder::recordings_dir().join(filename);
     std::fs::remove_file(path).map_err(|e| format!("Failed to delete recording: {}", e))
 }
 
@@ -1663,6 +1647,43 @@ fn list_active_forwards(state: State<'_, AppState>) -> Vec<String> {
 }
 
 // ── MCP commands ────────────────────────────────────────────────────────────
+
+/// How long a prompt waits before `kino-mcp` refuses on its own (KR-01-F5).
+///
+/// Clamped rather than trusted: a zero would refuse before the window could
+/// paint, and an hour would leave an assistant hanging on a prompt nobody is
+/// in the room to answer.
+#[tauri::command]
+fn mcp_set_approval_timeout(state: State<'_, AppState>, seconds: u32) -> Result<(), String> {
+    let seconds = seconds.clamp(10, 600);
+    {
+        let key_guard = state.vault_key.lock().unwrap();
+        let key = key_guard.as_ref().ok_or("Vault is locked")?;
+        let salt = state.vault_salt.lock().unwrap();
+        let salt = salt.as_ref().ok_or("Vault is locked")?;
+        let mut config = mcp_config::load_for_edit(key);
+        config.approval_timeout_secs = seconds;
+        mcp_config::save_config(&config, key, salt)?;
+    }
+    sync_mcp_vault(&state)
+}
+
+/// Answer an approval prompt (KR-01-F6).
+///
+/// `false` means the request had already gone - it expired, or the assistant
+/// hung up - so the window can say so instead of implying the click landed.
+#[tauri::command]
+fn mcp_approval_respond(state: State<'_, AppState>, id: String, decision: String) -> bool {
+    // Only these three. An unknown string must not reach the broker and be
+    // relayed to kino-mcp as something it might read as permission.
+    if !matches!(
+        decision.as_str(),
+        "approve_once" | "approve_session" | "deny"
+    ) {
+        return false;
+    }
+    state.approvals.respond(&id, &decision)
+}
 
 /// What the audit viewer gets (KR-01-F9).
 #[derive(serde::Serialize)]
@@ -1756,6 +1777,7 @@ fn mcp_get_config(state: State<'_, AppState>) -> Result<mcp_config::McpConfigVie
                 )
             })
             .collect(),
+        approval_timeout_secs: config.approval_timeout_secs,
         global_rules_text: mcp_policy::rules_to_text(&config.global_rules),
         exposed_host_ids: config.exposed_host_ids,
         configured: config.configured,
@@ -1897,15 +1919,7 @@ fn sync_mcp_vault(state: &AppState) -> Result<(), String> {
 
     let hosts = state.hosts.lock().unwrap();
     let snippets = state.snippets.lock().unwrap();
-    mcp_config::export_mcp_vault(
-        &hosts,
-        &snippets,
-        &config.exposed_host_ids,
-        &config.host_policies,
-        &config.global_rules,
-        mcp_pwd,
-        &salt,
-    )
+    mcp_config::export_mcp_vault(&hosts, &snippets, &config, mcp_pwd, &salt)
 }
 
 // ── App entry ─────────────────────────────────────────────────────────────────
@@ -1947,6 +1961,7 @@ pub fn run() {
         metrics_streams: Arc::new(Mutex::new(HashMap::new())),
         docker_log_streams: Arc::new(Mutex::new(HashMap::new())),
         ai_cancels: Arc::new(Mutex::new(HashMap::new())),
+        approvals: mcp_approval::broker::Broker::new(),
     };
 
     tauri::Builder::default()
@@ -1962,6 +1977,33 @@ pub fn run() {
             // previous version's kino-mcp. Off the main thread: it may hash
             // and copy a 17 MB file.
             std::thread::spawn(mcp_binary::refresh_installed_copy);
+
+            // The approval channel (KR-01-F5). Without it, guarded mode has
+            // nobody to ask and every Ask is a refusal - which is what a
+            // failure to bind leaves us with, so it is reported and the app
+            // carries on rather than refusing to start.
+            #[cfg(unix)]
+            {
+                use tauri::{Emitter, Manager};
+                let handle = app.handle().clone();
+                let broker = app.state::<AppState>().approvals.clone();
+                let unlocked_state = app.state::<AppState>().vault_key.clone();
+                match mcp_approval::broker::bind(&mcp_approval::socket_path()) {
+                    Ok(listener) => {
+                        tauri::async_runtime::spawn(mcp_approval::broker::serve(
+                            broker,
+                            listener,
+                            move || unlocked_state.lock().map(|k| k.is_some()).unwrap_or(false),
+                            move |request| {
+                                // The window decides nothing; it only shows
+                                // this and sends back what the person clicked.
+                                let _ = handle.emit("mcp-approval", request);
+                            },
+                        ));
+                    }
+                    Err(e) => eprintln!("[kino] approvals unavailable: {e}"),
+                }
+            }
 
             use tauri::menu::{Menu, MenuItem};
             use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -2118,6 +2160,8 @@ pub fn run() {
             ai::ai_cancel,
             update::check_for_update,
             update::updater_key_id,
+            mcp_approval_respond,
+            mcp_set_approval_timeout,
             mcp_audit_read,
             mcp_binary::check_mcp_binary,
             mcp_binary::install_mcp_binary,
@@ -2135,8 +2179,18 @@ pub fn run() {
             mcp_set_password,
             mcp_set_exposed_hosts,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|_app, event| {
+            // The socket file outlives the process unless something removes
+            // it (KR-01-S4). A leftover one only refuses connections, so this
+            // is tidiness rather than safety - but a kino-mcp that finds a
+            // dead socket should find nothing at all instead.
+            if let tauri::RunEvent::Exit = event {
+                #[cfg(unix)]
+                let _ = std::fs::remove_file(mcp_approval::socket_path());
+            }
+        });
 }
 
 #[cfg(test)]
@@ -2285,6 +2339,7 @@ mod lock_tests {
             metrics_streams: Arc::new(Mutex::new(HashMap::new())),
             docker_log_streams: Arc::new(Mutex::new(HashMap::new())),
             ai_cancels: Arc::new(Mutex::new(HashMap::new())),
+            approvals: mcp_approval::broker::Broker::new(),
         }
     }
 

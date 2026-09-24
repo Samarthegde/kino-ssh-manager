@@ -57,6 +57,9 @@ sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"
+# `start_paused` in tokio::test: an approval timeout is 120s, and a test that
+# actually waits that long is a test nobody runs.
+tokio = { version = "1", features = ["test-util"] }
 
 # russh pulls pre-release RustCrypto crates (ssh-key/elliptic-curve/p256/…) that
 # trip the std `ptr::copy_nonoverlapping` UB-precondition check during the SSH

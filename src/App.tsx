@@ -18,6 +18,7 @@ import { SettingsMenu } from "./components/SettingsMenu";
 import { Unlock } from "./components/Unlock";
 import { ContextMenu, MenuItem } from "./components/ContextMenu";
 import { CommandPalette } from "./components/CommandPalette";
+import { ApprovalModal } from "./components/ApprovalModal";
 import { ToolsMenu } from "./components/ToolsMenu";
 import "./index.css";
 
@@ -481,6 +482,11 @@ function App() {
       {aiSettingsOpen && <AiSettingsModal onClose={() => setAiSettingsOpen(false)} />}
 
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
+
+      {/* Always mounted: an assistant can ask at any moment, and a prompt
+          that only exists while some panel is open is a prompt nobody sees.
+          It renders nothing until kino-mcp asks. */}
+      <ApprovalModal />
 
       {toast && <div className="app-toast">{toast}</div>}
 

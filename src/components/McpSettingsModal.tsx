@@ -47,6 +47,7 @@ export function McpSettingsModal({ onClose }: Props) {
     mcpSetExposedHosts,
     mcpSetHostPolicy,
     mcpSetGlobalRules,
+    mcpSetApprovalTimeout,
     checkMcpBinary,
     installMcpBinary,
     hosts,
@@ -67,6 +68,7 @@ export function McpSettingsModal({ onClose }: Props) {
   const [copied, setCopied] = useState(false);
   const [policies, setPolicies] = useState<Record<string, PolicyDraft>>({});
   const [globalRules, setGlobalRules] = useState("");
+  const [approvalTimeout, setApprovalTimeout] = useState(120);
   const [editingRules, setEditingRules] = useState<string | null>(null);
   /** A host whose jump to full access is waiting to be confirmed by name. */
   const [pendingFull, setPendingFull] = useState<string | null>(null);
@@ -88,6 +90,7 @@ export function McpSettingsModal({ onClose }: Props) {
         }
         setPolicies(drafts);
         setGlobalRules(c.global_rules_text);
+        setApprovalTimeout(c.approval_timeout_secs || 120);
       })
       .catch((e) => setError(String(e)));
   }, [mcpGetConfig]);
@@ -144,6 +147,7 @@ export function McpSettingsModal({ onClose }: Props) {
       if (password) await mcpSetPassword(password);
       await mcpSetExposedHosts(Array.from(exposed));
       await mcpSetGlobalRules(globalRules);
+      await mcpSetApprovalTimeout(approvalTimeout);
       // Only the exposed hosts: a policy for a host nobody shares is noise.
       for (const id of exposed) {
         const d = draft(id);
@@ -393,6 +397,29 @@ export function McpSettingsModal({ onClose }: Props) {
                   );
                 })
               )}
+            </div>
+          </section>
+
+          <section className="mcp-section">
+            <p className="mcp-section-title">Guarded mode</p>
+            <p className="mcp-hint">
+              A call on a guarded host that no rule covers stops and asks you here, showing the
+              command as it was sent. Nothing runs until you approve it, and if nobody answers in
+              time it is refused. Kino has to be running and unlocked - otherwise the call is
+              refused straight away rather than waiting.
+            </p>
+            <div className="mcp-limits">
+              <label className="mcp-limit">
+                <span>Seconds to answer</span>
+                <input
+                  type="number"
+                  min={10}
+                  max={600}
+                  className="mcp-input"
+                  value={approvalTimeout}
+                  onChange={(e) => setApprovalTimeout(Number(e.target.value) || 120)}
+                />
+              </label>
             </div>
           </section>
 

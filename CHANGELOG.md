@@ -7,6 +7,18 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 ## [Unreleased]
 
 ### Added
+- **Guarded mode now asks you instead of refusing.** A call that no rule
+  covers stops `kino-mcp` and puts a prompt on screen with the command
+  verbatim, the host, which client asked, and a countdown. Approve it once,
+  approve it for as long as that `kino-mcp` runs, or refuse - refusing is the
+  default and the focused button. With Kino closed or the vault locked, the
+  call is refused immediately and the message says which, rather than hanging
+  until the timeout. The channel is a Unix socket beside the vault at mode
+  `0600`; the wait is configurable in the MCP panel. Windows still refuses,
+  for want of a named-pipe implementation nobody can test here.
+- **Recordings of what an assistant ran.** On guarded and full hosts,
+  `ssh_exec` and `run_snippet` write an asciicast to *Kino Recordings*, with a
+  Replay button beside the call in **Settings → Security → MCP activity**.
 - **A record of what an assistant did over MCP.** `kino-mcp` now writes every
   tool call to `mcp_audit.jsonl.enc`: the tool, the host, the command
   verbatim, allowed or refused and why, the exit code, how long it took, how

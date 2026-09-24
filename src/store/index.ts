@@ -389,6 +389,21 @@ export interface McpBinaryStatus {
   on_path_matches: boolean | null;
 }
 
+/** Mirrors `ApprovalRequest` in mcp_approval.rs: a call waiting on a person. */
+export interface McpApprovalRequest {
+  v: number;
+  id: string;
+  tool: string;
+  host_id: string;
+  host_name: string;
+  /** The command, path or snippet body, verbatim. Shown unwrapped. */
+  argument: string;
+  client_name: string;
+  client_version: string;
+  /** Seconds before kino-mcp refuses it on its own. */
+  timeout_secs: number;
+}
+
 /** Mirrors `AuditRecord` in mcp_audit.rs - one MCP tool call. */
 export interface McpAuditRecord {
   /** Unix milliseconds. */
@@ -406,6 +421,8 @@ export interface McpAuditRecord {
   duration_ms: number;
   client_name: string;
   client_version: string;
+  /** The asciicast of this call, if one was written. A filename, not a path. */
+  recording?: string | null;
   /** Set when the call was allowed but failed anyway. */
   error?: string | null;
 }
@@ -429,6 +446,8 @@ export interface McpConfig {
   host_policies: Record<string, McpHostPolicy>;
   /** The global rule block, in the text form the editor uses. */
   global_rules_text: string;
+  /** Seconds a guarded-mode prompt waits before kino-mcp refuses. */
+  approval_timeout_secs: number;
   /** Set when saved settings exist but could not be read. */
   problem?: string | null;
   /** True once an MCP password has been set. */
@@ -822,6 +841,11 @@ interface VaultStore {
   deleteRecording: (filename: string) => Promise<void>;
   setRecordingState: (sessionId: string, isRecording: boolean) => void;
 
+  /** Answer a guarded-mode prompt. False if it had already expired. */
+  respondToApproval: (
+    id: string,
+    decision: "approve_once" | "approve_session" | "deny"
+  ) => Promise<boolean>;
   /** Every MCP tool call that was recorded, newest first. */
   mcpAuditRead: (limit?: number) => Promise<McpAuditReport>;
   mcpGetConfig: () => Promise<McpConfig>;
@@ -837,6 +861,8 @@ interface VaultStore {
     maxBytesPerCall?: number
   ) => Promise<void>;
   mcpSetGlobalRules: (rulesText: string) => Promise<void>;
+  /** Seconds a guarded-mode prompt waits. Clamped to 10..600 by the backend. */
+  mcpSetApprovalTimeout: (seconds: number) => Promise<void>;
 }
 
 const AUTO_SYNC_KEY = "ssh-mgr:autosync";
@@ -2122,6 +2148,11 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
     }),
   mcpSetGlobalRules: (rulesText) =>
     invoke<void>("mcp_set_global_rules", { rulesText }),
+  mcpSetApprovalTimeout: (seconds) =>
+    invoke<void>("mcp_set_approval_timeout", { seconds }),
+  respondToApproval: async (id, decision) => {
+    return await invoke<boolean>("mcp_approval_respond", { id, decision });
+  },
   mcpAuditRead: async (limit?: number) => {
     return await invoke<McpAuditReport>("mcp_audit_read", { limit });
   },

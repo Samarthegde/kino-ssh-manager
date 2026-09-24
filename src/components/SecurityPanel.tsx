@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
 import { pasteToSession } from "../terminalRegistry";
+import { ReplayModal } from "./ReplayModal";
 import {
   AuditReport,
   HostAudit,
@@ -109,6 +110,8 @@ export function SecurityPanel({ onClose, initialView = "keys" }: Props) {
   const [outcome, setOutcome] = useState<{ id: string; result: RotateOutcome } | null>(null);
   const [showClean, setShowClean] = useState(false);
   const [activity, setActivity] = useState<McpAuditReport | null>(null);
+  /** The cast being watched, if any. */
+  const [replaying, setReplaying] = useState<string | null>(null);
   const [loadingActivity, setLoadingActivity] = useState(false);
   /** Filters for the record (KR-01-F9). "" means every one. */
   const [actHost, setActHost] = useState("");
@@ -885,7 +888,17 @@ export function SecurityPanel({ onClose, initialView = "keys" }: Props) {
               </td>
               <td className="mono">{r.tool}</td>
               <td className="activity-what mono">{r.argument || "-"}</td>
-              <td>{renderOutcomeCell(r)}</td>
+              <td>
+                {renderOutcomeCell(r)}
+                {r.recording && (
+                  <button
+                    className="btn btn-sm activity-replay"
+                    onClick={() => setReplaying(r.recording!)}
+                  >
+                    Replay
+                  </button>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -928,6 +941,9 @@ export function SecurityPanel({ onClose, initialView = "keys" }: Props) {
   return (
     <div className="modal-overlay" onClick={() => { if (!rotatingId) onClose(); }}>
       <div className="modal audit-modal" onClick={(e) => e.stopPropagation()}>
+        {replaying && (
+          <ReplayModal filename={replaying} onClose={() => setReplaying(null)} />
+        )}
         <div className="modal-header">
           <h2>Security</h2>
           <button className="icon-btn" onClick={onClose} disabled={!!rotatingId}>✕</button>
