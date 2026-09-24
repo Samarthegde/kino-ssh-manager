@@ -130,6 +130,59 @@ jobs:
           # Publishes the latest.json manifest the updater endpoint points at.
           includeUpdaterJson: true
 
+      # Installers are named with the version in them, which makes a link to
+      # "the current Linux build" impossible: every release breaks it. These
+      # are copies under fixed names, so the README and the website can point
+      # straight at a download that keeps working. The versioned originals
+      # stay - they are what the updater's manifest references.
+      - name: Publish downloads under fixed names
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        run: |
+          shopt -s nullglob
+          stage=$(mktemp -d)
+          copy() { [ -e "$1" ] && cp "$1" "$stage/$2" && echo "  $2 <- $(basename "$1")"; }
+          b=src-tauri/target/release/bundle
+          for f in "$b"/deb/*.deb;             do copy "$f" kino-linux-x86_64.deb; done
+          for f in "$b"/rpm/*.rpm;             do copy "$f" kino-linux-x86_64.rpm; done
+          for f in "$b"/appimage/*.AppImage;   do copy "$f" kino-linux-x86_64.AppImage; done
+          for f in "$b"/msi/*.msi;             do copy "$f" kino-windows-x86_64.msi; done
+          for f in "$b"/nsis/*-setup.exe;      do copy "$f" kino-windows-x86_64-setup.exe; done
+          ls "$stage" > /dev/null
+          echo "STAGE=$stage" >> "$GITHUB_ENV"
+
+      - name: Attach them to the release
+        uses: actions/github-script@v7
+        env:
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const dir = process.env.STAGE;
+            const release_id = Number(process.env.RELEASE_ID);
+            const { owner, repo } = context.repo;
+            const existing = await github.rest.repos.listReleaseAssets({
+              owner, repo, release_id, per_page: 100,
+            });
+            for (const name of fs.readdirSync(dir)) {
+              // Re-running a tag replaces rather than fails.
+              for (const a of existing.data.filter((a) => a.name === name)) {
+                await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: a.id });
+              }
+              const data = fs.readFileSync(path.join(dir, name));
+              await github.rest.repos.uploadReleaseAsset({
+                owner, repo, release_id, name, data,
+                headers: {
+                  'content-type': 'application/octet-stream',
+                  'content-length': data.length,
+                },
+              });
+              core.info(`Uploaded ${name} (${data.length} bytes)`);
+            }
+
       # Tauri bundles every [[bin]] in the crate, so kino-mcp lands next to the
       # app in each installer without any config - which is also why it must
       # NOT be declared as a sidecar too: WiX refuses the duplicate file and
