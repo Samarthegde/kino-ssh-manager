@@ -6324,8 +6324,41 @@ textarea.mono,
   color: var(--red);
 }
 
+/* The open row, so it is obvious which host the editor below belongs to. */
+.mcp-host.editing {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border-left-color: var(--accent);
+}
+
+.mcp-rules-toggle { display: inline-flex; align-items: center; gap: 6px; }
+.mcp-rules-toggle .mcp-badge { margin: 0; }
+
+.mcp-chevron {
+  display: inline-block;
+  font-size: 9px;
+  transform: rotate(-90deg);
+  transition: transform 140ms ease;
+}
+
+.mcp-rules-toggle.open .mcp-chevron { transform: rotate(0deg); }
+
+/* A panel attached to its host, rather than a textarea floating under the
+ * list where it read as part of the next row. */
 .mcp-rules {
-  padding-left: 25px;
+  margin: 4px 0 2px 25px;
+  padding: 10px 12px;
+  border-left: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+}
+
+.mcp-rules-title {
+  margin: 0 0 6px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--subtle);
 }
 
 .mcp-rules .mcp-hint { margin: 0 0 6px; }

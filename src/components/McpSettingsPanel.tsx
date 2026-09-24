@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { McpBinaryStatus, McpConfig, McpMode, useVaultStore } from "../store";
 
 /**
@@ -23,6 +23,15 @@ const MODE_BLURB: Record<McpMode, string> = {
     "Everything is reachable, but anything no rule allows needs a person to approve it - and approval isn't wired up yet, so it is refused instead.",
   full: "No policy at all. The assistant has the access you have.",
 };
+
+/** Rules the user has actually written - blank lines and comments are not
+ *  rules, and a badge that counts them would be lying. */
+function ruleCount(text: string): number {
+  return text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("#")).length;
+}
 
 type PolicyDraft = {
   mode: McpMode;
@@ -68,6 +77,15 @@ export function McpSettingsPanel() {
   const [editingRules, setEditingRules] = useState<string | null>(null);
   /** A host whose jump to full access is waiting to be confirmed by name. */
   const [pendingFull, setPendingFull] = useState<string | null>(null);
+  const rulesRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // The editor opens *below* the host that was clicked, which on a long list
+  // is easy to miss entirely - the button looked like it had done nothing.
+  // Moving focus into it settles that: the caret is where the typing goes,
+  // and the browser scrolls it into view for us.
+  useEffect(() => {
+    if (editingRules) rulesRef.current?.focus();
+  }, [editingRules]);
 
   useEffect(() => {
     mcpGetConfig()
@@ -262,7 +280,12 @@ export function McpSettingsPanel() {
                   const on = exposed.has(h.id);
                   const d = draft(h.id);
                   return (
-                    <div key={h.id} className={`mcp-host ${on ? "on" : ""}`}>
+                    <div
+                      key={h.id}
+                      className={`mcp-host ${on ? "on" : ""} ${
+                        editingRules === h.id ? "editing" : ""
+                      }`}
+                    >
                       <label className="mcp-host-tick">
                         <input type="checkbox" checked={on} onChange={() => toggleHost(h.id)} />
                         <span className="mcp-host-name">{h.name}</span>
@@ -291,12 +314,24 @@ export function McpSettingsPanel() {
                               </option>
                             ))}
                           </select>
+                          {/* A disclosure, not a button that appears to do
+                              nothing: it says which way it will go, and how
+                              many rules are already there to be found. */}
                           <button
                             type="button"
-                            className="btn btn-sm"
+                            className={`btn btn-sm mcp-rules-toggle ${
+                              editingRules === h.id ? "open" : ""
+                            }`}
+                            aria-expanded={editingRules === h.id}
                             onClick={() => setEditingRules(editingRules === h.id ? null : h.id)}
                           >
-                            Rules
+                            <span className="mcp-chevron" aria-hidden="true">
+                              ▾
+                            </span>
+                            {editingRules === h.id ? "Hide rules" : "Rules & limits"}
+                            {ruleCount(d.rulesText) > 0 && editingRules !== h.id && (
+                              <span className="mcp-badge">{ruleCount(d.rulesText)}</span>
+                            )}
                           </button>
                           <span className="mcp-mode-blurb">{MODE_BLURB[d.mode]}</span>
                         </div>
@@ -330,6 +365,7 @@ export function McpSettingsPanel() {
 
                       {on && editingRules === h.id && (
                         <div className="mcp-rules">
+                          <p className="mcp-rules-title">Rules for {h.name}</p>
                           <p className="mcp-hint">
                             One rule per line: <code>allow</code>, <code>deny</code> or{" "}
                             <code>ask</code>, then a pattern. <code>*</code> matches anything;
@@ -339,6 +375,7 @@ export function McpSettingsPanel() {
                             mistakes, not someone determined to get around them.
                           </p>
                           <textarea
+                            ref={rulesRef}
                             rows={4}
                             className="mcp-rules-text mono"
                             value={d.rulesText}
