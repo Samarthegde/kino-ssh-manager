@@ -6142,21 +6142,19 @@ textarea.mono,
 
 /* ── MCP server ──────────────────────────────────────────────────────────────*/
 
-.mcp-modal {
-  width: min(680px, 96vw);
-  max-width: none;
-  height: min(720px, 92vh);
-  max-height: 92vh;
-  display: flex;
-  flex-direction: column;
-}
-
 .mcp-body {
   flex: 1;
   min-height: 0;
   overflow: auto;
   padding-top: 12px;
 }
+
+/* MCP lives in Settings rather than a modal: it had outgrown one. The client
+ * config alone is a path plus JSON, which a 680px column could only scroll
+ * sideways, and the rule editor sat below the fold on a laptop. */
+.mcp-inline { display: flex; flex-direction: column; max-width: 860px; }
+.mcp-inline .mcp-body { overflow: visible; padding-top: 0; }
+.mcp-inline .mcp-foot { padding: 14px 0 4px; border-top: 1px solid var(--rule); }
 
 .mcp-intro {
   font-family: var(--font-sans);
@@ -6372,8 +6370,10 @@ textarea.mono,
   border: 1px solid var(--rule);
   padding: 11px 13px;
   margin: 0 0 8px;
-  overflow-x: auto;
-  white-space: pre;
+  /* Wrapped, not side-scrolled: the value worth reading here is the full path
+     to kino-mcp, and a horizontal scrollbar hides exactly the end of it. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .mcp-config-actions {

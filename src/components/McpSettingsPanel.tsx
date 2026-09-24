@@ -1,10 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { McpBinaryStatus, McpConfig, McpMode, useVaultStore } from "../store";
 
-interface Props {
-  onClose: () => void;
-}
-
 /**
  * The MCP server's control panel.
  *
@@ -40,7 +36,7 @@ type PolicyDraft = {
 const DEFAULT_CALLS_PER_MIN = 60;
 const DEFAULT_KIB_PER_CALL = 256;
 
-export function McpSettingsModal({ onClose }: Props) {
+export function McpSettingsPanel() {
   const {
     mcpGetConfig,
     mcpSetPassword,
@@ -198,14 +194,8 @@ export function McpSettingsModal({ onClose }: Props) {
   }
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal mcp-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <h2>MCP server</h2>
-          <button className="icon-btn" onClick={onClose}>✕</button>
-        </div>
-
-        <div className="mcp-body">
+    <div className="mcp-inline">
+      <div className="mcp-body">
           <p className="mcp-intro">
             Lets an AI assistant list hosts, run commands and read or write files over SSH -
             but only on the hosts you tick below. Everything else in your vault stays invisible
@@ -526,7 +516,6 @@ export function McpSettingsModal({ onClose }: Props) {
           >
             {saving ? "Saving…" : saved ? "Saved" : "Save"}
           </button>
-          <button className="btn btn-sm" onClick={onClose}>Close</button>
           {pendingFull !== null && (
             <p className="mcp-hint" style={{ margin: 0 }}>
               Confirm or cancel full access above before saving.
@@ -535,7 +524,6 @@ export function McpSettingsModal({ onClose }: Props) {
           {!configured && !password && (
             <span className="mcp-hint">Set a password to enable the server.</span>
           )}
-        </div>
       </div>
     </div>
   );

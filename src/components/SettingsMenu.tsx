@@ -13,14 +13,14 @@ import { AiSettingsModal } from "./AiSettingsModal";
 import { KeybindingsModal } from "./KeybindingsModal";
 import { SecurityPanel, SecurityView } from "./SecurityPanel";
 import { NotesModal } from "./NotesModal";
-import { McpSettingsModal } from "./McpSettingsModal";
+import { McpSettingsPanel } from "./McpSettingsPanel";
 import { Select } from "./Select";
 
 interface Props {
   onLock: () => void;
 }
 
-type Section = "general" | "connectivity" | "copilot" | "vault" | "security" | "tools";
+type Section = "general" | "connectivity" | "mcp" | "copilot" | "vault" | "security" | "tools";
 
 /* ── Small layout primitives for the page ─────────────────────────────────── */
 
@@ -85,6 +85,15 @@ const ICONS: Record<Section, ReactNode> = {
       <line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" />
     </svg>
   ),
+  // A plug: the MCP server is the thing an assistant is plugged into.
+  mcp: (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M9 2v6" />
+      <path d="M15 2v6" />
+      <path d="M6 8h12v4a6 6 0 0 1-12 0z" />
+      <path d="M12 18v4" />
+    </svg>
+  ),
   connectivity: (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
       <circle cx="12" cy="12" r="10" />
@@ -120,6 +129,7 @@ const ICONS: Record<Section, ReactNode> = {
 const SECTIONS: { id: Section; label: string }[] = [
   { id: "general", label: "General" },
   { id: "connectivity", label: "Agent & Cloud" },
+  { id: "mcp", label: "MCP Server" },
   { id: "copilot", label: "AI Copilot" },
   { id: "vault", label: "Vault & Sync" },
   { id: "security", label: "Security" },
@@ -172,7 +182,6 @@ export function SettingsMenu({ onLock }: Props) {
   const currentTermBg = currentTerm.background;
 
   const [open, setOpen] = useState(false);
-  const [showMcp, setShowMcp] = useState(false);
   const [section, setSection] = useState<Section>("general");
   const [exportingConfig, setExportingConfig] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -593,6 +602,10 @@ export function SettingsMenu({ onLock }: Props) {
                 </>
               )}
 
+              {/* Not a Group: the panel brings its own sections, and it is
+                  the same component the modal used to show. */}
+              {section === "mcp" && <McpSettingsPanel />}
+
               {section === "copilot" && (
                 <Group
                   title="AI Copilot"
@@ -712,12 +725,6 @@ export function SettingsMenu({ onLock }: Props) {
                     buttonLabel="Browse…"
                     onClick={() => setShowRecordings(true)}
                   />
-                  <ActionItem
-                    label="MCP Server"
-                    desc="Configure the Model Context Protocol headless server for AI assistants."
-                    buttonLabel="Configure…"
-                    onClick={() => setShowMcp(true)}
-                  />
                 </Group>
               )}
             </div>
@@ -735,7 +742,6 @@ export function SettingsMenu({ onLock }: Props) {
       {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
       {showAudit && <SecurityPanel initialView={showAudit} onClose={() => setShowAudit(null)} />}
       {showNotes && <NotesModal onClose={() => setShowNotes(false)} />}
-      {showMcp && <McpSettingsModal onClose={() => setShowMcp(false)} />}
         </>,
         document.body
       )}
