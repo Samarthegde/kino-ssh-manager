@@ -5,6 +5,7 @@
 **An SSH client that keeps your hosts, keys and passwords in one encrypted vault on your own machine.**
 
 No account, no cloud, no telemetry. Free and open source under the GPL.
+[![Kino SSH Manager | AlternativeTo](https://alternativeto.net/static/badges/badge-wide-light.svg)](https://alternativeto.net/software/kino-ssh-manager/about/?utm_source=badge&utm_medium=referral)
 
 [**Website**](https://samarthegde.github.io/kino-ssh-manager/) · [Releases](https://github.com/Samarthegde/kino-ssh-manager/releases) · [Security](SECURITY.md)
 
