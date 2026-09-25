@@ -2,7 +2,15 @@ import { ReactNode, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { THEMES } from "../themes";
-import { APP_FONTS, TERMINAL_FONTS, terminalFontStack, useVaultStore } from "../store";
+import {
+  APP_FONTS,
+  TERMINAL_FONTS,
+  UI_SCALE_MAX,
+  UI_SCALE_MIN,
+  UI_SCALE_STEP,
+  terminalFontStack,
+  useVaultStore,
+} from "../store";
 import { HistoryModal } from "./HistoryModal";
 import { SyncModal } from "./SyncModal";
 import { SnippetsModal } from "./SnippetsModal";
@@ -162,6 +170,8 @@ export function SettingsMenu({ onLock }: Props) {
     terminalBackground,
     setTerminalBackground,
     appFont,
+    uiScale,
+    setUiScale,
     setAppFont,
     syntaxHighlight,
     setSyntaxHighlight,
@@ -351,8 +361,38 @@ export function SettingsMenu({ onLock }: Props) {
                     </Item>
 
                     <Item
+                      label="Interface size"
+                      desc="Scales the whole window, terminal included. Useful on a high-density display, or when someone is reading over your shoulder."
+                    >
+                      <div className="ui-scale">
+                        <button
+                          className="settings-btn ui-scale-step"
+                          onClick={() => setUiScale(uiScale - UI_SCALE_STEP)}
+                          disabled={uiScale <= UI_SCALE_MIN}
+                          aria-label="Smaller"
+                        >
+                          −
+                        </button>
+                        <span className="ui-scale-value mono">{Math.round(uiScale * 100)}%</span>
+                        <button
+                          className="settings-btn ui-scale-step"
+                          onClick={() => setUiScale(uiScale + UI_SCALE_STEP)}
+                          disabled={uiScale >= UI_SCALE_MAX}
+                          aria-label="Larger"
+                        >
+                          +
+                        </button>
+                        {uiScale !== 1 && (
+                          <button className="settings-btn" onClick={() => setUiScale(1)}>
+                            Reset
+                          </button>
+                        )}
+                      </div>
+                    </Item>
+
+                    <Item
                       label="Interface font"
-                      desc="The face used for the app's own text. Atkinson Hyperlegible is designed for maximum character distinction."
+                      desc="The face the app's own labels and text are set in. Kino default keeps the monospace look; anything else takes the whole interface with it. Machine output - addresses, fingerprints, commands - stays monospace either way."
                     >
                       <Select
                         className="settings-select"

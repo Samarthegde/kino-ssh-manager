@@ -13,6 +13,7 @@
     "dialog:allow-open",
     "updater:default",
     "process:allow-restart",
-    "notification:default"
+    "notification:default",
+    "core:webview:allow-set-webview-zoom"
   ]
 }

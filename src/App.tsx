@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { applyAppFont, applyLiteMode, useVaultStore } from "./store";
+import { applyAppFont, applyLiteMode, applyUiScale, useVaultStore } from "./store";
 import { comboFromEvent } from "./keymap";
 import { THEMES, applyTheme } from "./themes";
 import { Sidebar } from "./components/Sidebar";
@@ -54,6 +54,7 @@ function App() {
     healthIntervalSec,
     checkHostsHealth,
     appFont,
+    uiScale,
     liteMode,
   } = useVaultStore();
   const [sftpTabId, setSftpTabId] = useState<string | null>(null);
@@ -125,6 +126,12 @@ function App() {
   useEffect(() => {
     applyLiteMode(liteMode);
   }, [liteMode]);
+
+  // Zoom lives in the webview, not in the document, so it has to be re-applied
+  // on every launch rather than remembered by the page.
+  useEffect(() => {
+    applyUiScale(uiScale);
+  }, [uiScale]);
 
   // Check for a newer release on launch (silent if offline). Runs before unlock
   // too - the check hits GitHub, not the vault - so the login screen can show it.

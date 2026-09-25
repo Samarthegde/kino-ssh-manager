@@ -284,6 +284,13 @@
   --font-display: "Big Shoulders Display", "Chivo", ui-sans-serif, sans-serif;
   --font-sans: "Chivo", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* What the interface itself is set in. Monospace by default - that is the
+     Kino Projection look - but it is the one the font setting moves, so
+     choosing a face in Settings changes the whole app rather than the handful
+     of paragraphs that happened to be set in --font-sans. Machine output
+     (addresses, fingerprints, commands, columns of numbers) stays on
+     --font-mono whatever this is. */
+  --font-ui: var(--font-mono);
 
   /* Semantic aliases over the theme slots, so the Kino rules below read the
      way the design language talks. `--blue` is the accent slot every theme
@@ -3126,7 +3133,7 @@ textarea.mono {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 55%;
-  font-family: "JetBrains Mono", monospace;
+  font-family: var(--font-ui);
 }
 .palette-empty { padding: 20px; text-align: center; color: var(--subtle); font-size: 13px; }
 
@@ -3886,7 +3893,7 @@ dialog {
 }
 
 .wordmark-sub {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 8.5px;
   font-weight: 500;
   letter-spacing: 0.28em;
@@ -3918,7 +3925,7 @@ dialog {
 .export-dropdown-title,
 .settings-section-title,
 .field-label {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10px;
   font-weight: 500;
   letter-spacing: 0.2em;
@@ -3943,7 +3950,7 @@ dialog {
 .tab-label,
 .settings-value,
 .hostkey-fp-value {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 11px;
   letter-spacing: 0.01em;
 }
@@ -4014,7 +4021,7 @@ dialog {
    centring keeps the siblings from stretching just as well. */
 
 .btn {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.14em;
@@ -4271,7 +4278,7 @@ textarea.mono,
 
 /* Auth badges become hatched tags - neither good nor bad, just a fact. */
 .auth-badge {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 8.5px;
   font-weight: 500;
   letter-spacing: 0.16em;
@@ -4305,7 +4312,7 @@ textarea.mono,
  */
 
 .health-badge {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 8.5px;
   font-weight: 600;
   letter-spacing: 0.16em;
@@ -4345,7 +4352,7 @@ textarea.mono,
 
 /* The connect spinner counts down in mono instead of fading a glyph. */
 .connecting-spinner {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10px;
   letter-spacing: 0.1em;
   color: var(--ink-accent);
@@ -4365,7 +4372,7 @@ textarea.mono,
      that meet at the sidebar's right edge land on the same line. */
   padding: 12px 14px;
   border-bottom: 0;
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10.5px;
   font-weight: 500;
   letter-spacing: 0.13em;
@@ -4403,7 +4410,7 @@ textarea.mono,
 
 /* Tab-bar tools read as a strip of stamps. */
 .fwd-trigger {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9.5px;
   font-weight: 500;
   letter-spacing: 0.14em;
@@ -4484,7 +4491,7 @@ textarea.mono,
 
 .welcome p,
 .home-panel.empty .hint {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10px;
   letter-spacing: 0.18em;
   text-transform: uppercase;
@@ -4494,7 +4501,7 @@ textarea.mono,
 }
 
 .empty-state {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -4579,7 +4586,7 @@ textarea.mono,
 
 .unlock-logo::after {
   content: "Vault";
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.26em;
@@ -4642,7 +4649,7 @@ textarea.mono,
 
 .unlock-hint,
 .unlock-error {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9.5px;
   letter-spacing: 0.1em;
   line-height: 1.7;
@@ -4670,7 +4677,7 @@ textarea.mono,
 }
 
 .unlock-foot-note {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 8.5px;
   font-weight: 500;
   letter-spacing: 0.18em;
@@ -4685,7 +4692,7 @@ textarea.mono,
 
 .unlock-link {
   align-self: flex-start;
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9.5px;
   font-weight: 600;
   letter-spacing: 0.16em;
@@ -4703,7 +4710,7 @@ textarea.mono,
 }
 
 .unlock-update {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -4820,7 +4827,7 @@ textarea.mono,
 .hostkey-fp-label,
 .connect-label,
 .settings-group-header h3 {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9.5px;
   font-weight: 600;
   letter-spacing: 0.2em;
@@ -4838,7 +4845,7 @@ textarea.mono,
 .export-item,
 .fwd-item {
   position: relative;
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10.5px;
   letter-spacing: 0.08em;
   transition: background-color 140ms ease, color 140ms ease;
@@ -4893,7 +4900,7 @@ textarea.mono,
 
 .settings-select,
 .fwd-kind {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10.5px;
   letter-spacing: 0.06em;
   background-color: var(--bg);
@@ -4914,7 +4921,7 @@ textarea.mono,
 }
 
 .settings-input {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 11px;
   background: var(--bg);
   border: 1px solid var(--rule);
@@ -4928,7 +4935,7 @@ textarea.mono,
 }
 
 .settings-btn {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.14em;
@@ -4997,7 +5004,7 @@ textarea.mono,
 }
 
 .settings-page-close {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9.5px;
   font-weight: 600;
   letter-spacing: 0.14em;
@@ -5015,7 +5022,7 @@ textarea.mono,
 
 .settings-nav-item {
   position: relative;
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10px;
   font-weight: 500;
   letter-spacing: 0.14em;
@@ -5069,7 +5076,7 @@ textarea.mono,
 }
 
 .settings-row {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10.5px;
   letter-spacing: 0.06em;
 }
@@ -5112,7 +5119,7 @@ textarea.mono,
 /* ── Theme picker helpers ────────────────────────────────────────────────────*/
 
 .theme-light-tag {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 8px;
   font-weight: 600;
   letter-spacing: 0.16em;
@@ -5164,7 +5171,7 @@ textarea.mono,
 
 .auth-option-desc,
 .snippet-toggle-preview {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10px;
   letter-spacing: 0.04em;
   color: color-mix(in srgb, var(--ink-paper) 40%, transparent);
@@ -5172,7 +5179,7 @@ textarea.mono,
 
 /* A fingerprint is evidence - it gets the secret-slab treatment. */
 .hostkey-fp {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 12px;
   line-height: 1.6;
   background: var(--bg);
@@ -5191,7 +5198,7 @@ textarea.mono,
 /* ── SFTP browser ────────────────────────────────────────────────────────────*/
 
 .sftp-path {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 11px;
   background: var(--bg);
   border: 1px solid var(--rule);
@@ -5237,7 +5244,7 @@ textarea.mono,
 
 .sftp-progress-label,
 .sftp-progress-pct {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10px;
   letter-spacing: 0.1em;
 }
@@ -5286,7 +5293,7 @@ textarea.mono,
 
 .docker-tab {
   position: relative;
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10px;
   font-weight: 500;
   letter-spacing: 0.16em;
@@ -5317,7 +5324,7 @@ textarea.mono,
 .docker-toolbar { border-bottom: 1px solid var(--rule); }
 
 .docker-chip {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9.5px;
   font-weight: 500;
   letter-spacing: 0.14em;
@@ -5337,7 +5344,7 @@ textarea.mono,
 }
 
 .docker-count {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9.5px;
   font-weight: 600;
   letter-spacing: 0.16em;
@@ -5398,7 +5405,7 @@ textarea.mono,
 }
 
 .docker-status {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9.5px;
   font-weight: 600;
   letter-spacing: 0.14em;
@@ -5437,7 +5444,7 @@ textarea.mono,
 
 /* Published ports are facts about the machine - hatched, like auth tags. */
 .docker-port {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
   letter-spacing: 0.1em;
   padding: 2px 6px;
@@ -5453,7 +5460,7 @@ textarea.mono,
 .docker-empty,
 .copilot-empty,
 .palette-empty {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10px;
   letter-spacing: 0.18em;
   text-transform: uppercase;
@@ -5470,7 +5477,7 @@ textarea.mono,
 /* ── Metrics ─────────────────────────────────────────────────────────────────*/
 
 .metrics-live {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.2em;
@@ -5485,7 +5492,7 @@ textarea.mono,
 }
 
 .metric-label {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.18em;
@@ -5561,7 +5568,7 @@ textarea.mono,
 .proc-table .hot { color: var(--red); font-weight: 700; }
 
 .proc-auto {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9.5px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -5570,7 +5577,7 @@ textarea.mono,
 /* ── Archaeology ─────────────────────────────────────────────────────────────*/
 
 .arch-count {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9.5px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -5583,7 +5590,7 @@ textarea.mono,
    feature that hoovers up command lines should not be quiet about it. */
 .arch-foot {
   flex-shrink: 0;
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
   line-height: 1.9;
   letter-spacing: 0.08em;
@@ -5669,7 +5676,7 @@ textarea.mono,
 }
 
 .cron-tab {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.2em;
@@ -5693,7 +5700,7 @@ textarea.mono,
 /* Cron fires on the host's clock. Saying which clock, permanently, is the
  * difference between "next run 04:00" meaning something and meaning nothing. */
 .cron-clock {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9.5px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -5796,7 +5803,7 @@ textarea.mono,
 }
 
 .cron-job-badge {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 8.5px;
   font-weight: 600;
   letter-spacing: 0.2em;
@@ -5850,7 +5857,7 @@ textarea.mono,
 }
 
 .cron-editor-title {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.26em;
@@ -5867,7 +5874,7 @@ textarea.mono,
 }
 
 .cron-preset {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -5898,7 +5905,7 @@ textarea.mono,
 
 .cron-field span {
   display: block;
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 8.5px;
   font-weight: 600;
   letter-spacing: 0.2em;
@@ -5956,7 +5963,7 @@ textarea.mono,
   align-items: center;
   gap: 5px;
   margin-left: auto;
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9.5px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -5984,7 +5991,7 @@ textarea.mono,
 }
 
 .cron-hint {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9.5px;
   letter-spacing: 0.1em;
   line-height: 1.7;
@@ -6043,7 +6050,7 @@ textarea.mono,
 }
 
 .whatsnew-eyebrow {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.3em;
@@ -6095,7 +6102,7 @@ textarea.mono,
 
 /* A reel number, not a bullet. */
 .whatsnew-num {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.1em;
@@ -6115,7 +6122,7 @@ textarea.mono,
 }
 
 .whatsnew-detail {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10px;
   line-height: 1.85;
   letter-spacing: 0.02em;
@@ -6132,7 +6139,7 @@ textarea.mono,
 }
 
 .whatsnew-foot-note {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -6148,6 +6155,12 @@ textarea.mono,
   overflow: auto;
   padding-top: 12px;
 }
+
+/* Interface zoom: two steps and the number between them, so it reads as one
+ * control rather than three buttons that happen to sit together. */
+.ui-scale { display: flex; align-items: center; gap: 6px; }
+.ui-scale-step { min-width: 28px; padding: 3px 0; text-align: center; font-size: 13px; }
+.ui-scale-value { min-width: 46px; text-align: center; font-size: 12px; color: var(--subtle); }
 
 /* The stop switch. Sits above everything else in the panel, because it is
  * what someone reaches for when an assistant is doing something wrong. */
@@ -6190,7 +6203,7 @@ textarea.mono,
 /* Handing an assistant a shell is the whole feature; it should not be a
    footnote. Marigold rather than red - a caution, not a failure. */
 .mcp-warn {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10px;
   line-height: 1.8;
   letter-spacing: 0.04em;
@@ -6211,7 +6224,7 @@ textarea.mono,
   display: flex;
   align-items: center;
   gap: 9px;
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.26em;
@@ -6229,7 +6242,7 @@ textarea.mono,
 }
 
 .mcp-hint {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9.5px;
   line-height: 1.85;
   letter-spacing: 0.04em;
@@ -6243,7 +6256,7 @@ textarea.mono,
 }
 
 .mcp-input {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 12px;
   padding: 8px 10px;
   margin-bottom: 7px;
@@ -6376,7 +6389,7 @@ textarea.mono,
 
 .mcp-rules-title {
   margin: 0 0 6px;
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.22em;
@@ -6408,7 +6421,7 @@ textarea.mono,
 }
 
 .mcp-empty {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9.5px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -6527,7 +6540,7 @@ textarea.mono,
 
 .notes-item-when,
 .notes-empty {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -6588,7 +6601,7 @@ textarea.mono,
   border: 0;
   background: transparent;
   cursor: pointer;
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9.5px;
   font-weight: 600;
   letter-spacing: 0.24em;
@@ -6606,7 +6619,7 @@ textarea.mono,
 .notes-foot-note {
   margin-left: auto;
   align-self: center;
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -6641,7 +6654,7 @@ textarea.mono,
 }
 
 .audit-chip {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.18em;
@@ -6658,7 +6671,7 @@ textarea.mono,
 .audit-chip.sev-low { border-left: 2px solid var(--ink-verdigris); }
 
 .audit-scope {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -6727,7 +6740,7 @@ textarea.mono,
 }
 
 .audit-count {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -6737,7 +6750,7 @@ textarea.mono,
 }
 
 .audit-progress {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9.5px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -6754,7 +6767,7 @@ textarea.mono,
 }
 
 .audit-confirm-text {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -6766,7 +6779,7 @@ textarea.mono,
    verdigris or marigold is legible enough on bitumen and washes out completely
    on paper - and this is the one message in the panel that has to be read. */
 .audit-outcome {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10px;
   line-height: 1.7;
   letter-spacing: 0.04em;
@@ -6824,7 +6837,7 @@ textarea.mono,
 }
 
 .audit-sev {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 8.5px;
   font-weight: 600;
   letter-spacing: 0.2em;
@@ -6833,7 +6846,7 @@ textarea.mono,
 }
 
 .audit-finding-detail {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10px;
   line-height: 1.8;
   letter-spacing: 0.02em;
@@ -6843,7 +6856,7 @@ textarea.mono,
 
 .audit-clean-toggle {
   width: 100%;
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
   letter-spacing: 0.18em;
   text-transform: uppercase;
@@ -6860,7 +6873,7 @@ textarea.mono,
 
 .audit-footnote {
   flex-shrink: 0;
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
   line-height: 1.9;
   letter-spacing: 0.08em;
@@ -6918,7 +6931,7 @@ textarea.mono,
 .palette-item-title { font-size: 13px; }
 
 .palette-item-sub {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10.5px;
   color: color-mix(in srgb, var(--ink-paper) 38%, transparent);
 }
@@ -6935,7 +6948,7 @@ textarea.mono,
 .fwd-trigger.active { box-shadow: inset 0 -2px 0 0 var(--ink-accent); }
 
 .fwd-badge {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -6964,13 +6977,13 @@ textarea.mono,
 }
 
 .fwd-meta {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10px;
   color: color-mix(in srgb, var(--ink-paper) 40%, transparent);
 }
 
 .fwd-toggle {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.14em;
@@ -6995,7 +7008,7 @@ textarea.mono,
 .fwd-toggle.stop:hover { background: color-mix(in srgb, var(--red) 16%, transparent); }
 
 .fwd-kind-tag {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 8px;
   letter-spacing: 0.14em;
   background: none;
@@ -7004,14 +7017,14 @@ textarea.mono,
   padding: 1px 5px;
 }
 
-.fwd-arrow { font-family: var(--font-mono); color: var(--ink-accent); }
+.fwd-arrow { font-family: var(--font-ui); color: var(--ink-accent); }
 
 /* ── Vault history ───────────────────────────────────────────────────────────*/
 
 /* Event-type tag. The colour is supplied per event; the shape is the same
    hatched tag the sidebar uses for auth methods. */
 .history-tag {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 8.5px;
   font-weight: 600;
   letter-spacing: 0.16em;
@@ -7029,7 +7042,7 @@ textarea.mono,
 
 /* "3/47". Tabular numerals so the bar doesn't twitch as the index changes. */
 .term-search-count {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10px;
   letter-spacing: 0.06em;
   font-variant-numeric: tabular-nums;
@@ -7112,7 +7125,7 @@ textarea.mono,
 }
 
 .fwd-node-place {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 8px;
   font-weight: 600;
   letter-spacing: 0.14em;
@@ -7200,7 +7213,7 @@ textarea.mono,
 
 .pane-name-label,
 .pane-name-input {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.14em;
@@ -7221,7 +7234,7 @@ textarea.mono,
 /* ── Keyboard shortcuts ──────────────────────────────────────────────────────*/
 
 .keybind-combo {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10.5px;
   letter-spacing: 0.08em;
   background: var(--bg);
@@ -7240,7 +7253,7 @@ textarea.mono,
 .keybind-combo kbd { font-family: var(--font-mono); }
 
 .keybind-conflict {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 8.5px;
   letter-spacing: 0.16em;
   border: 1px solid var(--red);
@@ -7250,7 +7263,7 @@ textarea.mono,
 /* ── Auto-reconnect banner ───────────────────────────────────────────────────*/
 
 .term-reconnect {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -7285,7 +7298,7 @@ textarea.mono,
 .copilot-thinking {
   border-left: 2px solid var(--rule);
   font-style: normal;
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 11px;
   line-height: 1.7;
   color: color-mix(in srgb, var(--ink-paper) 38%, transparent);
@@ -7328,7 +7341,7 @@ textarea.mono,
 .copilot-run-label {
   background: color-mix(in srgb, var(--ink-paper) 5%, transparent);
   border-bottom: 1px solid var(--rule);
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.2em;
@@ -7346,7 +7359,7 @@ textarea.mono,
 }
 
 .copilot-model-badge {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -7359,14 +7372,14 @@ textarea.mono,
 .copilot-input { border-top: 1px solid var(--rule); }
 
 .copilot-attach {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9.5px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
 .ai-oauth-detail {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10.5px;
   background: var(--bg);
   border: 1px solid var(--rule);
@@ -7414,7 +7427,7 @@ textarea.mono,
 
 .about-meta,
 .about-update {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9.5px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -7453,7 +7466,7 @@ textarea.mono,
  */
 
 .app-toast {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -7690,7 +7703,7 @@ textarea.mono,
   border: none;
   border-left: 2px solid transparent;
   color: color-mix(in srgb, var(--ink-paper) 72%, transparent);
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10.5px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -7780,7 +7793,7 @@ textarea.mono,
   gap: 8px;
   width: 100%;
   padding: 5px 9px;
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10.5px;
   letter-spacing: 0.06em;
   text-align: left;
@@ -7824,7 +7837,7 @@ textarea.mono,
   border: none;
   border-left: 2px solid transparent;
   color: color-mix(in srgb, var(--ink-paper) 70%, transparent);
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10.5px;
   letter-spacing: 0.06em;
   text-align: left;

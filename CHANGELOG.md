@@ -7,6 +7,9 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 ## [Unreleased]
 
 ### Added
+- **Interface size.** Settings → Appearance scales the whole window, terminal
+  included, from 80% to 150%. It uses the webview's own zoom, so the type stays
+  crisp rather than being stretched.
 - **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
   or from the tray menu, refuses every call from the next one onward. It works
   with the vault locked, and it is a plain file beside the vault
@@ -49,6 +52,13 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
   release get the defaults, not "no limit".
 
 ### Fixed
+- **The interface font now changes the interface.** Nearly every label, hint
+  and menu in Kino was set in the monospace face regardless of the setting, so
+  choosing a font moved a handful of paragraphs and nothing else - the notes
+  under text boxes among them. The setting now drives the whole interface.
+  **Kino default** keeps the monospace chrome, since that is the look of the
+  app; any other choice takes everything with it. Machine output - addresses,
+  fingerprints, commands, columns of numbers - stays monospace either way.
 - **`kino-mcp` no longer serves a policy you already changed** ([#22]). It read
   the exposed vault once at startup, so revoking full access, adding a `deny`
   rule or unticking a host did nothing until the assistant was restarted - and
@@ -89,6 +99,13 @@ This release exists mostly to fix 0.9.1, which could not save a host. If you
 are on 0.9.1, upgrade.
 
 ### Fixed
+- **The interface font now changes the interface.** Nearly every label, hint
+  and menu in Kino was set in the monospace face regardless of the setting, so
+  choosing a font moved a handful of paragraphs and nothing else - the notes
+  under text boxes among them. The setting now drives the whole interface.
+  **Kino default** keeps the monospace chrome, since that is the look of the
+  app; any other choice takes everything with it. Machine output - addresses,
+  fingerprints, commands, columns of numbers - stays monospace either way.
 - **Saving, editing or deleting a host no longer hangs the app.** In 0.9.1 all
   three froze the window and never came back, and so did saving or deleting a
   snippet. Each held three internal locks while updating the MCP server's copy
@@ -112,6 +129,9 @@ are on 0.9.1, upgrade.
   give up after ten seconds.
 
 ### Added
+- **Interface size.** Settings → Appearance scales the whole window, terminal
+  included, from 80% to 150%. It uses the webview's own zoom, so the type stays
+  crisp rather than being stretched.
 - **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
   or from the tray menu, refuses every call from the next one onward. It works
   with the vault locked, and it is a plain file beside the vault
@@ -158,6 +178,9 @@ are on 0.9.1, upgrade.
 ## [0.9.1] - 2026-09-07
 
 ### Added
+- **Interface size.** Settings → Appearance scales the whole window, terminal
+  included, from 80% to 150%. It uses the webview's own zoom, so the type stays
+  crisp rather than being stretched.
 - **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
   or from the tray menu, refuses every call from the next one onward. It works
   with the vault locked, and it is a plain file beside the vault
@@ -303,6 +326,13 @@ are on 0.9.1, upgrade.
   overwritten.
 
 ### Fixed
+- **The interface font now changes the interface.** Nearly every label, hint
+  and menu in Kino was set in the monospace face regardless of the setting, so
+  choosing a font moved a handful of paragraphs and nothing else - the notes
+  under text boxes among them. The setting now drives the whole interface.
+  **Kino default** keeps the monospace chrome, since that is the look of the
+  app; any other choice takes everything with it. Machine output - addresses,
+  fingerprints, commands, columns of numbers - stays monospace either way.
 - **`kino-mcp` no longer serves a policy you already changed** ([#22]). It read
   the exposed vault once at startup, so revoking full access, adding a `deny`
   rule or unticking a host did nothing until the assistant was restarted - and
@@ -387,6 +417,13 @@ are on 0.9.1, upgrade.
   plausible command you approve.
 
 ### Fixed
+- **The interface font now changes the interface.** Nearly every label, hint
+  and menu in Kino was set in the monospace face regardless of the setting, so
+  choosing a font moved a handful of paragraphs and nothing else - the notes
+  under text boxes among them. The setting now drives the whole interface.
+  **Kino default** keeps the monospace chrome, since that is the look of the
+  app; any other choice takes everything with it. Machine output - addresses,
+  fingerprints, commands, columns of numbers - stays monospace either way.
 - **Locking the vault now closes open SSH sessions.** Locking cleared the derived
   key but left every session running, so a locked app still held live shells on
   every connected host - the one state locking exists to prevent.
@@ -394,6 +431,9 @@ are on 0.9.1, upgrade.
 ## [0.9.0] - 2026-09-01
 
 ### Added
+- **Interface size.** Settings → Appearance scales the whole window, terminal
+  included, from 80% to 150%. It uses the webview's own zoom, so the type stays
+  crisp rather than being stretched.
 - **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
   or from the tray menu, refuses every call from the next one onward. It works
   with the vault locked, and it is a plain file beside the vault
@@ -455,6 +495,13 @@ are on 0.9.1, upgrade.
   unanchored when pasted onto a light page.
 
 ### Fixed
+- **The interface font now changes the interface.** Nearly every label, hint
+  and menu in Kino was set in the monospace face regardless of the setting, so
+  choosing a font moved a handful of paragraphs and nothing else - the notes
+  under text boxes among them. The setting now drives the whole interface.
+  **Kino default** keeps the monospace chrome, since that is the look of the
+  app; any other choice takes everything with it. Machine output - addresses,
+  fingerprints, commands, columns of numbers - stays monospace either way.
 - **Archaeology could restore a superseded SSH key.** The panel saved the merged
   command history back through `saveHost`, using the copy of the host captured
   when the tab was opened - so it rewrote every other field from that snapshot
@@ -491,6 +538,9 @@ are on 0.9.1, upgrade.
 ## [0.8.0] - 2026-08-13
 
 ### Added
+- **Interface size.** Settings → Appearance scales the whole window, terminal
+  included, from 80% to 150%. It uses the webview's own zoom, so the type stays
+  crisp rather than being stretched.
 - **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
   or from the tray menu, refuses every call from the next one onward. It works
   with the vault locked, and it is a plain file beside the vault
@@ -567,6 +617,9 @@ are on 0.9.1, upgrade.
 ## [0.7.1] - 2026-08-06
 
 ### Added
+- **Interface size.** Settings → Appearance scales the whole window, terminal
+  included, from 80% to 150%. It uses the webview's own zoom, so the type stays
+  crisp rather than being stretched.
 - **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
   or from the tray menu, refuses every call from the next one onward. It works
   with the vault locked, and it is a plain file beside the vault
@@ -683,6 +736,13 @@ are on 0.9.1, upgrade.
   in a saved log.
 
 ### Fixed
+- **The interface font now changes the interface.** Nearly every label, hint
+  and menu in Kino was set in the monospace face regardless of the setting, so
+  choosing a font moved a handful of paragraphs and nothing else - the notes
+  under text boxes among them. The setting now drives the whole interface.
+  **Kino default** keeps the monospace chrome, since that is the look of the
+  app; any other choice takes everything with it. Machine output - addresses,
+  fingerprints, commands, columns of numbers - stays monospace either way.
 - **Scrolling up showed command history instead of earlier output.** Making
   scrollback configurable introduced a defaulting bug: `Number(null)` is `0`
   rather than `NaN`, so an install that had never opened the setting read its
@@ -728,6 +788,13 @@ are on 0.9.1, upgrade.
   there isn't room below.
 
 ### Fixed
+- **The interface font now changes the interface.** Nearly every label, hint
+  and menu in Kino was set in the monospace face regardless of the setting, so
+  choosing a font moved a handful of paragraphs and nothing else - the notes
+  under text boxes among them. The setting now drives the whole interface.
+  **Kino default** keeps the monospace chrome, since that is the look of the
+  app; any other choice takes everything with it. Machine output - addresses,
+  fingerprints, commands, columns of numbers - stays monospace either way.
 - **`kino-mcp` no longer serves a policy you already changed** ([#22]). It read
   the exposed vault once at startup, so revoking full access, adding a `deny`
   rule or unticking a host did nothing until the assistant was restarted - and
@@ -773,6 +840,9 @@ are on 0.9.1, upgrade.
 ## [0.7.0] - 2026-07-31
 
 ### Added
+- **Interface size.** Settings → Appearance scales the whole window, terminal
+  included, from 80% to 150%. It uses the webview's own zoom, so the type stays
+  crisp rather than being stretched.
 - **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
   or from the tray menu, refuses every call from the next one onward. It works
   with the vault locked, and it is a plain file beside the vault
@@ -806,6 +876,13 @@ are on 0.9.1, upgrade.
   out of relay and proxy access logs.
 
 ### Fixed
+- **The interface font now changes the interface.** Nearly every label, hint
+  and menu in Kino was set in the monospace face regardless of the setting, so
+  choosing a font moved a handful of paragraphs and nothing else - the notes
+  under text boxes among them. The setting now drives the whole interface.
+  **Kino default** keeps the monospace chrome, since that is the look of the
+  app; any other choice takes everything with it. Machine output - addresses,
+  fingerprints, commands, columns of numbers - stays monospace either way.
 - **`kino-mcp` no longer serves a policy you already changed** ([#22]). It read
   the exposed vault once at startup, so revoking full access, adding a `deny`
   rule or unticking a host did nothing until the assistant was restarted - and
@@ -843,6 +920,9 @@ are on 0.9.1, upgrade.
 ## [0.6.1] - 2026-07-23
 
 ### Added
+- **Interface size.** Settings → Appearance scales the whole window, terminal
+  included, from 80% to 150%. It uses the webview's own zoom, so the type stays
+  crisp rather than being stretched.
 - **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
   or from the tray menu, refuses every call from the next one onward. It works
   with the vault locked, and it is a plain file beside the vault
@@ -881,6 +961,9 @@ are on 0.9.1, upgrade.
 ## [0.6.0] - 2026-07-22
 
 ### Added
+- **Interface size.** Settings → Appearance scales the whole window, terminal
+  included, from 80% to 150%. It uses the webview's own zoom, so the type stays
+  crisp rather than being stretched.
 - **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
   or from the tray menu, refuses every call from the next one onward. It works
   with the vault locked, and it is a plain file beside the vault
@@ -924,6 +1007,13 @@ are on 0.9.1, upgrade.
   dropdown of groups already in use, preventing near-duplicates.
 
 ### Fixed
+- **The interface font now changes the interface.** Nearly every label, hint
+  and menu in Kino was set in the monospace face regardless of the setting, so
+  choosing a font moved a handful of paragraphs and nothing else - the notes
+  under text boxes among them. The setting now drives the whole interface.
+  **Kino default** keeps the monospace chrome, since that is the look of the
+  app; any other choice takes everything with it. Machine output - addresses,
+  fingerprints, commands, columns of numbers - stays monospace either way.
 - **`kino-mcp` no longer serves a policy you already changed** ([#22]). It read
   the exposed vault once at startup, so revoking full access, adding a `deny`
   rule or unticking a host did nothing until the assistant was restarted - and
@@ -945,6 +1035,9 @@ are on 0.9.1, upgrade.
 ## [0.5.0] - 2026-07-14
 
 ### Added
+- **Interface size.** Settings → Appearance scales the whole window, terminal
+  included, from 80% to 150%. It uses the webview's own zoom, so the type stays
+  crisp rather than being stretched.
 - **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
   or from the tray menu, refuses every call from the next one onward. It works
   with the vault locked, and it is a plain file beside the vault
@@ -979,6 +1072,13 @@ are on 0.9.1, upgrade.
   export is still available and clearly marked.
 
 ### Fixed
+- **The interface font now changes the interface.** Nearly every label, hint
+  and menu in Kino was set in the monospace face regardless of the setting, so
+  choosing a font moved a handful of paragraphs and nothing else - the notes
+  under text boxes among them. The setting now drives the whole interface.
+  **Kino default** keeps the monospace chrome, since that is the look of the
+  app; any other choice takes everything with it. Machine output - addresses,
+  fingerprints, commands, columns of numbers - stays monospace either way.
 - **`kino-mcp` no longer serves a policy you already changed** ([#22]). It read
   the exposed vault once at startup, so revoking full access, adding a `deny`
   rule or unticking a host did nothing until the assistant was restarted - and
@@ -999,6 +1099,13 @@ are on 0.9.1, upgrade.
   without scrolling. Save is available on every step.
 
 ### Fixed
+- **The interface font now changes the interface.** Nearly every label, hint
+  and menu in Kino was set in the monospace face regardless of the setting, so
+  choosing a font moved a handful of paragraphs and nothing else - the notes
+  under text boxes among them. The setting now drives the whole interface.
+  **Kino default** keeps the monospace chrome, since that is the look of the
+  app; any other choice takes everything with it. Machine output - addresses,
+  fingerprints, commands, columns of numbers - stays monospace either way.
 - **`wss://` relay URLs now work.** TLS is compiled into the WebSocket client
   (rustls), fixing a `TLS support not compiled in` failure when connecting to a
   `wss://` relay.
@@ -1013,6 +1120,9 @@ are on 0.9.1, upgrade.
 ## [0.4.3] - 2026-06-30
 
 ### Added
+- **Interface size.** Settings → Appearance scales the whole window, terminal
+  included, from 80% to 150%. It uses the webview's own zoom, so the type stays
+  crisp rather than being stretched.
 - **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
   or from the tray menu, refuses every call from the next one onward. It works
   with the vault locked, and it is a plain file beside the vault
@@ -1041,6 +1151,13 @@ are on 0.9.1, upgrade.
 ## [0.4.2] - 2026-06-29
 
 ### Fixed
+- **The interface font now changes the interface.** Nearly every label, hint
+  and menu in Kino was set in the monospace face regardless of the setting, so
+  choosing a font moved a handful of paragraphs and nothing else - the notes
+  under text boxes among them. The setting now drives the whole interface.
+  **Kino default** keeps the monospace chrome, since that is the look of the
+  app; any other choice takes everything with it. Machine output - addresses,
+  fingerprints, commands, columns of numbers - stays monospace either way.
 - **`kino-mcp` no longer serves a policy you already changed** ([#22]). It read
   the exposed vault once at startup, so revoking full access, adding a `deny`
   rule or unticking a host did nothing until the assistant was restarted - and
@@ -1071,6 +1188,9 @@ are on 0.9.1, upgrade.
 ## [0.4.1] - 2026-06-10
 
 ### Added
+- **Interface size.** Settings → Appearance scales the whole window, terminal
+  included, from 80% to 150%. It uses the webview's own zoom, so the type stays
+  crisp rather than being stretched.
 - **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
   or from the tray menu, refuses every call from the next one onward. It works
   with the vault locked, and it is a plain file beside the vault
@@ -1089,6 +1209,9 @@ are on 0.9.1, upgrade.
 ## [0.4.0] - 2026-06-10
 
 ### Added
+- **Interface size.** Settings → Appearance scales the whole window, terminal
+  included, from 80% to 150%. It uses the webview's own zoom, so the type stays
+  crisp rather than being stretched.
 - **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
   or from the tray menu, refuses every call from the next one onward. It works
   with the vault locked, and it is a plain file beside the vault
@@ -1122,6 +1245,13 @@ are on 0.9.1, upgrade.
   its edge to resize; the width and collapsed state persist.
 
 ### Fixed
+- **The interface font now changes the interface.** Nearly every label, hint
+  and menu in Kino was set in the monospace face regardless of the setting, so
+  choosing a font moved a handful of paragraphs and nothing else - the notes
+  under text boxes among them. The setting now drives the whole interface.
+  **Kino default** keeps the monospace chrome, since that is the look of the
+  app; any other choice takes everything with it. Machine output - addresses,
+  fingerprints, commands, columns of numbers - stays monospace either way.
 - **`kino-mcp` no longer serves a policy you already changed** ([#22]). It read
   the exposed vault once at startup, so revoking full access, adding a `deny`
   rule or unticking a host did nothing until the assistant was restarted - and
@@ -1145,6 +1275,13 @@ are on 0.9.1, upgrade.
 - The sidebar "Sort by" dropdown now follows the active theme.
 
 ### Fixed
+- **The interface font now changes the interface.** Nearly every label, hint
+  and menu in Kino was set in the monospace face regardless of the setting, so
+  choosing a font moved a handful of paragraphs and nothing else - the notes
+  under text boxes among them. The setting now drives the whole interface.
+  **Kino default** keeps the monospace chrome, since that is the look of the
+  app; any other choice takes everything with it. Machine output - addresses,
+  fingerprints, commands, columns of numbers - stays monospace either way.
 - App could abort on connect (`ptr::copy_nonoverlapping` UB-check) due to
   pre-release RustCrypto crates pulled in by `russh`; debug-assertions are now
   disabled for dependencies so the benign check no longer crashes dev builds.
@@ -1156,6 +1293,9 @@ are on 0.9.1, upgrade.
 ## [0.3.0] - 2026-06-09
 
 ### Added
+- **Interface size.** Settings → Appearance scales the whole window, terminal
+  included, from 80% to 150%. It uses the webview's own zoom, so the type stays
+  crisp rather than being stretched.
 - **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
   or from the tray menu, refuses every call from the next one onward. It works
   with the vault locked, and it is a plain file beside the vault
@@ -1173,6 +1313,13 @@ are on 0.9.1, upgrade.
 - **Local Shell Tabs** - open a local PowerShell (Windows) or Bash/Zsh (Unix) terminal right inside the app, alongside your remote SSH tabs.
 
 ### Fixed
+- **The interface font now changes the interface.** Nearly every label, hint
+  and menu in Kino was set in the monospace face regardless of the setting, so
+  choosing a font moved a handful of paragraphs and nothing else - the notes
+  under text boxes among them. The setting now drives the whole interface.
+  **Kino default** keeps the monospace chrome, since that is the look of the
+  app; any other choice takes everything with it. Machine output - addresses,
+  fingerprints, commands, columns of numbers - stays monospace either way.
 - **Windows SSH authentication (Error 19)** - libssh2 could fail to parse keys with `\r\n` line endings on Windows. Private and public keys are now normalized to use `\n` line endings internally before being sent to the authentication backend.
 
 ### Compatibility
@@ -1181,6 +1328,9 @@ are on 0.9.1, upgrade.
 ## [0.2.0] - 2026-06-04
 
 ### Added
+- **Interface size.** Settings → Appearance scales the whole window, terminal
+  included, from 80% to 150%. It uses the webview's own zoom, so the type stays
+  crisp rather than being stretched.
 - **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
   or from the tray menu, refuses every call from the next one onward. It works
   with the vault locked, and it is a plain file beside the vault
@@ -1204,6 +1354,13 @@ are on 0.9.1, upgrade.
   the Linux packages.
 
 ### Fixed
+- **The interface font now changes the interface.** Nearly every label, hint
+  and menu in Kino was set in the monospace face regardless of the setting, so
+  choosing a font moved a handful of paragraphs and nothing else - the notes
+  under text boxes among them. The setting now drives the whole interface.
+  **Kino default** keeps the monospace chrome, since that is the look of the
+  app; any other choice takes everything with it. Machine output - addresses,
+  fingerprints, commands, columns of numbers - stays monospace either way.
 - **`kino-mcp` no longer serves a policy you already changed** ([#22]). It read
   the exposed vault once at startup, so revoking full access, adding a `deny`
   rule or unticking a host did nothing until the assistant was restarted - and
@@ -1224,6 +1381,13 @@ are on 0.9.1, upgrade.
   buttons, to prevent accidental dismissal.
 
 ### Fixed
+- **The interface font now changes the interface.** Nearly every label, hint
+  and menu in Kino was set in the monospace face regardless of the setting, so
+  choosing a font moved a handful of paragraphs and nothing else - the notes
+  under text boxes among them. The setting now drives the whole interface.
+  **Kino default** keeps the monospace chrome, since that is the look of the
+  app; any other choice takes everything with it. Machine output - addresses,
+  fingerprints, commands, columns of numbers - stays monospace either way.
 - The auto-lock dropdown now follows the selected theme instead of using the OS
   default colors.
 - **SSH key authentication on Windows** - ed25519/OpenSSH keys failed to
@@ -1241,6 +1405,9 @@ are on 0.9.1, upgrade.
 ## [0.1.0]
 
 ### Added
+- **Interface size.** Settings → Appearance scales the whole window, terminal
+  included, from 80% to 150%. It uses the webview's own zoom, so the type stays
+  crisp rather than being stretched.
 - **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
   or from the tray menu, refuses every call from the next one onward. It works
   with the vault locked, and it is a plain file beside the vault

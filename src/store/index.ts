@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { create } from "zustand";
 import { clearTerminalOutput } from "../terminalBuffer";
 import { forEachTerminal } from "../terminalRegistry";
@@ -632,6 +633,9 @@ interface VaultStore {
   imageExport: ImageExportOptions;
   /** Interface font family (the app chrome, not the terminal). */
   appFont: string;
+  /** Interface zoom, 1 being 100%. */
+  uiScale: number;
+  setUiScale: (scale: number) => void;
   /** Colour recognised patterns in terminal output (see src/highlight.ts). */
   syntaxHighlight: boolean;
   /** Stop all motion and drop the expensive decorative paint. */
@@ -983,6 +987,28 @@ const TERM_FONT_KEY = "ssh-mgr:term-font";
 const TERM_BG_KEY = "ssh-mgr:term-bg";
 const IMG_EXPORT_KEY = "ssh-mgr:image-export";
 const APP_FONT_KEY = "ssh-mgr:app-font";
+const UI_SCALE_KEY = "ssh-mgr:ui-scale";
+
+/** How far the interface can be scaled, and in what steps. Below 80% the
+ *  smallest labels stop being readable, which defeats the point; above 150%
+ *  a 1280px window cannot hold the settings page. */
+export const UI_SCALE_MIN = 0.8;
+export const UI_SCALE_MAX = 1.5;
+export const UI_SCALE_STEP = 0.1;
+
+/** Scale the whole interface, terminal included.
+ *
+ *  Webview zoom rather than a font-size multiplier: every size in the stylesheet
+ *  is in px, so a root font-size would move some things and not others, and the
+ *  terminal not at all. Zoom moves the lot, and keeps the type crisp because it
+ *  is the renderer doing it. */
+export function applyUiScale(scale: number): void {
+  void getCurrentWebview()
+    .setZoom(scale)
+    .catch(() => {
+      // Not fatal, and not worth a dialog: the app is perfectly usable at 100%.
+    });
+}
 const HIGHLIGHT_KEY = "ssh-mgr:syntax-highlight";
 const LITE_KEY = "ssh-mgr:lite";
 
@@ -1000,21 +1026,39 @@ export function applyLiteMode(on: boolean): void {
  *  slab headings) is deliberately not swappable - it *is* the Kino Projection
  *  identity. This picks the face used for everything you read in a sentence. */
 export const APP_FONTS = [
-  { id: "Chivo", label: "Chivo", note: "Default" },
+  { id: "default", label: "Kino default", note: "Monospace chrome" },
+  { id: "Chivo", label: "Chivo", note: "" },
   { id: "IBM Plex Sans", label: "IBM Plex Sans", note: "" },
   { id: "Atkinson Hyperlegible", label: "Atkinson Hyperlegible", note: "High legibility" },
   { id: "system", label: "System default", note: "" },
 ] as const;
 
-export const DEFAULT_APP_FONT = "Chivo";
+export const DEFAULT_APP_FONT = "default";
 
-/** Push the choice at the CSS variable the whole interface reads from. */
+/** Push the choice at the two variables the interface reads from.
+ *
+ *  `--font-ui` is the one that matters: nearly every label, hint and menu in
+ *  Kino is set in it. It used to be monospace unconditionally, so picking a
+ *  font changed a few paragraphs and nothing else - which read as the setting
+ *  being broken.
+ *
+ *  "Kino default" keeps that monospace chrome, because it *is* the look of
+ *  the app; any other choice takes the whole interface with it. Machine
+ *  output - addresses, fingerprints, commands, columns of numbers - stays
+ *  monospace in every case. */
 export function applyAppFont(family: string): void {
+  const root = document.documentElement;
+  if (family === "default") {
+    root.style.removeProperty("--font-ui");
+    root.style.removeProperty("--font-sans");
+    return;
+  }
   const stack =
     family === "system"
       ? 'system-ui, -apple-system, "Segoe UI", sans-serif'
       : `"${family}", "Chivo", ui-sans-serif, system-ui, sans-serif`;
-  document.documentElement.style.setProperty("--font-sans", stack);
+  root.style.setProperty("--font-sans", stack);
+  root.style.setProperty("--font-ui", stack);
 }
 
 /** Families bundled under public/fonts and declared in index.css. Anything not
@@ -1163,6 +1207,7 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
   terminalBackground: localStorage.getItem(TERM_BG_KEY) ?? "",
   imageExport: loadImageExport(),
   appFont: localStorage.getItem(APP_FONT_KEY) || DEFAULT_APP_FONT,
+  uiScale: Number(localStorage.getItem(UI_SCALE_KEY)) || 1,
   // On unless explicitly turned off: it is display-only, heavily guarded, and a
   // feature nobody discovers is a feature that was not shipped.
   syntaxHighlight: localStorage.getItem(HIGHLIGHT_KEY) !== "0",
@@ -1275,6 +1320,13 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
     localStorage.setItem(APP_FONT_KEY, f);
     set({ appFont: f });
     applyAppFont(f);
+  },
+
+  setUiScale: (scale) => {
+    const clamped = Math.min(UI_SCALE_MAX, Math.max(UI_SCALE_MIN, Math.round(scale * 100) / 100));
+    localStorage.setItem(UI_SCALE_KEY, String(clamped));
+    set({ uiScale: clamped });
+    applyUiScale(clamped);
   },
 
   setLiteMode: (on) => {
