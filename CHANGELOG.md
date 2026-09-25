@@ -7,6 +7,18 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 ## [Unreleased]
 
 ### Added
+- **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
+  or from the tray menu, refuses every call from the next one onward. It works
+  with the vault locked, and it is a plain file beside the vault
+  (`mcp_halt`), so a script or a cron job can throw it without Kino running at
+  all. Listing hosts still answers while stopped, marked `halted: true`, so an
+  assistant can say why it has stopped.
+- **Hourly budgets across the fleet.** 50 changes an hour, 25 hosts per
+  changing call and 600 calls an hour by default, editable in the MCP panel. A
+  call that would cross a budget is refused whole rather than partly run, and
+  the count is kept on disk, so restarting `kino-mcp` is not a way to reset it.
+- **`reason` and `ticket` on the tools that change something**, recorded in the
+  audit log. Labels for the reader; they decide nothing.
 - **Guarded mode now asks you instead of refusing.** A call that no rule
   covers stops `kino-mcp` and puts a prompt on screen with the command
   verbatim, the host, which client asked, and a countdown. Approve it once,
@@ -100,6 +112,18 @@ are on 0.9.1, upgrade.
   give up after ten seconds.
 
 ### Added
+- **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
+  or from the tray menu, refuses every call from the next one onward. It works
+  with the vault locked, and it is a plain file beside the vault
+  (`mcp_halt`), so a script or a cron job can throw it without Kino running at
+  all. Listing hosts still answers while stopped, marked `halted: true`, so an
+  assistant can say why it has stopped.
+- **Hourly budgets across the fleet.** 50 changes an hour, 25 hosts per
+  changing call and 600 calls an hour by default, editable in the MCP panel. A
+  call that would cross a budget is refused whole rather than partly run, and
+  the count is kept on disk, so restarting `kino-mcp` is not a way to reset it.
+- **`reason` and `ticket` on the tools that change something**, recorded in the
+  audit log. Labels for the reader; they decide nothing.
 - **Updates, under Security.** Asks each host what packages it has waiting and
   which of those are security updates, and sorts the fleet by what matters. The
   answer comes from each host's own package manager - apt, dnf, yum, zypper,
@@ -134,6 +158,18 @@ are on 0.9.1, upgrade.
 ## [0.9.1] - 2026-09-07
 
 ### Added
+- **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
+  or from the tray menu, refuses every call from the next one onward. It works
+  with the vault locked, and it is a plain file beside the vault
+  (`mcp_halt`), so a script or a cron job can throw it without Kino running at
+  all. Listing hosts still answers while stopped, marked `halted: true`, so an
+  assistant can say why it has stopped.
+- **Hourly budgets across the fleet.** 50 changes an hour, 25 hosts per
+  changing call and 600 calls an hour by default, editable in the MCP panel. A
+  call that would cross a budget is refused whole rather than partly run, and
+  the count is kept on disk, so restarting `kino-mcp` is not a way to reset it.
+- **`reason` and `ticket` on the tools that change something**, recorded in the
+  audit log. Labels for the reader; they decide nothing.
 - **An MCP server, so an AI assistant can work on hosts you choose.** A headless
   `kino-mcp` binary serves Model Context Protocol tools over stdio: list hosts,
   run a command, list a directory, read and write files, and run a saved
@@ -358,6 +394,18 @@ are on 0.9.1, upgrade.
 ## [0.9.0] - 2026-09-01
 
 ### Added
+- **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
+  or from the tray menu, refuses every call from the next one onward. It works
+  with the vault locked, and it is a plain file beside the vault
+  (`mcp_halt`), so a script or a cron job can throw it without Kino running at
+  all. Listing hosts still answers while stopped, marked `halted: true`, so an
+  assistant can say why it has stopped.
+- **Hourly budgets across the fleet.** 50 changes an hour, 25 hosts per
+  changing call and 600 calls an hour by default, editable in the MCP panel. A
+  call that would cross a budget is refused whole rather than partly run, and
+  the count is kept on disk, so restarting `kino-mcp` is not a way to reset it.
+- **`reason` and `ticket` on the tools that change something**, recorded in the
+  audit log. Labels for the reader; they decide nothing.
 - **Process tree and a full signal menu.** The process list can now be grouped
   into the tree it always described - `ps` was already reporting each process's
   parent, it just wasn't being used. Branches fold, a collapsed row says how many
@@ -443,6 +491,18 @@ are on 0.9.1, upgrade.
 ## [0.8.0] - 2026-08-13
 
 ### Added
+- **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
+  or from the tray menu, refuses every call from the next one onward. It works
+  with the vault locked, and it is a plain file beside the vault
+  (`mcp_halt`), so a script or a cron job can throw it without Kino running at
+  all. Listing hosts still answers while stopped, marked `halted: true`, so an
+  assistant can say why it has stopped.
+- **Hourly budgets across the fleet.** 50 changes an hour, 25 hosts per
+  changing call and 600 calls an hour by default, editable in the MCP panel. A
+  call that would cross a budget is refused whole rather than partly run, and
+  the count is kept on disk, so restarting `kino-mcp` is not a way to reset it.
+- **`reason` and `ticket` on the tools that change something**, recorded in the
+  audit log. Labels for the reader; they decide nothing.
 - **Release notes on first launch after an upgrade.** Upgrading used to be
   silent: the app you opened was simply different from the one you closed. The
   unlock screen now shows what changed, once, and never again for that version.
@@ -507,6 +567,18 @@ are on 0.9.1, upgrade.
 ## [0.7.1] - 2026-08-06
 
 ### Added
+- **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
+  or from the tray menu, refuses every call from the next one onward. It works
+  with the vault locked, and it is a plain file beside the vault
+  (`mcp_halt`), so a script or a cron job can throw it without Kino running at
+  all. Listing hosts still answers while stopped, marked `halted: true`, so an
+  assistant can say why it has stopped.
+- **Hourly budgets across the fleet.** 50 changes an hour, 25 hosts per
+  changing call and 600 calls an hour by default, editable in the MCP panel. A
+  call that would cross a budget is refused whole rather than partly run, and
+  the count is kept on disk, so restarting `kino-mcp` is not a way to reset it.
+- **`reason` and `ticket` on the tools that change something**, recorded in the
+  audit log. Labels for the reader; they decide nothing.
 - **The new menus were unreadable on light themes.** The Tools menu, the
   sidebar's New menu and the themed select were added after the light-theme
   corrections were written, so they never joined them: their offset shadow is
@@ -701,6 +773,18 @@ are on 0.9.1, upgrade.
 ## [0.7.0] - 2026-07-31
 
 ### Added
+- **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
+  or from the tray menu, refuses every call from the next one onward. It works
+  with the vault locked, and it is a plain file beside the vault
+  (`mcp_halt`), so a script or a cron job can throw it without Kino running at
+  all. Listing hosts still answers while stopped, marked `halted: true`, so an
+  assistant can say why it has stopped.
+- **Hourly budgets across the fleet.** 50 changes an hour, 25 hosts per
+  changing call and 600 calls an hour by default, editable in the MCP panel. A
+  call that would cross a budget is refused whole rather than partly run, and
+  the count is kept on disk, so restarting `kino-mcp` is not a way to reset it.
+- **`reason` and `ticket` on the tools that change something**, recorded in the
+  audit log. Labels for the reader; they decide nothing.
 - **Kino Cloud** - managed relays, so agent mode no longer needs you to run your
   own infrastructure. Paste an account key once under **Settings - Agent &
   Cloud**; the host editor's agent mode then becomes a machine picker. Add a
@@ -759,6 +843,18 @@ are on 0.9.1, upgrade.
 ## [0.6.1] - 2026-07-23
 
 ### Added
+- **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
+  or from the tray menu, refuses every call from the next one onward. It works
+  with the vault locked, and it is a plain file beside the vault
+  (`mcp_halt`), so a script or a cron job can throw it without Kino running at
+  all. Listing hosts still answers while stopped, marked `halted: true`, so an
+  assistant can say why it has stopped.
+- **Hourly budgets across the fleet.** 50 changes an hour, 25 hosts per
+  changing call and 600 calls an hour by default, editable in the MCP panel. A
+  call that would cross a budget is refused whole rather than partly run, and
+  the count is kept on disk, so restarting `kino-mcp` is not a way to reset it.
+- **`reason` and `ticket` on the tools that change something**, recorded in the
+  audit log. Labels for the reader; they decide nothing.
 - **Jump host / bastion (ProxyJump)** - route a connection through another saved
   host, like `ssh -J`. Pick a bastion in the host editor's Advanced step; kino
   opens an SSH session to it and tunnels to the target over a direct-tcpip
@@ -785,6 +881,18 @@ are on 0.9.1, upgrade.
 ## [0.6.0] - 2026-07-22
 
 ### Added
+- **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
+  or from the tray menu, refuses every call from the next one onward. It works
+  with the vault locked, and it is a plain file beside the vault
+  (`mcp_halt`), so a script or a cron job can throw it without Kino running at
+  all. Listing hosts still answers while stopped, marked `halted: true`, so an
+  assistant can say why it has stopped.
+- **Hourly budgets across the fleet.** 50 changes an hour, 25 hosts per
+  changing call and 600 calls an hour by default, editable in the MCP panel. A
+  call that would cross a budget is refused whole rather than partly run, and
+  the count is kept on disk, so restarting `kino-mcp` is not a way to reset it.
+- **`reason` and `ticket` on the tools that change something**, recorded in the
+  audit log. Labels for the reader; they decide nothing.
 - **AI copilot** - an opt-in, bring-your-own-key assistant embedded in the
   terminal, powered by [OpenRouter](https://openrouter.ai) (one key reaches
   every major model). Ask about the host you're on, paste an error, or have it
@@ -837,6 +945,18 @@ are on 0.9.1, upgrade.
 ## [0.5.0] - 2026-07-14
 
 ### Added
+- **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
+  or from the tray menu, refuses every call from the next one onward. It works
+  with the vault locked, and it is a plain file beside the vault
+  (`mcp_halt`), so a script or a cron job can throw it without Kino running at
+  all. Listing hosts still answers while stopped, marked `halted: true`, so an
+  assistant can say why it has stopped.
+- **Hourly budgets across the fleet.** 50 changes an hour, 25 hosts per
+  changing call and 600 calls an hour by default, editable in the MCP panel. A
+  call that would cross a budget is refused whole rather than partly run, and
+  the count is kept on disk, so restarting `kino-mcp` is not a way to reset it.
+- **`reason` and `ticket` on the tools that change something**, recorded in the
+  audit log. Labels for the reader; they decide nothing.
 - **Agent connection mode** - reach hosts that expose **no inbound SSH port** -
   behind NAT, CGNAT, or a firewall - through a relay, instead of connecting to a
   hostname directly:
@@ -893,6 +1013,18 @@ are on 0.9.1, upgrade.
 ## [0.4.3] - 2026-06-30
 
 ### Added
+- **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
+  or from the tray menu, refuses every call from the next one onward. It works
+  with the vault locked, and it is a plain file beside the vault
+  (`mcp_halt`), so a script or a cron job can throw it without Kino running at
+  all. Listing hosts still answers while stopped, marked `halted: true`, so an
+  assistant can say why it has stopped.
+- **Hourly budgets across the fleet.** 50 changes an hour, 25 hosts per
+  changing call and 600 calls an hour by default, editable in the MCP panel. A
+  call that would cross a budget is refused whole rather than partly run, and
+  the count is kept on disk, so restarting `kino-mcp` is not a way to reset it.
+- **`reason` and `ticket` on the tools that change something**, recorded in the
+  audit log. Labels for the reader; they decide nothing.
 - **Session recording & replay** - capture any SSH or local-shell session to an
   [asciicast](https://docs.asciinema.org/) (`.cast`) file:
   - A **Record / Stop** toggle in the terminal toolbar starts and stops capture
@@ -939,12 +1071,36 @@ are on 0.9.1, upgrade.
 ## [0.4.1] - 2026-06-10
 
 ### Added
+- **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
+  or from the tray menu, refuses every call from the next one onward. It works
+  with the vault locked, and it is a plain file beside the vault
+  (`mcp_halt`), so a script or a cron job can throw it without Kino running at
+  all. Listing hosts still answers while stopped, marked `halted: true`, so an
+  assistant can say why it has stopped.
+- **Hourly budgets across the fleet.** 50 changes an hour, 25 hosts per
+  changing call and 600 calls an hour by default, editable in the MCP panel. A
+  call that would cross a budget is refused whole rather than partly run, and
+  the count is kept on disk, so restarting `kino-mcp` is not a way to reset it.
+- **`reason` and `ticket` on the tools that change something**, recorded in the
+  audit log. Labels for the reader; they decide nothing.
 - **Copy Docker logs** - a one-click button in the container log viewer copies
   the current log buffer to the clipboard.
 
 ## [0.4.0] - 2026-06-10
 
 ### Added
+- **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
+  or from the tray menu, refuses every call from the next one onward. It works
+  with the vault locked, and it is a plain file beside the vault
+  (`mcp_halt`), so a script or a cron job can throw it without Kino running at
+  all. Listing hosts still answers while stopped, marked `halted: true`, so an
+  assistant can say why it has stopped.
+- **Hourly budgets across the fleet.** 50 changes an hour, 25 hosts per
+  changing call and 600 calls an hour by default, editable in the MCP panel. A
+  call that would cross a budget is refused whole rather than partly run, and
+  the count is kept on disk, so restarting `kino-mcp` is not a way to reset it.
+- **`reason` and `ticket` on the tools that change something**, recorded in the
+  audit log. Labels for the reader; they decide nothing.
 - **Docker management** - a per-session panel to manage Docker over the existing
   SSH connection (or the local daemon from a local-shell tab):
   - Containers: start / stop / restart / pause / remove, with live status.
@@ -1000,6 +1156,18 @@ are on 0.9.1, upgrade.
 ## [0.3.0] - 2026-06-09
 
 ### Added
+- **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
+  or from the tray menu, refuses every call from the next one onward. It works
+  with the vault locked, and it is a plain file beside the vault
+  (`mcp_halt`), so a script or a cron job can throw it without Kino running at
+  all. Listing hosts still answers while stopped, marked `halted: true`, so an
+  assistant can say why it has stopped.
+- **Hourly budgets across the fleet.** 50 changes an hour, 25 hosts per
+  changing call and 600 calls an hour by default, editable in the MCP panel. A
+  call that would cross a budget is refused whole rather than partly run, and
+  the count is kept on disk, so restarting `kino-mcp` is not a way to reset it.
+- **`reason` and `ticket` on the tools that change something**, recorded in the
+  audit log. Labels for the reader; they decide nothing.
 - **Folders / Groups** - dynamically organize hosts in the sidebar using tag-based groups.
 - **Quick Connect Bar** - instantly connect to any transient host directly from the sidebar by typing `user@host:port` without cluttering the vault.
 - **Local Shell Tabs** - open a local PowerShell (Windows) or Bash/Zsh (Unix) terminal right inside the app, alongside your remote SSH tabs.
@@ -1013,6 +1181,18 @@ are on 0.9.1, upgrade.
 ## [0.2.0] - 2026-06-04
 
 ### Added
+- **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
+  or from the tray menu, refuses every call from the next one onward. It works
+  with the vault locked, and it is a plain file beside the vault
+  (`mcp_halt`), so a script or a cron job can throw it without Kino running at
+  all. Listing hosts still answers while stopped, marked `halted: true`, so an
+  assistant can say why it has stopped.
+- **Hourly budgets across the fleet.** 50 changes an hour, 25 hosts per
+  changing call and 600 calls an hour by default, editable in the MCP panel. A
+  call that would cross a budget is refused whole rather than partly run, and
+  the count is kept on disk, so restarting `kino-mcp` is not a way to reset it.
+- **`reason` and `ticket` on the tools that change something**, recorded in the
+  audit log. Labels for the reader; they decide nothing.
 - **Per-host notes** - store free-form notes on any connection. Notes are
   searchable from the sidebar and shown via a note indicator and row tooltip.
 - **Master password confirmation** on first-time vault creation, with a
@@ -1061,6 +1241,18 @@ are on 0.9.1, upgrade.
 ## [0.1.0]
 
 ### Added
+- **A stop switch for MCP activity.** *Stop all MCP activity* in the MCP panel,
+  or from the tray menu, refuses every call from the next one onward. It works
+  with the vault locked, and it is a plain file beside the vault
+  (`mcp_halt`), so a script or a cron job can throw it without Kino running at
+  all. Listing hosts still answers while stopped, marked `halted: true`, so an
+  assistant can say why it has stopped.
+- **Hourly budgets across the fleet.** 50 changes an hour, 25 hosts per
+  changing call and 600 calls an hour by default, editable in the MCP panel. A
+  call that would cross a budget is refused whole rather than partly run, and
+  the count is kept on disk, so restarting `kino-mcp` is not a way to reset it.
+- **`reason` and `ticket` on the tools that change something**, recorded in the
+  audit log. Labels for the reader; they decide nothing.
 - Initial public release.
 - Encrypted vault (Argon2 + AES-256-GCM) unlocked by a single master password.
 - Per-host password and/or SSH key auth; ed25519 generation and `.pem`/`.key`/`.ppk` import.

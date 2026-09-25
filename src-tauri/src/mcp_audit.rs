@@ -46,6 +46,13 @@ pub struct AuditRecord {
     pub duration_ms: u64,
     pub client_name: String,
     pub client_version: String,
+    /// What the assistant said it was doing, and any ticket it named
+    /// (KR-11-F4). A label for whoever reads the log later: the model wrote
+    /// it, so it proves nothing and decides nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ticket: Option<String>,
     /// The asciicast of this call, when one was written (KR-01-F10). A name,
     /// not a path: recordings live in one folder, and a path in the log would
     /// go stale the moment that folder moved.

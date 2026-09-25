@@ -9,6 +9,7 @@
 
 use ssh_manager_lib::mcp::KinoMcpServer;
 use ssh_manager_lib::mcp_audit::{audit_path, AuditLog};
+use ssh_manager_lib::mcp_budget;
 use ssh_manager_lib::mcp_config;
 
 #[tokio::main]
@@ -64,7 +65,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // the only one this process has. The same key re-reads the vault when the
     // app rewrites it, so a policy change lands without a restart (issue #22).
     let server = KinoMcpServer::with_audit(vault, AuditLog::new(audit_path(), key))
-        .reloading_from(mcp_config::mcp_vault_path(), key);
+        .reloading_from(mcp_config::mcp_vault_path(), key)
+        // The hour's spending, kept across restarts (KR-11-F3).
+        .counting_in(mcp_budget::ledger_path(), key);
 
     // Serve over stdio (the standard MCP transport for local tools).
     use rmcp::ServiceExt;

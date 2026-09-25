@@ -389,6 +389,16 @@ export interface McpBinaryStatus {
   on_path_matches: boolean | null;
 }
 
+/** Mirrors `Budgets` in mcp_budget.rs - what one hour may contain. */
+export interface McpBudgets {
+  /** Changing calls, summed across hosts. */
+  max_changes_per_hour: number;
+  /** Hosts one changing call may touch. */
+  max_hosts_per_call: number;
+  /** Every call, reads included. */
+  max_calls_per_hour: number;
+}
+
 /** Mirrors `ApprovalRequest` in mcp_approval.rs: a call waiting on a person. */
 export interface McpApprovalRequest {
   v: number;
@@ -448,6 +458,8 @@ export interface McpConfig {
   global_rules_text: string;
   /** Seconds a guarded-mode prompt waits before kino-mcp refuses. */
   approval_timeout_secs: number;
+  /** What an hour of MCP activity may contain. */
+  budgets: McpBudgets;
   /** Set when saved settings exist but could not be read. */
   problem?: string | null;
   /** True once an MCP password has been set. */
@@ -863,6 +875,10 @@ interface VaultStore {
   mcpSetGlobalRules: (rulesText: string) => Promise<void>;
   /** Seconds a guarded-mode prompt waits. Clamped to 10..600 by the backend. */
   mcpSetApprovalTimeout: (seconds: number) => Promise<void>;
+  mcpSetBudgets: (budgets: McpBudgets) => Promise<void>;
+  /** Is all MCP activity stopped? Works with the vault locked. */
+  mcpHalted: () => Promise<boolean>;
+  mcpSetHalted: (halted: boolean) => Promise<void>;
 }
 
 const AUTO_SYNC_KEY = "ssh-mgr:autosync";
@@ -2150,6 +2166,9 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
     invoke<void>("mcp_set_global_rules", { rulesText }),
   mcpSetApprovalTimeout: (seconds) =>
     invoke<void>("mcp_set_approval_timeout", { seconds }),
+  mcpSetBudgets: (budgets) => invoke<void>("mcp_set_budgets", { budgets }),
+  mcpHalted: () => invoke<boolean>("mcp_halted"),
+  mcpSetHalted: (halted) => invoke<void>("mcp_set_halted", { halted }),
   respondToApproval: async (id, decision) => {
     return await invoke<boolean>("mcp_approval_respond", { id, decision });
   },

@@ -150,6 +150,20 @@ this snippet with a copy button.
   vault, mode `0600`, so another user on the machine cannot answer for you.
   Windows has no channel yet: there, a guarded call is still refused, with a
   message saying so.
+- **One switch stops everything.** *Stop all MCP activity* in the MCP panel,
+  or **Stop MCP activity** in the tray menu, refuses every call from the next
+  one onward. It is a file - `mcp_halt`, beside your vault - so a script, a
+  cron job or a monitoring alert can throw it too, with no password and
+  without Kino running. `touch ~/.local/share/ssh-manager/mcp_halt` is the
+  whole of it. Listing hosts still answers while stopped, marked
+  `halted: true`, so an assistant can tell you why it has stopped. If the file
+  cannot be read at all, that counts as stopped.
+- **An hour has a ceiling.** Across every exposed host: 50 changes an hour, 25
+  hosts per changing call, 600 calls an hour, all editable. A call that would
+  cross one is refused whole rather than run on the hosts that fit, and the
+  count is kept on disk - restarting `kino-mcp` does not hand back a fresh
+  hour. Reads keep working when the change budget is spent, so an assistant
+  can still explain what it did.
 - **Each host has limits.** 60 calls a minute and 256 KiB returned per call by
   default, both editable per host next to its rules. Over the rate, calls are
   refused with `rate_limited` until the minute passes; over the size, the reply
@@ -164,6 +178,9 @@ this snippet with a copy button.
   the end, so the cast is the command and then its output, without the pauses
   between. Read-only hosts are not recorded - they run only what a rule
   already named.
+- **A call can say why.** `ssh_exec`, `sftp_write` and `run_snippet` take an
+  optional `reason` and `ticket`, which land in the log. They are labels for
+  whoever reads it later: the model wrote them, so nothing is decided on them.
 - **Every call is recorded.** `kino-mcp` writes each tool call to
   `mcp_audit.jsonl.enc` beside the vault - what was called, on which host, the
   command verbatim, whether it was allowed or refused and why, the exit code,

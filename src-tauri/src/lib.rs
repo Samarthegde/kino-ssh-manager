@@ -19,6 +19,7 @@ pub mod mcp;
 pub mod mcp_approval;
 pub mod mcp_audit;
 mod mcp_binary;
+pub mod mcp_budget;
 pub mod mcp_config;
 pub mod mcp_limits;
 pub mod mcp_policy;
@@ -1648,6 +1649,37 @@ fn list_active_forwards(state: State<'_, AppState>) -> Vec<String> {
 
 // ── MCP commands ────────────────────────────────────────────────────────────
 
+/// Is MCP activity stopped (KR-11-F1)?
+#[tauri::command]
+fn mcp_halted() -> bool {
+    mcp_budget::is_halted(&mcp_budget::halt_path())
+}
+
+/// Stop or resume all MCP activity.
+///
+/// Works with the vault locked, and needs no MCP password: a stop button that
+/// only works when you are already signed in is not one you can rely on in the
+/// moment you need it.
+#[tauri::command]
+fn mcp_set_halted(halted: bool) -> Result<(), String> {
+    mcp_budget::set_halted(&mcp_budget::halt_path(), halted)
+}
+
+/// What an hour of MCP activity may contain (KR-11-F2).
+#[tauri::command]
+fn mcp_set_budgets(state: State<'_, AppState>, budgets: mcp_budget::Budgets) -> Result<(), String> {
+    {
+        let key_guard = state.vault_key.lock().unwrap();
+        let key = key_guard.as_ref().ok_or("Vault is locked")?;
+        let salt = state.vault_salt.lock().unwrap();
+        let salt = salt.as_ref().ok_or("Vault is locked")?;
+        let mut config = mcp_config::load_for_edit(key);
+        config.budgets = budgets;
+        mcp_config::save_config(&config, key, salt)?;
+    }
+    sync_mcp_vault(&state)
+}
+
 /// How long a prompt waits before `kino-mcp` refuses on its own (KR-01-F5).
 ///
 /// Clamped rather than trusted: a zero would refuse before the window could
@@ -1778,6 +1810,7 @@ fn mcp_get_config(state: State<'_, AppState>) -> Result<mcp_config::McpConfigVie
             })
             .collect(),
         approval_timeout_secs: config.approval_timeout_secs,
+        budgets: config.budgets.clone(),
         global_rules_text: mcp_policy::rules_to_text(&config.global_rules),
         exposed_host_ids: config.exposed_host_ids,
         configured: config.configured,
@@ -2013,16 +2046,48 @@ pub fn run() {
             // out of the app - on Linux, libappindicator delivers no click
             // events at all, so `on_tray_icon_event` below never fires there.
             let show = MenuItem::with_id(app, "show", "Show Kino", true, None::<&str>)?;
+            // The stop button, where it can be reached without unlocking
+            // anything or even raising the window (KR-11-F1).
+            let halt = MenuItem::with_id(
+                app,
+                "mcp_halt",
+                if mcp_budget::is_halted(&mcp_budget::halt_path()) {
+                    "Resume MCP activity"
+                } else {
+                    "Stop MCP activity"
+                },
+                true,
+                None::<&str>,
+            )?;
             let quit = MenuItem::with_id(app, "quit", "Quit Kino", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let menu = Menu::with_items(app, &[&show, &halt, &quit])?;
 
             if let Some(icon) = app.default_window_icon().cloned() {
                 TrayIconBuilder::new()
                     .tooltip("Kino SSH Manager")
                     .icon(icon)
                     .menu(&menu)
-                    .on_menu_event(|app, event| match event.id().as_ref() {
+                    .on_menu_event(move |app, event| match event.id().as_ref() {
                         "show" => restore_main_window(app),
+                        "mcp_halt" => {
+                            // Toggles, and relabels itself, so the menu says
+                            // what the next click will do rather than what
+                            // the last one did.
+                            let path = mcp_budget::halt_path();
+                            let now_halted = !mcp_budget::is_halted(&path);
+                            use tauri::Emitter;
+                            match mcp_budget::set_halted(&path, now_halted) {
+                                Ok(()) => {
+                                    let _ = halt.set_text(if now_halted {
+                                        "Resume MCP activity"
+                                    } else {
+                                        "Stop MCP activity"
+                                    });
+                                    let _ = app.emit("mcp-halt-changed", now_halted);
+                                }
+                                Err(e) => eprintln!("[kino] could not change the halt: {e}"),
+                            }
+                        }
                         // Bypasses the window's CloseRequested handler, which
                         // would otherwise just hide the window again.
                         "quit" => app.exit(0),
@@ -2162,6 +2227,9 @@ pub fn run() {
             update::updater_key_id,
             mcp_approval_respond,
             mcp_set_approval_timeout,
+            mcp_halted,
+            mcp_set_halted,
+            mcp_set_budgets,
             mcp_audit_read,
             mcp_binary::check_mcp_binary,
             mcp_binary::install_mcp_binary,

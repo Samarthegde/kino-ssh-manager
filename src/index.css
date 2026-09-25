@@ -6149,6 +6149,29 @@ textarea.mono,
   padding-top: 12px;
 }
 
+/* The stop switch. Sits above everything else in the panel, because it is
+ * what someone reaches for when an assistant is doing something wrong. */
+.mcp-stop {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 13px 15px;
+  margin-bottom: 14px;
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--red);
+  background: color-mix(in srgb, var(--red) 5%, transparent);
+}
+
+.mcp-stop.on {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.mcp-stop-text { flex: 1; }
+.mcp-stop-title { margin: 0 0 3px; font-size: 13px; font-weight: 600; color: var(--text); }
+.mcp-stop .mcp-hint { margin: 0; }
+.mcp-stop .btn { flex-shrink: 0; }
+
 /* MCP lives in Settings rather than a modal: it had outgrown one. The client
  * config alone is a path plus JSON, which a 680px column could only scroll
  * sideways, and the rule editor sat below the fold on a laptop. */

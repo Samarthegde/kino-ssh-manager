@@ -6,6 +6,7 @@
 
 use crate::mcp_approval::{self, ApprovalRequest, Verdict};
 use crate::mcp_audit::{AuditLog, AuditRecord};
+use crate::mcp_budget::{self, Ledger, Refusal, Spend};
 use crate::mcp_config::McpVault;
 use crate::mcp_limits::{self, Window};
 use crate::mcp_policy::{self, Decision, HostPolicy, McpMode};
@@ -73,6 +74,12 @@ pub struct KinoMcpServer {
     /// `socket_path()` so tests cannot reach the socket of a Kino that is
     /// actually running and put a prompt on someone's screen.
     approval_socket: std::path::PathBuf,
+    /// The stop file (KR-11-F1). A field for the same reason as the socket:
+    /// a test must not be stoppable by, or able to stop, a running Kino.
+    halt_file: std::path::PathBuf,
+    /// The hour's spending (KR-11-F2, F3). `None` when nothing is counted -
+    /// tests, and any embedding with no file to keep it in.
+    ledger: Option<Arc<Ledger>>,
     /// Built by the `#[tool_router]` macro and read by `#[tool_handler]`; the
     /// field looks unused to the compiler because both are generated.
     #[allow(dead_code)]
@@ -89,6 +96,8 @@ impl KinoMcpServer {
             calls: Arc::new(Mutex::new(HashMap::new())),
             approved: Arc::new(Mutex::new(HashSet::new())),
             approval_socket: mcp_approval::socket_path(),
+            halt_file: mcp_budget::halt_path(),
+            ledger: None,
             tool_router: Self::tool_router(),
         }
     }
@@ -109,6 +118,12 @@ impl KinoMcpServer {
         }
     }
 
+    /// Count what gets spent, and keep the count across restarts (KR-11-F3).
+    pub fn counting_in(mut self, path: std::path::PathBuf, key: [u8; 32]) -> Self {
+        self.ledger = Some(Arc::new(Ledger::new(path, key)));
+        self
+    }
+
     /// Watch `path` for changes, re-reading it with `key` (issue #22).
     ///
     /// Without this the server serves whatever it read at startup for as long
@@ -122,6 +137,77 @@ impl KinoMcpServer {
             stamp: Mutex::new(stamp),
         }));
         self
+    }
+
+    /// Everything that has to be true before a call runs: the vault is
+    /// current, nothing has been stopped, and the hour has room for it.
+    ///
+    /// `Some(result)` is the refusal to hand back. Each refusal is recorded -
+    /// an assistant hitting a budget or a halt over and over is exactly the
+    /// shape worth seeing in the log afterwards.
+    fn before_call(&self, tool: &str, started: Instant) -> Option<CallToolResult> {
+        if self.refresh().is_err() {
+            return Some(vault_unreadable());
+        }
+
+        let capability = mcp_policy::capability(tool);
+        let changes = matches!(
+            capability,
+            mcp_policy::Capability::Exec | mcp_policy::Capability::Write
+        );
+
+        // Metadata still answers while stopped, carrying `halted: true`: an
+        // assistant that cannot see anything cannot explain to its user why
+        // it has stopped doing things (KR-11-F1).
+        let stoppable = changes || matches!(capability, mcp_policy::Capability::Read);
+        if stoppable && mcp_budget::is_halted(&self.halt_file) {
+            self.record(
+                tool,
+                None,
+                "",
+                started,
+                Outcome {
+                    decision: "deny",
+                    rule_id: Some("halted".to_string()),
+                    ..Default::default()
+                },
+            );
+            return Some(stopped());
+        }
+
+        let Some(ledger) = &self.ledger else {
+            return None;
+        };
+        let now = now_ms();
+        let spend = if changes {
+            Spend::Change { hosts: 1 }
+        } else {
+            Spend::Call
+        };
+        match mcp_budget::check(&ledger.recent(now), now, &self.vault().budgets, spend) {
+            Ok(()) => {
+                if let Err(e) = ledger.record(now, spend) {
+                    // A budget that cannot be written is a budget that does
+                    // not hold, so say so rather than letting it look enforced.
+                    eprintln!("[kino-mcp] could not record budget spending: {e}");
+                }
+                None
+            }
+            Err(refusal) => {
+                self.record(
+                    tool,
+                    None,
+                    "",
+                    started,
+                    Outcome {
+                        decision: "deny",
+                        rule_id: Some("budget_exhausted".to_string()),
+                        ..Default::default()
+                    },
+                );
+                Some(over_budget(refusal))
+            }
+        }
     }
 
     /// The vault as it stands. Cheap: an `Arc` clone.
@@ -389,6 +475,8 @@ impl KinoMcpServer {
             client_name,
             client_version,
             recording: outcome.recording,
+            reason: outcome.reason,
+            ticket: outcome.ticket,
             error: outcome.error,
         };
         if let Err(e) = log.append(&record) {
@@ -536,6 +624,56 @@ fn stamp_of(path: &std::path::Path) -> Option<(std::time::SystemTime, u64)> {
     Some((meta.modified().ok()?, meta.len()))
 }
 
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// What a call gets while everything is stopped (KR-11-F1).
+fn stopped() -> CallToolResult {
+    CallToolResult::error(vec![ContentBlock::text(
+        serde_json::to_string_pretty(&serde_json::json!({
+            "error": "halted",
+            "message": "All MCP activity is stopped in Kino. Nothing was run. Clear it in \
+                        Settings - MCP Server, or delete the mcp_halt file beside the vault.",
+        }))
+        .unwrap_or_default(),
+    )])
+}
+
+/// What a call gets when the hour is spent (KR-11-F2).
+fn over_budget(refusal: Refusal) -> CallToolResult {
+    let (which, retry) = match refusal {
+        Refusal::Budget {
+            which,
+            retry_in_secs,
+        } => (which, retry_in_secs),
+        Refusal::Halted => ("halted", 0),
+    };
+    let wait = if retry > 0 {
+        format!(
+            " The oldest of them ages out in about {} minutes.",
+            retry.div_ceil(60)
+        )
+    } else {
+        String::new()
+    };
+    CallToolResult::error(vec![ContentBlock::text(
+        serde_json::to_string_pretty(&serde_json::json!({
+            "error": "budget_exhausted",
+            "budget": which,
+            "retry_in_secs": retry,
+            "message": format!(
+                "This hour's limit for '{which}' is spent, so nothing was run.{wait} \
+                 Raise it in Kino - Settings - MCP Server if this is work you asked for."
+            ),
+        }))
+        .unwrap_or_default(),
+    )])
+}
+
 /// What a call gets when the exposed vault changed into something this server
 /// cannot read - almost always a changed MCP password.
 fn vault_unreadable() -> CallToolResult {
@@ -563,6 +701,24 @@ struct Outcome {
     bytes_out: Option<usize>,
     error: Option<String>,
     recording: Option<String>,
+    /// Straight from the call, for the log only (KR-11-F4).
+    reason: Option<String>,
+    ticket: Option<String>,
+}
+
+/// At most this much of an assistant-written label is kept (KR-11-F4).
+const LABEL_MAX: usize = 500;
+
+fn label(value: &Option<String>) -> Option<String> {
+    let text = value.as_deref()?.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let mut end = text.len().min(LABEL_MAX);
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(text[..end].to_string())
 }
 
 impl Outcome {
@@ -624,6 +780,13 @@ pub struct ExecParams {
     pub host: String,
     #[schemars(description = "Shell command to execute")]
     pub command: String,
+    #[schemars(
+        description = "Why you are running this, in one line. Recorded in Kino's audit log for \
+                       the person who reads it later. It is not used to decide anything."
+    )]
+    pub reason: Option<String>,
+    #[schemars(description = "A ticket or change reference, if there is one. Recorded, not used.")]
+    pub ticket: Option<String>,
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -642,6 +805,13 @@ pub struct WriteParams {
     pub path: String,
     #[schemars(description = "Content to write to the file")]
     pub content: String,
+    #[schemars(
+        description = "Why you are writing this. Recorded in the audit log, not used to \
+                              decide anything."
+    )]
+    pub reason: Option<String>,
+    #[schemars(description = "A ticket or change reference, if there is one.")]
+    pub ticket: Option<String>,
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -650,6 +820,13 @@ pub struct RunSnippetParams {
     pub host: String,
     #[schemars(description = "Snippet name or ID")]
     pub snippet: String,
+    #[schemars(
+        description = "Why you are running it. Recorded in the audit log, not used to \
+                              decide anything."
+    )]
+    pub reason: Option<String>,
+    #[schemars(description = "A ticket or change reference, if there is one.")]
+    pub ticket: Option<String>,
 }
 
 #[tool_router]
@@ -660,9 +837,9 @@ impl KinoMcpServer {
     )]
     async fn list_hosts(&self) -> Result<CallToolResult, McpError> {
         let started = Instant::now();
-        // The vault may have changed since the last call (issue #22).
-        if self.refresh().is_err() {
-            return Ok(vault_unreadable());
+        // Current vault, not stopped, and the hour has room (issue #22, KR-11).
+        if let Some(stop) = self.before_call("list_hosts", started) {
+            return Ok(stop);
         }
         let vault = self.vault();
         let list: Vec<serde_json::Value> = vault
@@ -682,7 +859,19 @@ impl KinoMcpServer {
                 })
             })
             .collect();
-        let json = serde_json::to_string_pretty(&list).unwrap_or_default();
+        let json = if mcp_budget::is_halted(&self.halt_file) {
+            // Shape changes only in this one state, and deliberately: an
+            // assistant that silently got a normal-looking list would go on
+            // to try things that are all going to be refused.
+            serde_json::to_string_pretty(&serde_json::json!({
+                "halted": true,
+                "message": "MCP activity is stopped in Kino. Nothing will run until it is cleared.",
+                "hosts": list,
+            }))
+            .unwrap_or_default()
+        } else {
+            serde_json::to_string_pretty(&list).unwrap_or_default()
+        };
         self.record(
             "list_hosts",
             None,
@@ -705,9 +894,9 @@ impl KinoMcpServer {
         Parameters(params): Parameters<HostParams>,
     ) -> Result<CallToolResult, McpError> {
         let started = Instant::now();
-        // The vault may have changed since the last call (issue #22).
-        if self.refresh().is_err() {
-            return Ok(vault_unreadable());
+        // Current vault, not stopped, and the hour has room (issue #22, KR-11).
+        if let Some(stop) = self.before_call("get_host", started) {
+            return Ok(stop);
         }
         let found = match self.find_host(&params.host) {
             Some(h) => h,
@@ -726,7 +915,7 @@ impl KinoMcpServer {
             }
         };
         let h = &found;
-        let info = serde_json::json!({
+        let mut info = serde_json::json!({
             "name": h.name,
             "hostname": h.hostname,
             "port": h.port,
@@ -747,6 +936,9 @@ impl KinoMcpServer {
             }).collect::<Vec<_>>(),
             "on_connect_snippets": h.on_connect_snippets,
         });
+        if mcp_budget::is_halted(&self.halt_file) {
+            info["halted"] = serde_json::json!(true);
+        }
         let json = serde_json::to_string_pretty(&info).unwrap_or_default();
         self.record(
             "get_host",
@@ -770,9 +962,9 @@ impl KinoMcpServer {
         Parameters(params): Parameters<ExecParams>,
     ) -> Result<CallToolResult, McpError> {
         let started = Instant::now();
-        // The vault may have changed since the last call (issue #22).
-        if self.refresh().is_err() {
-            return Ok(vault_unreadable());
+        // Current vault, not stopped, and the hour has room (issue #22, KR-11).
+        if let Some(stop) = self.before_call("ssh_exec", started) {
+            return Ok(stop);
         }
         let found = match self.find_host(&params.host) {
             Some(h) => h,
@@ -829,6 +1021,8 @@ impl KinoMcpServer {
                     &params.command,
                     started,
                     Outcome {
+                        reason: label(&params.reason),
+                        ticket: label(&params.ticket),
                         // u32 on the wire, i32 in the record: a shell status
                         // is 0-255, and i32 is what every reader expects.
                         exit_code: out.code.map(|c| c as i32),
@@ -856,6 +1050,8 @@ impl KinoMcpServer {
                     &params.command,
                     started,
                     Outcome {
+                        reason: label(&params.reason),
+                        ticket: label(&params.ticket),
                         error: Some(e.to_string()),
                         ..Outcome::allowed()
                     },
@@ -877,9 +1073,9 @@ impl KinoMcpServer {
         Parameters(params): Parameters<PathParams>,
     ) -> Result<CallToolResult, McpError> {
         let started = Instant::now();
-        // The vault may have changed since the last call (issue #22).
-        if self.refresh().is_err() {
-            return Ok(vault_unreadable());
+        // Current vault, not stopped, and the hour has room (issue #22, KR-11).
+        if let Some(stop) = self.before_call("sftp_list", started) {
+            return Ok(stop);
         }
         let found = match self.find_host(&params.host) {
             Some(h) => h,
@@ -949,9 +1145,9 @@ impl KinoMcpServer {
         Parameters(params): Parameters<PathParams>,
     ) -> Result<CallToolResult, McpError> {
         let started = Instant::now();
-        // The vault may have changed since the last call (issue #22).
-        if self.refresh().is_err() {
-            return Ok(vault_unreadable());
+        // Current vault, not stopped, and the hour has room (issue #22, KR-11).
+        if let Some(stop) = self.before_call("sftp_read", started) {
+            return Ok(stop);
         }
         let found = match self.find_host(&params.host) {
             Some(h) => h,
@@ -1026,9 +1222,9 @@ impl KinoMcpServer {
         Parameters(params): Parameters<WriteParams>,
     ) -> Result<CallToolResult, McpError> {
         let started = Instant::now();
-        // The vault may have changed since the last call (issue #22).
-        if self.refresh().is_err() {
-            return Ok(vault_unreadable());
+        // Current vault, not stopped, and the hour has room (issue #22, KR-11).
+        if let Some(stop) = self.before_call("sftp_write", started) {
+            return Ok(stop);
         }
         let found = match self.find_host(&params.host) {
             Some(h) => h,
@@ -1075,6 +1271,8 @@ impl KinoMcpServer {
                     &params.path,
                     started,
                     Outcome {
+                        reason: label(&params.reason),
+                        ticket: label(&params.ticket),
                         bytes_out: Some(params.content.len()),
                         ..Outcome::allowed()
                     },
@@ -1091,6 +1289,8 @@ impl KinoMcpServer {
                     &params.path,
                     started,
                     Outcome {
+                        reason: label(&params.reason),
+                        ticket: label(&params.ticket),
                         error: Some(e.to_string()),
                         ..Outcome::allowed()
                     },
@@ -1109,9 +1309,9 @@ impl KinoMcpServer {
     )]
     async fn list_snippets(&self) -> Result<CallToolResult, McpError> {
         let started = Instant::now();
-        // The vault may have changed since the last call (issue #22).
-        if self.refresh().is_err() {
-            return Ok(vault_unreadable());
+        // Current vault, not stopped, and the hour has room (issue #22, KR-11).
+        if let Some(stop) = self.before_call("list_snippets", started) {
+            return Ok(stop);
         }
         let vault = self.vault();
         let list: Vec<serde_json::Value> = vault
@@ -1148,9 +1348,9 @@ impl KinoMcpServer {
         Parameters(params): Parameters<RunSnippetParams>,
     ) -> Result<CallToolResult, McpError> {
         let started = Instant::now();
-        // The vault may have changed since the last call (issue #22).
-        if self.refresh().is_err() {
-            return Ok(vault_unreadable());
+        // Current vault, not stopped, and the hour has room (issue #22, KR-11).
+        if let Some(stop) = self.before_call("run_snippet", started) {
+            return Ok(stop);
         }
         let found = match self.find_host(&params.host) {
             Some(h) => h,
@@ -1210,6 +1410,8 @@ impl KinoMcpServer {
                     &snip.commands,
                     started,
                     Outcome {
+                        reason: label(&params.reason),
+                        ticket: label(&params.ticket),
                         bytes_out: Some(capped.original),
                         recording,
                         ..Outcome::allowed()
@@ -1231,6 +1433,8 @@ impl KinoMcpServer {
                     &snip.commands,
                     started,
                     Outcome {
+                        reason: label(&params.reason),
+                        ticket: label(&params.ticket),
                         error: Some(e.to_string()),
                         ..Outcome::allowed()
                     },
@@ -1358,6 +1562,7 @@ mod tests {
             policies,
             global_rules: vec![],
             approval_timeout_secs: crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
+            budgets: Default::default(),
         })
         // Nothing is listening here, which is what a test wants: the real
         // socket belongs to whatever Kino is running on this machine.
@@ -1427,6 +1632,8 @@ mod tests {
             .block_on(s.ssh_exec(Parameters(ExecParams {
                 host: "web-prod".into(),
                 command: command.into(),
+                reason: None,
+                ticket: None,
             })))
             .unwrap()
     }
@@ -1512,6 +1719,8 @@ mod tests {
             .block_on(s.ssh_exec(Parameters(ExecParams {
                 host: "db-prod".into(),
                 command: "uptime".into(),
+                reason: None,
+                ticket: None,
             })))
             .unwrap();
 
@@ -1550,6 +1759,205 @@ mod tests {
         assert_eq!(r.is_error, Some(true));
     }
 
+    // ── Stopping, and the hour's ceiling (KR-11-F1..F4) ─────────────────────
+
+    /// A server whose halt file and ledger are this test's own. Never the
+    /// real ones: a test must not be able to stop somebody's assistant, or be
+    /// stopped by it.
+    fn budgeted_server(
+        mode: McpMode,
+        budgets: crate::mcp_budget::Budgets,
+    ) -> (
+        KinoMcpServer,
+        tempfile::TempDir,
+        std::path::PathBuf,
+        std::path::PathBuf,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let halt = dir.path().join("mcp_halt");
+        let audit = dir.path().join("audit.jsonl.enc");
+        let ledger = dir.path().join("mcp_budget.enc");
+
+        let mut vault = (*server(mode, "").vault()).clone();
+        vault.budgets = budgets;
+        let mut s = KinoMcpServer::with_audit(
+            vault,
+            crate::mcp_audit::AuditLog::new(audit.clone(), [3u8; 32]),
+        )
+        .counting_in(ledger, [3u8; 32])
+        .asking_at("/nonexistent/kino-test-approval.sock".into());
+        s.halt_file = halt.clone();
+        (s, dir, halt, audit)
+    }
+
+    #[test]
+    fn stopping_refuses_the_next_call() {
+        let (s, _dir, halt, _audit) = budgeted_server(McpMode::Full, Default::default());
+        assert!(!text(&exec(&s, "uptime")).contains("halted"));
+
+        crate::mcp_budget::set_halted(&halt, true).unwrap();
+
+        let body = text(&exec(&s, "uptime"));
+        assert!(body.contains("\"error\": \"halted\""), "{body}");
+    }
+
+    #[test]
+    fn a_file_dropped_there_by_anything_stops_it() {
+        // The whole point of a plain file: `touch mcp_halt` from a script, a
+        // cron job or a colleague, with no key and no app running.
+        let (s, _dir, halt, _audit) = budgeted_server(McpMode::Full, Default::default());
+        std::fs::write(&halt, b"").unwrap();
+        assert!(text(&exec(&s, "uptime")).contains("halted"));
+    }
+
+    #[test]
+    fn clearing_it_lets_work_resume() {
+        let (s, _dir, halt, _audit) = budgeted_server(McpMode::Full, Default::default());
+        crate::mcp_budget::set_halted(&halt, true).unwrap();
+        assert!(text(&exec(&s, "uptime")).contains("halted"));
+        crate::mcp_budget::set_halted(&halt, false).unwrap();
+        assert!(!text(&exec(&s, "uptime")).contains("\"error\": \"halted\""));
+    }
+
+    #[test]
+    fn listing_hosts_still_answers_while_stopped_and_says_so() {
+        // Otherwise an assistant cannot tell its user why everything stopped.
+        let (s, _dir, halt, _audit) = budgeted_server(McpMode::Full, Default::default());
+        crate::mcp_budget::set_halted(&halt, true).unwrap();
+        let body = text(
+            &tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(s.list_hosts())
+                .unwrap(),
+        );
+        assert!(body.contains("\"halted\": true"), "{body}");
+        assert!(body.contains("web-prod"), "{body}");
+    }
+
+    #[test]
+    fn a_stopped_call_is_recorded() {
+        let (s, _dir, halt, audit) = budgeted_server(McpMode::Full, Default::default());
+        crate::mcp_budget::set_halted(&halt, true).unwrap();
+        exec(&s, "uptime");
+        let recorded = crate::mcp_audit::read_all(&audit, &[3u8; 32])
+            .unwrap()
+            .into_iter()
+            .filter_map(|e| e.record)
+            .collect::<Vec<_>>();
+        assert_eq!(recorded[0].decision, "deny");
+        assert_eq!(recorded[0].rule_id.as_deref(), Some("halted"));
+    }
+
+    #[test]
+    fn the_hours_change_budget_is_a_ceiling() {
+        let budgets = crate::mcp_budget::Budgets {
+            max_changes_per_hour: 2,
+            ..Default::default()
+        };
+        let (s, _dir, _halt, _audit) = budgeted_server(McpMode::Full, budgets);
+        exec(&s, "one");
+        exec(&s, "two");
+        let body = text(&exec(&s, "three"));
+        assert!(body.contains("budget_exhausted"), "{body}");
+        assert!(body.contains("changes per hour"), "{body}");
+    }
+
+    #[test]
+    fn a_refused_call_does_not_spend_the_budget_it_was_refused_by() {
+        // Otherwise an assistant that keeps trying pushes its own recovery
+        // further away every time.
+        let budgets = crate::mcp_budget::Budgets {
+            max_changes_per_hour: 1,
+            ..Default::default()
+        };
+        let (s, dir, _halt, _audit) = budgeted_server(McpMode::Full, budgets);
+        exec(&s, "one");
+        for _ in 0..5 {
+            assert!(text(&exec(&s, "two")).contains("budget_exhausted"));
+        }
+        let ledger = crate::mcp_budget::Ledger::new(dir.path().join("mcp_budget.enc"), [3u8; 32]);
+        let spent: u32 = ledger.recent(now_ms()).iter().map(|e| e.changed).sum();
+        assert_eq!(spent, 1, "only the call that ran counts");
+    }
+
+    #[test]
+    fn spending_is_kept_across_a_restart() {
+        // KR-11-F3. A new server, same files: the hour is where it was left.
+        let budgets = crate::mcp_budget::Budgets {
+            max_changes_per_hour: 1,
+            ..Default::default()
+        };
+        let (first, dir, halt, audit) = budgeted_server(McpMode::Full, budgets.clone());
+        exec(&first, "one");
+        drop(first);
+
+        let mut vault = (*server(McpMode::Full, "").vault()).clone();
+        vault.budgets = budgets;
+        let mut restarted =
+            KinoMcpServer::with_audit(vault, crate::mcp_audit::AuditLog::new(audit, [3u8; 32]))
+                .counting_in(dir.path().join("mcp_budget.enc"), [3u8; 32])
+                .asking_at("/nonexistent/kino-test-approval.sock".into());
+        restarted.halt_file = halt;
+
+        assert!(
+            text(&exec(&restarted, "two")).contains("budget_exhausted"),
+            "restarting must not hand back a fresh hour"
+        );
+    }
+
+    #[test]
+    fn reading_is_still_possible_when_the_change_budget_is_spent() {
+        let budgets = crate::mcp_budget::Budgets {
+            max_changes_per_hour: 1,
+            ..Default::default()
+        };
+        let (s, _dir, _halt, _audit) = budgeted_server(McpMode::Full, budgets);
+        exec(&s, "one");
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let body = text(&rt.block_on(s.list_hosts()).unwrap());
+        assert!(!body.contains("budget_exhausted"), "{body}");
+    }
+
+    #[test]
+    fn the_reason_reaches_the_log_and_nothing_else() {
+        // KR-11-F4: a label, not an argument. The model wrote it.
+        let (s, _dir, _halt, audit) = budgeted_server(McpMode::Full, Default::default());
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(s.ssh_exec(Parameters(ExecParams {
+            host: "web-prod".into(),
+            command: "uptime".into(),
+            reason: Some("checking load before the deploy".into()),
+            ticket: Some("OPS-411".into()),
+        })))
+        .unwrap();
+
+        let recorded = crate::mcp_audit::read_all(&audit, &[3u8; 32])
+            .unwrap()
+            .into_iter()
+            .filter_map(|e| e.record)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            recorded[0].reason.as_deref(),
+            Some("checking load before the deploy")
+        );
+        assert_eq!(recorded[0].ticket.as_deref(), Some("OPS-411"));
+    }
+
+    #[test]
+    fn a_very_long_reason_is_clipped_rather_than_stored_whole() {
+        assert_eq!(label(&Some("x".repeat(900))).unwrap().len(), LABEL_MAX);
+        assert_eq!(label(&Some("   ".into())), None, "blank is no label at all");
+        assert_eq!(label(&None), None);
+    }
+
     // ── Noticing the vault changed (issue #22) ──────────────────────────────
     //
     // The app rewrites mcp_vault.enc on every change. A server that read it
@@ -1576,6 +1984,7 @@ mod tests {
             policies,
             global_rules: vec![],
             approval_timeout_secs: crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
+            budgets: Default::default(),
         }
     }
 
@@ -1818,6 +2227,8 @@ mod tests {
             .ssh_exec(Parameters(ExecParams {
                 host: "web-prod".into(),
                 command: command.into(),
+                reason: None,
+                ticket: None,
             }))
             .await
             .unwrap();
@@ -1877,6 +2288,8 @@ mod tests {
             s.ssh_exec(Parameters(ExecParams {
                 host: "web-prod".into(),
                 command: "systemctl restart nginx".into(),
+                reason: None,
+                ticket: None,
             }))
             .await
             .unwrap();
@@ -1906,6 +2319,8 @@ mod tests {
             s.ssh_exec(Parameters(ExecParams {
                 host: "web-prod".into(),
                 command: command.into(),
+                reason: None,
+                ticket: None,
             }))
             .await
             .unwrap();
@@ -2005,6 +2420,8 @@ mod tests {
                 host: "web-prod".into(),
                 path: "/etc/passwd".into(),
                 content: "x".into(),
+                reason: None,
+                ticket: None,
             })))
             .unwrap();
         assert!(
@@ -2017,6 +2434,8 @@ mod tests {
             .block_on(s.run_snippet(Parameters(RunSnippetParams {
                 host: "web-prod".into(),
                 snippet: "deploy".into(),
+                reason: None,
+                ticket: None,
             })))
             .unwrap();
         assert!(
@@ -2092,6 +2511,7 @@ mod tests {
             policies: HashMap::new(),
             global_rules: vec![],
             approval_timeout_secs: crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
+            budgets: Default::default(),
         });
         assert!(text(&exec(&s, "uptime")).contains("\"reason\": \"default_deny\""));
     }

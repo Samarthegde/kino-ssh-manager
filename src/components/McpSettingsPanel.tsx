@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { McpBinaryStatus, McpConfig, McpMode, useVaultStore } from "../store";
+import { listen } from "@tauri-apps/api/event";
+import { McpBinaryStatus, McpBudgets, McpConfig, McpMode, useVaultStore } from "../store";
 
 /**
  * The MCP server's control panel.
@@ -53,6 +54,9 @@ export function McpSettingsPanel() {
     mcpSetHostPolicy,
     mcpSetGlobalRules,
     mcpSetApprovalTimeout,
+    mcpSetBudgets,
+    mcpHalted,
+    mcpSetHalted,
     checkMcpBinary,
     installMcpBinary,
     hosts,
@@ -74,6 +78,36 @@ export function McpSettingsPanel() {
   const [policies, setPolicies] = useState<Record<string, PolicyDraft>>({});
   const [globalRules, setGlobalRules] = useState("");
   const [approvalTimeout, setApprovalTimeout] = useState(120);
+  const [budgets, setBudgets] = useState<McpBudgets>({
+    max_changes_per_hour: 50,
+    max_hosts_per_call: 25,
+    max_calls_per_hour: 600,
+  });
+  const [halted, setHalted] = useState(false);
+  const [halting, setHalting] = useState(false);
+
+  // The tray menu can stop things too, so the panel follows rather than
+  // holding its own opinion about what the switch is set to.
+  useEffect(() => {
+    mcpHalted().then(setHalted).catch(() => {});
+    const un = listen<boolean>("mcp-halt-changed", (e) => setHalted(e.payload));
+    return () => {
+      void un.then((f) => f());
+    };
+  }, [mcpHalted]);
+
+  async function toggleHalt(next: boolean) {
+    setHalting(true);
+    try {
+      await mcpSetHalted(next);
+      setHalted(next);
+      setError("");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setHalting(false);
+    }
+  }
   const [editingRules, setEditingRules] = useState<string | null>(null);
   /** A host whose jump to full access is waiting to be confirmed by name. */
   const [pendingFull, setPendingFull] = useState<string | null>(null);
@@ -105,6 +139,7 @@ export function McpSettingsPanel() {
         setPolicies(drafts);
         setGlobalRules(c.global_rules_text);
         setApprovalTimeout(c.approval_timeout_secs || 120);
+        if (c.budgets) setBudgets(c.budgets);
       })
       .catch((e) => setError(String(e)));
   }, [mcpGetConfig]);
@@ -162,6 +197,7 @@ export function McpSettingsPanel() {
       await mcpSetExposedHosts(Array.from(exposed));
       await mcpSetGlobalRules(globalRules);
       await mcpSetApprovalTimeout(approvalTimeout);
+      await mcpSetBudgets(budgets);
       // Only the exposed hosts: a policy for a host nobody shares is noise.
       for (const id of exposed) {
         const d = draft(id);
@@ -221,6 +257,26 @@ export function McpSettingsPanel() {
           </p>
 
           {config?.problem && <div className="mcp-warn">{config.problem}</div>}
+
+          <section className={`mcp-stop ${halted ? "on" : ""}`}>
+            <div className="mcp-stop-text">
+              <p className="mcp-stop-title">
+                {halted ? "MCP activity is stopped" : "Stop all MCP activity"}
+              </p>
+              <p className="mcp-hint">
+                {halted
+                  ? "Every call is refused until you resume - including ones already in flight when they next ask. Listing hosts still answers, so an assistant can explain why it stopped."
+                  : "One switch, taking effect on the very next call. It needs neither this panel nor an unlocked vault: it is a file beside your vault, so a script or the tray menu can throw it too."}
+              </p>
+            </div>
+            <button
+              className={`btn btn-sm ${halted ? "btn-primary" : "btn-danger"}`}
+              onClick={() => void toggleHalt(!halted)}
+              disabled={halting}
+            >
+              {halted ? "Resume" : "Stop everything"}
+            </button>
+          </section>
 
           {fullHosts.length > 0 ? (
             <div className="mcp-warn">
@@ -445,6 +501,63 @@ export function McpSettingsPanel() {
                   className="mcp-input"
                   value={approvalTimeout}
                   onChange={(e) => setApprovalTimeout(Number(e.target.value) || 120)}
+                />
+              </label>
+            </div>
+          </section>
+
+          <section className="mcp-section">
+            <p className="mcp-section-title">What an hour may contain</p>
+            <p className="mcp-hint">
+              Ceilings across every exposed host, counted over a rolling hour and kept across
+              restarts - so restarting an assistant is not a way to reset them. A call that would
+              cross one is refused whole, never run on the hosts that happen to fit. Per-host call
+              rates are set with each host's rules.
+            </p>
+            <div className="mcp-limits">
+              <label className="mcp-limit">
+                <span>Changes an hour</span>
+                <input
+                  type="number"
+                  min={0}
+                  className="mcp-input"
+                  value={budgets.max_changes_per_hour}
+                  onChange={(e) =>
+                    setBudgets({
+                      ...budgets,
+                      max_changes_per_hour: Math.max(0, Number(e.target.value) || 0),
+                    })
+                  }
+                />
+              </label>
+              <label className="mcp-limit">
+                <span>Hosts per call</span>
+                <input
+                  type="number"
+                  min={1}
+                  className="mcp-input"
+                  value={budgets.max_hosts_per_call}
+                  onChange={(e) =>
+                    setBudgets({
+                      ...budgets,
+                      max_hosts_per_call: Math.max(1, Number(e.target.value) || 1),
+                    })
+                  }
+                />
+              </label>
+              <label className="mcp-limit">
+                <span>Calls an hour</span>
+                <input
+                  type="number"
+                  min={0}
+                  className="mcp-input"
+                  value={budgets.max_calls_per_hour}
+                  onChange={(e) =>
+                    setBudgets({
+                      ...budgets,
+                      max_calls_per_hour: Math.max(0, Number(e.target.value) || 0),
+                    })
+                  }
                 />
               </label>
             </div>
