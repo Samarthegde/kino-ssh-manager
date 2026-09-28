@@ -2174,162 +2174,169 @@ mod tests {
     // window will. What is being tested is the *server's* half: that Ask
     // reaches a person, that the answer is obeyed, that a session approval is
     // remembered, and that each outcome is recorded as what it was.
+    //
+    // Unix only, like the channel itself: on Windows guarded mode refuses for
+    // want of one, which `mcp_approval` covers.
+    #[cfg(unix)]
+    mod approvals {
+        use super::*;
 
-    struct FakeApp {
-        prompts: Arc<Mutex<Vec<crate::mcp_approval::ApprovalRequest>>>,
-        socket: std::path::PathBuf,
-        _dir: tempfile::TempDir,
-    }
-
-    /// An app that answers everything with `decision`.
-    fn fake_app(decision: &'static str) -> FakeApp {
-        use crate::mcp_approval::broker::{self, Broker};
-        let dir = tempfile::tempdir().unwrap();
-        let socket = dir.path().join("approval.sock");
-        let listener = broker::bind(&socket).unwrap();
-        let broker_handle = Broker::new();
-        let prompts = Arc::new(Mutex::new(Vec::new()));
-
-        let seen = prompts.clone();
-        let answering = broker_handle.clone();
-        tokio::spawn(async move {
-            broker::serve(
-                answering.clone(),
-                listener,
-                || true,
-                move |request| {
-                    seen.lock().unwrap().push(request.clone());
-                    // The click, as fast as a person never is.
-                    let b = answering.clone();
-                    tokio::spawn(async move {
-                        b.respond(&request.id, decision);
-                    });
-                },
-            )
-            .await;
-        });
-
-        FakeApp {
-            prompts,
-            socket,
-            _dir: dir,
-        }
-    }
-
-    /// Run one guarded command against `app`, on a server that records.
-    async fn guarded_call(
-        app: &FakeApp,
-        command: &str,
-    ) -> (CallToolResult, std::path::PathBuf, tempfile::TempDir) {
-        let (s, dir, path) = recording_server(McpMode::Guarded, "");
-        let s = s.asking_at(app.socket.clone());
-        let r = s
-            .ssh_exec(Parameters(ExecParams {
-                host: "web-prod".into(),
-                command: command.into(),
-                reason: None,
-                ticket: None,
-            }))
-            .await
-            .unwrap();
-        (r, path, dir)
-    }
-
-    #[tokio::test]
-    async fn an_approved_call_gets_past_the_gate() {
-        let app = fake_app("approve_once");
-        let (r, path, _dir) = guarded_call(&app, "systemctl restart nginx").await;
-
-        // Port 1 on loopback: a transport error means the gate let it through,
-        // which is the only way to prove that without a real host.
-        let body = text(&r);
-        assert!(!body.contains("policy_denied"), "{body}");
-        assert_eq!(app.prompts.lock().unwrap().len(), 1, "a person was asked");
-
-        let recorded = records(&path);
-        assert_eq!(
-            recorded
-                .iter()
-                .map(|r| r.decision.as_str())
-                .collect::<Vec<_>>(),
-            ["approved", "allow"],
-            "the approval, then the call it allowed - and no denial in front of them"
-        );
-    }
-
-    #[tokio::test]
-    async fn the_prompt_carries_the_command_verbatim() {
-        // KR-01-F6: the person approves what will actually run, not a summary.
-        let app = fake_app("deny");
-        guarded_call(&app, "rm -rf /var/log/*.gz").await;
-        let prompt = app.prompts.lock().unwrap()[0].clone();
-        assert_eq!(prompt.argument, "rm -rf /var/log/*.gz");
-        assert_eq!(prompt.host_name, "web-prod");
-        assert_eq!(prompt.tool, "ssh_exec");
-    }
-
-    #[tokio::test]
-    async fn a_refused_approval_stops_the_call_and_says_who_refused() {
-        let app = fake_app("deny");
-        let (r, path, _dir) = guarded_call(&app, "systemctl restart nginx").await;
-        let body = text(&r);
-        assert_eq!(r.is_error, Some(true));
-        assert!(body.contains("denied_by_user"), "{body}");
-        assert_eq!(records(&path)[0].decision, "denied_by_user");
-    }
-
-    #[tokio::test]
-    async fn approving_for_the_session_stops_the_asking() {
-        let app = fake_app("approve_session");
-        let (s, _dir, path) = recording_server(McpMode::Guarded, "");
-        let s = s.asking_at(app.socket.clone());
-
-        for _ in 0..3 {
-            s.ssh_exec(Parameters(ExecParams {
-                host: "web-prod".into(),
-                command: "systemctl restart nginx".into(),
-                reason: None,
-                ticket: None,
-            }))
-            .await
-            .unwrap();
+        struct FakeApp {
+            prompts: Arc<Mutex<Vec<crate::mcp_approval::ApprovalRequest>>>,
+            socket: std::path::PathBuf,
+            _dir: tempfile::TempDir,
         }
 
-        assert_eq!(
-            app.prompts.lock().unwrap().len(),
-            1,
-            "asked once, not three times"
-        );
-        // Each call leaves two records: the approval, then what the call did.
-        // "Approved once, ran three times" has to be visible in the log.
-        let approvals = records(&path)
-            .into_iter()
-            .filter(|r| r.decision == "approved")
-            .count();
-        assert_eq!(approvals, 3, "every call is recorded, asked for or not");
-    }
+        /// An app that answers everything with `decision`.
+        fn fake_app(decision: &'static str) -> FakeApp {
+            use crate::mcp_approval::broker::{self, Broker};
+            let dir = tempfile::tempdir().unwrap();
+            let socket = dir.path().join("approval.sock");
+            let listener = broker::bind(&socket).unwrap();
+            let broker_handle = Broker::new();
+            let prompts = Arc::new(Mutex::new(Vec::new()));
 
-    #[tokio::test]
-    async fn a_session_approval_covers_only_the_command_it_was_given_for() {
-        let app = fake_app("approve_session");
-        let (s, _dir, _path) = recording_server(McpMode::Guarded, "");
-        let s = s.asking_at(app.socket.clone());
+            let seen = prompts.clone();
+            let answering = broker_handle.clone();
+            tokio::spawn(async move {
+                broker::serve(
+                    answering.clone(),
+                    listener,
+                    || true,
+                    move |request| {
+                        seen.lock().unwrap().push(request.clone());
+                        // The click, as fast as a person never is.
+                        let b = answering.clone();
+                        tokio::spawn(async move {
+                            b.respond(&request.id, decision);
+                        });
+                    },
+                )
+                .await;
+            });
 
-        for command in ["systemctl restart nginx", "rm -rf /var"] {
-            s.ssh_exec(Parameters(ExecParams {
-                host: "web-prod".into(),
-                command: command.into(),
-                reason: None,
-                ticket: None,
-            }))
-            .await
-            .unwrap();
+            FakeApp {
+                prompts,
+                socket,
+                _dir: dir,
+            }
         }
-        assert_eq!(
-            app.prompts.lock().unwrap().len(),
-            2,
-            "a different command is a different question"
-        );
+
+        /// Run one guarded command against `app`, on a server that records.
+        async fn guarded_call(
+            app: &FakeApp,
+            command: &str,
+        ) -> (CallToolResult, std::path::PathBuf, tempfile::TempDir) {
+            let (s, dir, path) = recording_server(McpMode::Guarded, "");
+            let s = s.asking_at(app.socket.clone());
+            let r = s
+                .ssh_exec(Parameters(ExecParams {
+                    host: "web-prod".into(),
+                    command: command.into(),
+                    reason: None,
+                    ticket: None,
+                }))
+                .await
+                .unwrap();
+            (r, path, dir)
+        }
+
+        #[tokio::test]
+        async fn an_approved_call_gets_past_the_gate() {
+            let app = fake_app("approve_once");
+            let (r, path, _dir) = guarded_call(&app, "systemctl restart nginx").await;
+
+            // Port 1 on loopback: a transport error means the gate let it through,
+            // which is the only way to prove that without a real host.
+            let body = text(&r);
+            assert!(!body.contains("policy_denied"), "{body}");
+            assert_eq!(app.prompts.lock().unwrap().len(), 1, "a person was asked");
+
+            let recorded = records(&path);
+            assert_eq!(
+                recorded
+                    .iter()
+                    .map(|r| r.decision.as_str())
+                    .collect::<Vec<_>>(),
+                ["approved", "allow"],
+                "the approval, then the call it allowed - and no denial in front of them"
+            );
+        }
+
+        #[tokio::test]
+        async fn the_prompt_carries_the_command_verbatim() {
+            // KR-01-F6: the person approves what will actually run, not a summary.
+            let app = fake_app("deny");
+            guarded_call(&app, "rm -rf /var/log/*.gz").await;
+            let prompt = app.prompts.lock().unwrap()[0].clone();
+            assert_eq!(prompt.argument, "rm -rf /var/log/*.gz");
+            assert_eq!(prompt.host_name, "web-prod");
+            assert_eq!(prompt.tool, "ssh_exec");
+        }
+
+        #[tokio::test]
+        async fn a_refused_approval_stops_the_call_and_says_who_refused() {
+            let app = fake_app("deny");
+            let (r, path, _dir) = guarded_call(&app, "systemctl restart nginx").await;
+            let body = text(&r);
+            assert_eq!(r.is_error, Some(true));
+            assert!(body.contains("denied_by_user"), "{body}");
+            assert_eq!(records(&path)[0].decision, "denied_by_user");
+        }
+
+        #[tokio::test]
+        async fn approving_for_the_session_stops_the_asking() {
+            let app = fake_app("approve_session");
+            let (s, _dir, path) = recording_server(McpMode::Guarded, "");
+            let s = s.asking_at(app.socket.clone());
+
+            for _ in 0..3 {
+                s.ssh_exec(Parameters(ExecParams {
+                    host: "web-prod".into(),
+                    command: "systemctl restart nginx".into(),
+                    reason: None,
+                    ticket: None,
+                }))
+                .await
+                .unwrap();
+            }
+
+            assert_eq!(
+                app.prompts.lock().unwrap().len(),
+                1,
+                "asked once, not three times"
+            );
+            // Each call leaves two records: the approval, then what the call did.
+            // "Approved once, ran three times" has to be visible in the log.
+            let approvals = records(&path)
+                .into_iter()
+                .filter(|r| r.decision == "approved")
+                .count();
+            assert_eq!(approvals, 3, "every call is recorded, asked for or not");
+        }
+
+        #[tokio::test]
+        async fn a_session_approval_covers_only_the_command_it_was_given_for() {
+            let app = fake_app("approve_session");
+            let (s, _dir, _path) = recording_server(McpMode::Guarded, "");
+            let s = s.asking_at(app.socket.clone());
+
+            for command in ["systemctl restart nginx", "rm -rf /var"] {
+                s.ssh_exec(Parameters(ExecParams {
+                    host: "web-prod".into(),
+                    command: command.into(),
+                    reason: None,
+                    ticket: None,
+                }))
+                .await
+                .unwrap();
+            }
+            assert_eq!(
+                app.prompts.lock().unwrap().len(),
+                2,
+                "a different command is a different question"
+            );
+        }
     }
 
     // ── Rate and size limits (KR-01-F11) ────────────────────────────────────
