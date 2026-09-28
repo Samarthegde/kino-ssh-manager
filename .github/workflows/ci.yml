@@ -59,3 +59,30 @@ jobs:
 
       - name: Test
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  # Everything above runs on Linux, so a #[cfg(unix)] mistake compiled fine
+  # here and broke the Windows half of a release build - after the tag, which
+  # is the worst moment to find out. This is a compile, not a test run: it
+  # costs a few minutes and catches that whole class in the pull request.
+  windows:
+    name: Windows (check)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Vendored OpenSSL builds even for a check; Perl ships on the runner.
+      - name: Install NASM
+        uses: ilammy/setup-nasm@v1
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      # --all-targets so the tests are compiled too: they are where most of
+      # the platform-specific code actually lives.
+      - name: Check
+        run: cargo check --manifest-path src-tauri/Cargo.toml --all-targets

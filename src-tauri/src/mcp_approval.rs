@@ -193,8 +193,19 @@ pub async fn ask_at(path: &std::path::Path, request: &ApprovalRequest) -> Verdic
     }
 }
 
+/// Windows has no channel yet, so every guarded call is refused - with a
+/// reason that says so rather than looking like a rule denied it.
+///
+/// Both halves exist here, not just `ask`: the server calls `ask_at`, and a
+/// function that exists only on Unix makes the Windows build fail to compile
+/// rather than fail to approve.
 #[cfg(not(unix))]
 pub async fn ask(_request: &ApprovalRequest) -> Verdict {
+    Verdict::Denied("unsupported_platform")
+}
+
+#[cfg(not(unix))]
+pub async fn ask_at(_path: &std::path::Path, _request: &ApprovalRequest) -> Verdict {
     Verdict::Denied("unsupported_platform")
 }
 
