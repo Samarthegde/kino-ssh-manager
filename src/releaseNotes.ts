@@ -15,6 +15,49 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.9.3",
+    headline: "You can see what an assistant did, limit it, approve it, and stop it.",
+    items: [
+      {
+        title: "Every MCP call is recorded",
+        detail:
+          "Settings → Security → MCP activity shows what an assistant ran, on which host, " +
+          "with the command as it was sent, and whether it was allowed or refused - the " +
+          "refusals included. Filter it, export it, and replay the recording of anything " +
+          "that ran on a guarded or full-access host.",
+      },
+      {
+        title: "Guarded mode asks you now",
+        detail:
+          "A call no rule covers stops and puts the command on screen, with a countdown. " +
+          "Approve it once, approve it for as long as that server runs, or refuse - " +
+          "refusing is the default. With Kino closed or locked, it is refused immediately " +
+          "and told why, rather than left hanging.",
+      },
+      {
+        title: "One switch stops everything",
+        detail:
+          "Stop all MCP activity, in the MCP panel or the tray menu. It works with the " +
+          "vault locked. Each host also gets a rate and a size limit, and there is an " +
+          "hourly ceiling on how much can change across the whole fleet.",
+      },
+      {
+        title: "kino-mcp comes with Kino",
+        detail:
+          "No separate download to rename and move: it is installed beside the app and " +
+          "updates with it, and the MCP panel gives you the exact path to paste. A policy " +
+          "you change now reaches a running server, instead of waiting for a restart.",
+      },
+      {
+        title: "The interface font applies to the interface",
+        detail:
+          "Picking a font used to change a handful of paragraphs. It now changes " +
+          "everything except machine output, which stays monospace. Settings → Appearance " +
+          "also scales the whole window between 80% and 150%.",
+      },
+    ],
+  },
+  {
     version: "0.9.2",
     headline: "Saving a host works again - and every fleet check now lives under Security.",
     items: [

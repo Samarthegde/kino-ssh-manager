@@ -4,7 +4,12 @@ All notable changes to Kino SSH Manager are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.9.3] - 2026-09-28
+
+Everything the MCP server was missing when it shipped: a record of what an
+assistant did, limits on how fast and how much, a prompt when it wants to do
+something no rule covers, and one switch that stops all of it. `kino-mcp` now
+comes with the app instead of being a separate download.
 
 ### Added
 - **Interface size.** Settings → Appearance scales the whole window, terminal

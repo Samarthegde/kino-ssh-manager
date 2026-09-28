@@ -591,7 +591,7 @@
   <section class="hero">
     <div class="wrap">
       <div class="hero-inner reel">
-        <span class="pill"><span class="tag">v0.9.2</span> New: fleet update check, verified updates, signed MCP binary</span>
+        <span class="pill"><span class="tag">v0.9.3</span> New: approvals, an audit trail and a stop switch for AI access</span>
         <h1>Every SSH host<br><span class="soft">without the cloud</span><span class="stop">.</span></h1>
         <p class="lead">
           A cross-platform credential manager and terminal. Your hosts, keys, and passwords
@@ -712,11 +712,11 @@
       <div class="features">
         <div class="feat">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" stroke-linejoin="round"/><path d="M3.3 7L12 12l8.7-5M12 22V12" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-          <h3>Fleet update check <span class="new">New</span></h3><p>Asks every host what packages it has waiting and which are security updates, and sorts the fleet by what matters. The answer comes from each host's own package manager - apt, dnf, zypper, apk or pacman - never a third-party vulnerability feed. Apply opens a terminal with the upgrade ready rather than running it for you.</p>
+          <h3>Fleet update check</h3><p>Asks every host what packages it has waiting and which are security updates, and sorts the fleet by what matters. The answer comes from each host's own package manager - apt, dnf, zypper, apk or pacman - never a third-party vulnerability feed. Apply opens a terminal with the upgrade ready rather than running it for you.</p>
         </div>
         <div class="feat">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.9 4.6 4.6 1.9-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z" stroke-linejoin="round"/><path d="M18 15l.8 2.2 2.2.8-2.2.8L18 21l-.8-2.2-2.2-.8 2.2-.8z" stroke-linejoin="round"/></svg></div>
-          <h3>MCP server</h3><p>Expose chosen hosts to an AI assistant over the Model Context Protocol. A newly ticked host is <em>read-only</em> - it reads files and listings, and runs a command only if a rule you wrote names it. The assistant never sees the rest of your vault, and the headless binary never gets your master password.</p>
+          <h3>MCP server <span class="new">New</span></h3><p>Expose chosen hosts to an AI assistant over the Model Context Protocol. A newly ticked host is <em>read-only</em>. Anything no rule covers stops and asks you, with the command on screen and a countdown. Every call is recorded - the refusals too - and one switch stops the lot. The assistant never sees the rest of your vault, and the headless binary never gets your master password.</p>
         </div>
         <div class="feat">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.4 8.3-8 10-4.6-1.7-8-5-8-10V6l8-4z" stroke-linejoin="round"/><path d="M12 8v5M12 16v.5" stroke-linecap="round"/></svg></div>
