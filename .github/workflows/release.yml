@@ -142,7 +142,12 @@ jobs:
           RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
         run: |
           shopt -s nullglob
-          stage=$(mktemp -d)
+          # In the workspace, and relative: `mktemp -d` on the Windows runner
+          # hands back a Git Bash path (/tmp/...), and the upload step below is
+          # Node running natively, which reads that as D:\tmp\... and finds
+          # nothing there. A relative path means the same directory to both.
+          stage=staged-downloads
+          rm -rf "$stage" && mkdir -p "$stage"
           copy() { [ -e "$1" ] && cp "$1" "$stage/$2" && echo "  $2 <- $(basename "$1")"; }
           b=src-tauri/target/release/bundle
           for f in "$b"/deb/*.deb;             do copy "$f" kino-linux-x86_64.deb; done
