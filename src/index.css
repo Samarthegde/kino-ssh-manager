@@ -6156,6 +6156,11 @@ textarea.mono,
   padding-top: 12px;
 }
 
+.mcp-production-opt { margin-top: 8px; }
+.mcp-health-checks { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.mcp-health-row { justify-content: space-between; max-width: 420px; }
+.mcp-health-row select { width: 200px; }
+
 /* Interface zoom: two steps and the number between them, so it reads as one
  * control rather than three buttons that happen to sit together. */
 .ui-scale { display: flex; align-items: center; gap: 6px; }

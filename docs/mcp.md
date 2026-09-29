@@ -150,6 +150,31 @@ this snippet with a copy button.
   vault, mode `0600`, so another user on the machine cannot answer for you.
   Windows has no channel yet: there, a guarded call is still refused, with a
   message saying so.
+- **A fleet-wide change runs as a rollout.** `rollout_start` changes one host,
+  runs its health check, and stops there; `rollout_continue` asks for the next
+  batch, 10% of what is left by default. The canary failing, or its health
+  check failing, stops the whole thing, and so does crossing the failure share
+  (5% by default, never more than 25%). Nothing skips a stage: there is no
+  parameter for it, and a stopped rollout refuses to continue.
+
+  **Production is left out** of every unattended change unless you type the
+  word in the MCP panel to allow it - and even then it goes last and is never
+  the first host tried. Whatever has already changed when a rollout stops
+  stays changed, and the result names exactly which hosts those are.
+  `rollout_status` and `rollout_abort` work even while everything is stopped,
+  because "what did it change?" and "stop" are the two questions worth
+  answering then. A rollout is forgotten 30 minutes after its last batch, and
+  whenever `kino-mcp` restarts.
+
+  Health checks are snippets, picked per group or environment in the panel.
+  With none configured the only judge is the command's own exit code, and the
+  report says so rather than implying something checked.
+
+  `fleet_exec` refuses commands that obviously change things and points at
+  `rollout_start`. That check is the danger list matched on the command as
+  written, so it catches `rm -rf` and not a command that assembles itself at
+  runtime: a signpost, not a boundary. The boundary is each host's own policy,
+  which every stage still goes through.
 - **Three tools work on many hosts at once.** `fleet_resolve` says which hosts
   a target names without touching any of them. `fleet_exec` runs one command
   across them in parallel and answers with a *summary* - hosts that returned

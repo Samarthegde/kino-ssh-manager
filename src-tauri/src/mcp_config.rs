@@ -64,6 +64,10 @@ pub struct McpConfig {
     /// What an hour of MCP activity may contain (KR-11-F2).
     #[serde(default)]
     pub budgets: crate::mcp_budget::Budgets,
+    /// How a fleet change rolls out, and whether production is in it
+    /// (KR-11-F9, F13).
+    #[serde(default)]
+    pub fleet: crate::mcp_rollout::FleetPolicy,
 }
 
 fn default_approval_timeout() -> u32 {
@@ -97,6 +101,8 @@ pub struct McpConfigView {
     pub approval_timeout_secs: u32,
     /// The hour's ceiling, as the panel edits it.
     pub budgets: crate::mcp_budget::Budgets,
+    /// How a fleet change rolls out.
+    pub fleet: crate::mcp_rollout::FleetPolicy,
     /// Set when the settings exist but could not be read, so the panel can say
     /// why everything looks empty instead of implying it always was.
     pub problem: Option<String>,
@@ -106,15 +112,17 @@ pub struct McpConfigView {
 ///
 /// Split out from `export_mcp_vault` so the filtering - the part that decides
 /// what an AI can reach - is testable without touching the filesystem.
+/// Takes the whole config rather than six of its fields: every one of them
+/// decides what an assistant may reach or do, and a caller that passes them
+/// separately can pass one host's policies with another host's exposure list.
 pub fn build_mcp_vault(
     all_hosts: &[Host],
     all_snippets: &[Snippet],
-    exposed_ids: &[String],
-    host_policies: &HashMap<String, HostPolicy>,
-    global_rules: &[Rule],
-    approval_timeout_secs: u32,
-    budgets: crate::mcp_budget::Budgets,
+    config: &McpConfig,
 ) -> McpVault {
+    let exposed_ids = &config.exposed_host_ids;
+    let host_policies = &config.host_policies;
+    let global_rules = &config.global_rules;
     let hosts: Vec<Host> = all_hosts
         .iter()
         .filter(|h| exposed_ids.contains(&h.id))
@@ -150,8 +158,9 @@ pub fn build_mcp_vault(
         snippets,
         policies,
         global_rules: global_rules.to_vec(),
-        approval_timeout_secs,
-        budgets,
+        approval_timeout_secs: config.approval_timeout_secs,
+        budgets: config.budgets.clone(),
+        fleet: config.fleet.clone(),
     }
 }
 
@@ -216,6 +225,8 @@ pub struct McpVault {
     /// read the settings file.
     #[serde(default)]
     pub budgets: crate::mcp_budget::Budgets,
+    #[serde(default)]
+    pub fleet: crate::mcp_rollout::FleetPolicy,
     /// One entry per exposed host, written explicitly even when it is the
     /// default, so the vault says what it means without the reader guessing.
     #[serde(default)]
@@ -237,15 +248,7 @@ pub fn export_mcp_vault(
     mcp_password: &str,
     mcp_salt: &[u8; 16],
 ) -> Result<(), String> {
-    let vault = build_mcp_vault(
-        all_hosts,
-        all_snippets,
-        &config.exposed_host_ids,
-        &config.host_policies,
-        &config.global_rules,
-        config.approval_timeout_secs,
-        config.budgets.clone(),
-    );
+    let vault = build_mcp_vault(all_hosts, all_snippets, config);
     let mcp_key = vault::derive_key(mcp_password, mcp_salt)?;
     save_encrypted(&mcp_vault_path(), &vault, &mcp_key, mcp_salt)?;
 
@@ -396,6 +399,21 @@ mod tests {
         ]
     }
 
+    /// The config a test is really describing: who is exposed, with what
+    /// policies and what global rules. Everything else is the default.
+    fn config_of(
+        exposed: &[&str],
+        host_policies: &HashMap<String, HostPolicy>,
+        global_rules: &[Rule],
+    ) -> McpConfig {
+        McpConfig {
+            exposed_host_ids: exposed.iter().map(|s| s.to_string()).collect(),
+            host_policies: host_policies.clone(),
+            global_rules: global_rules.to_vec(),
+            ..Default::default()
+        }
+    }
+
     fn no_policies() -> HashMap<String, HostPolicy> {
         HashMap::new()
     }
@@ -459,11 +477,7 @@ mod tests {
         let v = build_mcp_vault(
             &sample_hosts(),
             &sample_snippets(),
-            &["h1".to_string()],
-            &no_policies(),
-            &[],
-            crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
-            Default::default(),
+            &config_of(&["h1"], &no_policies(), &[]),
         );
         assert_eq!(v.hosts.len(), 1);
         assert_eq!(v.hosts[0].name, "web-prod");
@@ -475,11 +489,7 @@ mod tests {
         let v = build_mcp_vault(
             &sample_hosts(),
             &sample_snippets(),
-            &[],
-            &no_policies(),
-            &[],
-            crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
-            Default::default(),
+            &config_of(&[], &no_policies(), &[]),
         );
         assert!(v.hosts.is_empty());
         assert!(v.snippets.is_empty());
@@ -490,11 +500,7 @@ mod tests {
         let v = build_mcp_vault(
             &sample_hosts(),
             &sample_snippets(),
-            &["deleted".to_string()],
-            &no_policies(),
-            &[],
-            crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
-            Default::default(),
+            &config_of(&["deleted"], &no_policies(), &[]),
         );
         assert!(v.hosts.is_empty());
     }
@@ -504,11 +510,7 @@ mod tests {
         let v = build_mcp_vault(
             &sample_hosts(),
             &sample_snippets(),
-            &["h1".to_string()],
-            &no_policies(),
-            &[],
-            crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
-            Default::default(),
+            &config_of(&["h1"], &no_policies(), &[]),
         );
         assert_eq!(v.snippets.len(), 1);
         assert_eq!(v.snippets[0].name, "setup");
@@ -519,11 +521,7 @@ mod tests {
         let v2 = build_mcp_vault(
             &sample_hosts(),
             &sample_snippets(),
-            &["h2".to_string()],
-            &no_policies(),
-            &[],
-            crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
-            Default::default(),
+            &config_of(&["h2"], &no_policies(), &[]),
         );
         assert!(v2.snippets.is_empty());
     }
@@ -535,11 +533,7 @@ mod tests {
         let v = build_mcp_vault(
             &sample_hosts(),
             &sample_snippets(),
-            &["h1".to_string(), "h2".to_string()],
-            &no_policies(),
-            &[],
-            crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
-            Default::default(),
+            &config_of(&["h1", "h2"], &no_policies(), &[]),
         );
         assert_eq!(v.policies.len(), 2);
         assert_eq!(v.policies["h1"].mode, McpMode::ReadOnly);
@@ -560,11 +554,11 @@ mod tests {
         let v = build_mcp_vault(
             &sample_hosts(),
             &sample_snippets(),
-            &["h1".to_string()],
-            &policies,
-            &crate::mcp_policy::parse_rules("deny shutdown *", "global").unwrap(),
-            crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
-            Default::default(),
+            &config_of(
+                &["h1"],
+                &policies,
+                &crate::mcp_policy::parse_rules("deny shutdown *", "global").unwrap(),
+            ),
         );
         assert_eq!(v.policies["h1"].mode, McpMode::Full);
         assert_eq!(v.policies["h1"].rules.len(), 1);
@@ -587,11 +581,7 @@ mod tests {
         let v = build_mcp_vault(
             &sample_hosts(),
             &sample_snippets(),
-            &["h1".to_string()],
-            &policies,
-            &[],
-            crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
-            Default::default(),
+            &config_of(&["h1"], &policies, &[]),
         );
         assert!(!v.policies.contains_key("h2"));
         assert_eq!(v.policies.len(), 1);
@@ -604,11 +594,7 @@ mod tests {
         let v = build_mcp_vault(
             &sample_hosts(),
             &sample_snippets(),
-            &["h1".to_string()],
-            &no_policies(),
-            &[],
-            crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
-            Default::default(),
+            &config_of(&["h1"], &no_policies(), &[]),
         );
         assert_eq!(v.hosts[0].password.as_deref(), Some("secret"));
     }
@@ -622,12 +608,12 @@ mod tests {
         // we test the filtering logic directly instead).
         let all_hosts = sample_hosts();
         let all_snippets = sample_snippets();
-        let exposed = ["h1".to_string()];
+        let exposed = ["h1"];
 
         // Filter manually to test the logic.
         let hosts: Vec<Host> = all_hosts
             .iter()
-            .filter(|h| exposed.contains(&h.id))
+            .filter(|h| exposed.contains(&h.id.as_str()))
             .cloned()
             .collect();
         assert_eq!(hosts.len(), 1);
@@ -655,6 +641,7 @@ mod tests {
             global_rules: vec![],
             approval_timeout_secs: crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
             budgets: Default::default(),
+            fleet: Default::default(),
         };
         save_encrypted(&path, &vault, &key, &salt).unwrap();
         let loaded: McpVault = load_encrypted(&path, &key).unwrap();
@@ -675,11 +662,7 @@ mod tests {
         let built = build_mcp_vault(
             &sample_hosts(),
             &sample_snippets(),
-            &["h1".to_string()],
-            &no_policies(),
-            &[],
-            crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
-            Default::default(),
+            &config_of(&["h1"], &no_policies(), &[]),
         );
         save_encrypted(&path, &built, &key, &salt).unwrap();
 
@@ -698,11 +681,7 @@ mod tests {
         let built = build_mcp_vault(
             &sample_hosts(),
             &sample_snippets(),
-            &["h1".to_string()],
-            &no_policies(),
-            &[],
-            crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
-            Default::default(),
+            &config_of(&["h1"], &no_policies(), &[]),
         );
         save_encrypted(&path, &built, &key, &salt).unwrap();
 
@@ -723,6 +702,7 @@ mod tests {
             global_rules: vec![],
             approval_timeout_secs: crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
             budgets: Default::default(),
+            fleet: Default::default(),
         };
         save_encrypted(&path, &vault, &key, &salt).unwrap();
 

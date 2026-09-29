@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { McpBinaryStatus, McpBudgets, McpConfig, McpMode, useVaultStore } from "../store";
+import {
+  McpBinaryStatus,
+  McpBudgets,
+  McpConfig,
+  McpFleetPolicy,
+  McpMode,
+  useVaultStore,
+} from "../store";
 
 /**
  * The MCP server's control panel.
@@ -55,11 +62,13 @@ export function McpSettingsPanel() {
     mcpSetGlobalRules,
     mcpSetApprovalTimeout,
     mcpSetBudgets,
+    mcpSetFleetPolicy,
     mcpHalted,
     mcpSetHalted,
     checkMcpBinary,
     installMcpBinary,
     hosts,
+    snippets,
   } = useVaultStore();
   const [binary, setBinary] = useState<McpBinaryStatus | null>(null);
   const [installing, setInstalling] = useState(false);
@@ -83,6 +92,14 @@ export function McpSettingsPanel() {
     max_hosts_per_call: 25,
     max_calls_per_hour: 600,
   });
+  const [fleet, setFleet] = useState<McpFleetPolicy>({
+    batch_percent: 10,
+    max_failure_ratio: 0.05,
+    allow_production: false,
+    health_checks: {},
+  });
+  /** Production is waiting to be confirmed by typing the word. */
+  const [confirmProduction, setConfirmProduction] = useState("");
   const [halted, setHalted] = useState(false);
   const [halting, setHalting] = useState(false);
 
@@ -140,6 +157,7 @@ export function McpSettingsPanel() {
         setGlobalRules(c.global_rules_text);
         setApprovalTimeout(c.approval_timeout_secs || 120);
         if (c.budgets) setBudgets(c.budgets);
+        if (c.fleet) setFleet(c.fleet);
       })
       .catch((e) => setError(String(e)));
   }, [mcpGetConfig]);
@@ -176,6 +194,18 @@ export function McpSettingsPanel() {
 
   const fullHosts = Array.from(exposed).filter((id) => draft(id).mode === "full");
 
+  /** The groups and environments among the exposed hosts - the only keys a
+   *  health check can usefully be set for. */
+  const healthTargets = useMemo(() => {
+    const keys = new Set<string>();
+    for (const h of hosts) {
+      if (!exposed.has(h.id)) continue;
+      if (h.group) keys.add(`group:${h.group.toLowerCase()}`);
+      if (h.environment) keys.add(`env:${h.environment.toLowerCase()}`);
+    }
+    return Array.from(keys).sort();
+  }, [hosts, exposed]);
+
   function toggleHost(id: string) {
     setExposed((prev) => {
       const next = new Set(prev);
@@ -198,6 +228,7 @@ export function McpSettingsPanel() {
       await mcpSetGlobalRules(globalRules);
       await mcpSetApprovalTimeout(approvalTimeout);
       await mcpSetBudgets(budgets);
+      await mcpSetFleetPolicy(fleet);
       // Only the exposed hosts: a policy for a host nobody shares is noise.
       for (const id of exposed) {
         const d = draft(id);
@@ -560,6 +591,124 @@ export function McpSettingsPanel() {
                   }
                 />
               </label>
+            </div>
+          </section>
+
+          <section className="mcp-section">
+            <p className="mcp-section-title">Changing more than one host</p>
+            <p className="mcp-hint">
+              A fleet-wide change runs as a rollout: one host first, then a health check where
+              you have set one, then batches. The first stage failing stops the whole thing, and
+              whatever has already changed stays changed - the result names those hosts.
+            </p>
+            <div className="mcp-limits">
+              <label className="mcp-limit">
+                <span>Batch size (%)</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  className="mcp-input"
+                  value={fleet.batch_percent}
+                  onChange={(e) =>
+                    setFleet({
+                      ...fleet,
+                      batch_percent: Math.min(50, Math.max(1, Number(e.target.value) || 10)),
+                    })
+                  }
+                />
+              </label>
+              <label className="mcp-limit">
+                <span>Stop after (% failed)</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={25}
+                  className="mcp-input"
+                  value={Math.round(fleet.max_failure_ratio * 100)}
+                  onChange={(e) =>
+                    setFleet({
+                      ...fleet,
+                      max_failure_ratio:
+                        Math.min(25, Math.max(0, Number(e.target.value) || 0)) / 100,
+                    })
+                  }
+                />
+              </label>
+            </div>
+
+            {fleet.allow_production ? (
+              <div className="mcp-warn">
+                An assistant may change <strong>production</strong> hosts without asking. They go
+                last in a rollout and are never the first host tried, but they are in it.
+                <span className="mcp-confirm-actions">
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => setFleet({ ...fleet, allow_production: false })}
+                  >
+                    Leave production out
+                  </button>
+                </span>
+              </div>
+            ) : (
+              <div className="mcp-production-opt">
+                <p className="mcp-hint">
+                  Production hosts are left out of every unattended change. To include them, type{" "}
+                  <code>production</code> here.
+                </p>
+                <div className="mcp-limits">
+                  <input
+                    className="mcp-input"
+                    value={confirmProduction}
+                    placeholder="production"
+                    onChange={(e) => {
+                      setConfirmProduction(e.target.value);
+                      if (e.target.value.trim().toLowerCase() === "production") {
+                        setFleet({ ...fleet, allow_production: true });
+                        setConfirmProduction("");
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
+            <p className="mcp-hint mcp-limits-hint">
+              Health checks. After each stage, the snippet you pick here runs on the hosts that
+              just changed; a non-zero exit counts that host as failed. Without one, the only
+              judge is the command's own exit code, and the rollout says so.
+            </p>
+            <div className="mcp-health-checks">
+              {healthTargets.length === 0 ? (
+                <p className="mcp-empty">
+                  Give your exposed hosts a group or an environment to set health checks per
+                  group.
+                </p>
+              ) : (
+                healthTargets.map((key) => (
+                  <label key={key} className="mcp-limit mcp-health-row">
+                    <span className="mono">{key}</span>
+                    <select
+                      className="mcp-input"
+                      value={fleet.health_checks[key] ?? ""}
+                      onChange={(e) => {
+                        const next = { ...fleet.health_checks };
+                        if (e.target.value) next[key] = e.target.value;
+                        else delete next[key];
+                        setFleet({ ...fleet, health_checks: next });
+                      }}
+                    >
+                      <option value="">No check</option>
+                      {snippets.map((sn) => (
+                        <option key={sn.id} value={sn.id}>
+                          {sn.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ))
+              )}
             </div>
           </section>
 

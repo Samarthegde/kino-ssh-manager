@@ -68,6 +68,11 @@ pub enum Capability {
 pub fn capability(tool: &str) -> Capability {
     match tool {
         "list_hosts" | "get_host" | "list_snippets" | "fleet_resolve" => Capability::Metadata,
+        // Status and abort stay reachable while everything is stopped: after
+        // a halt, "what did it change?" and "stop it" are the two questions
+        // worth answering.
+        "rollout_status" | "rollout_abort" => Capability::Metadata,
+        "rollout_start" | "rollout_continue" => Capability::Write,
         "sftp_list" | "sftp_read" | "check_drift" => Capability::Read,
         // A fleet command is still a command: what it does is unknowable from
         // here, so it is classed by what it *could* do, like ssh_exec.

@@ -24,6 +24,7 @@ pub mod mcp_config;
 pub mod mcp_fleet;
 pub mod mcp_limits;
 pub mod mcp_policy;
+pub mod mcp_rollout;
 mod metrics;
 mod notes;
 mod patches;
@@ -1650,6 +1651,27 @@ fn list_active_forwards(state: State<'_, AppState>) -> Vec<String> {
 
 // ── MCP commands ────────────────────────────────────────────────────────────
 
+/// How a fleet change rolls out, and whether production is in it (KR-11-F13).
+///
+/// The production switch is the one that matters here; the panel makes the
+/// user type the word before turning it on, the way `Full` access does.
+#[tauri::command]
+fn mcp_set_fleet_policy(
+    state: State<'_, AppState>,
+    policy: mcp_rollout::FleetPolicy,
+) -> Result<(), String> {
+    {
+        let key_guard = state.vault_key.lock().unwrap();
+        let key = key_guard.as_ref().ok_or("Vault is locked")?;
+        let salt = state.vault_salt.lock().unwrap();
+        let salt = salt.as_ref().ok_or("Vault is locked")?;
+        let mut config = mcp_config::load_for_edit(key);
+        config.fleet = policy;
+        mcp_config::save_config(&config, key, salt)?;
+    }
+    sync_mcp_vault(&state)
+}
+
 /// Is MCP activity stopped (KR-11-F1)?
 #[tauri::command]
 fn mcp_halted() -> bool {
@@ -1812,6 +1834,7 @@ fn mcp_get_config(state: State<'_, AppState>) -> Result<mcp_config::McpConfigVie
             .collect(),
         approval_timeout_secs: config.approval_timeout_secs,
         budgets: config.budgets.clone(),
+        fleet: config.fleet.clone(),
         global_rules_text: mcp_policy::rules_to_text(&config.global_rules),
         exposed_host_ids: config.exposed_host_ids,
         configured: config.configured,
@@ -2231,6 +2254,7 @@ pub fn run() {
             mcp_halted,
             mcp_set_halted,
             mcp_set_budgets,
+            mcp_set_fleet_policy,
             mcp_audit_read,
             mcp_binary::check_mcp_binary,
             mcp_binary::install_mcp_binary,

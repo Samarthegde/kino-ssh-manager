@@ -400,6 +400,18 @@ export interface McpBudgets {
   max_calls_per_hour: number;
 }
 
+/** Mirrors `FleetPolicy` in mcp_rollout.rs - how a fleet change rolls out. */
+export interface McpFleetPolicy {
+  /** Share of the remaining hosts per batch, after the canary. */
+  batch_percent: number;
+  /** Failures across completed stages that stop the rollout, 0-0.25. */
+  max_failure_ratio: number;
+  /** Off by default: production is left out of unattended changes. */
+  allow_production: boolean;
+  /** Snippet to run after each stage, keyed by `group:name` or `env:name`. */
+  health_checks: Record<string, string>;
+}
+
 /** Mirrors `ApprovalRequest` in mcp_approval.rs: a call waiting on a person. */
 export interface McpApprovalRequest {
   v: number;
@@ -461,6 +473,8 @@ export interface McpConfig {
   approval_timeout_secs: number;
   /** What an hour of MCP activity may contain. */
   budgets: McpBudgets;
+  /** How a fleet change rolls out. */
+  fleet: McpFleetPolicy;
   /** Set when saved settings exist but could not be read. */
   problem?: string | null;
   /** True once an MCP password has been set. */
@@ -880,6 +894,7 @@ interface VaultStore {
   /** Seconds a guarded-mode prompt waits. Clamped to 10..600 by the backend. */
   mcpSetApprovalTimeout: (seconds: number) => Promise<void>;
   mcpSetBudgets: (budgets: McpBudgets) => Promise<void>;
+  mcpSetFleetPolicy: (policy: McpFleetPolicy) => Promise<void>;
   /** Is all MCP activity stopped? Works with the vault locked. */
   mcpHalted: () => Promise<boolean>;
   mcpSetHalted: (halted: boolean) => Promise<void>;
@@ -2219,6 +2234,7 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
   mcpSetApprovalTimeout: (seconds) =>
     invoke<void>("mcp_set_approval_timeout", { seconds }),
   mcpSetBudgets: (budgets) => invoke<void>("mcp_set_budgets", { budgets }),
+  mcpSetFleetPolicy: (policy) => invoke<void>("mcp_set_fleet_policy", { policy }),
   mcpHalted: () => invoke<boolean>("mcp_halted"),
   mcpSetHalted: (halted) => invoke<void>("mcp_set_halted", { halted }),
   respondToApproval: async (id, decision) => {

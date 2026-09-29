@@ -11,6 +11,7 @@ use crate::mcp_config::McpVault;
 use crate::mcp_fleet::{self, FileState, HostOutcome, HostResult, Target};
 use crate::mcp_limits::{self, Window};
 use crate::mcp_policy::{self, Decision, HostPolicy, McpMode};
+use crate::mcp_rollout::{self, Action, HostChange, Rollout, Stopped};
 use crate::ssh_session;
 use crate::vault::Host;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -67,6 +68,9 @@ pub struct KinoMcpServer {
     /// One sliding minute of call times per host id (KR-01-F11). In memory:
     /// `mcp_limits` says why that is the honest place for it.
     calls: Arc<Mutex<HashMap<String, Window>>>,
+    /// Rollouts in flight (KR-11-F10). In the process on purpose: a restart
+    /// abandons a rollout rather than resuming a change nobody is watching.
+    rollouts: Arc<Mutex<HashMap<String, Rollout>>>,
     /// Calls approved for the rest of this session (KR-01-F6). Held in the
     /// process, so restarting `kino-mcp` revokes every one of them - which is
     /// the revocation the settings never have to offer.
@@ -96,6 +100,7 @@ impl KinoMcpServer {
             client: Arc::new(Mutex::new(("unknown".into(), "unknown".into()))),
             calls: Arc::new(Mutex::new(HashMap::new())),
             approved: Arc::new(Mutex::new(HashSet::new())),
+            rollouts: Arc::new(Mutex::new(HashMap::new())),
             approval_socket: mcp_approval::socket_path(),
             halt_file: mcp_budget::halt_path(),
             ledger: None,
@@ -605,6 +610,266 @@ impl KinoMcpServer {
         }
     }
 
+    /// Run the next stage of `id`, and judge it (KR-11-F9..F12).
+    ///
+    /// Everything that can stop a rollout is checked here rather than at the
+    /// tool boundary, so `rollout_start` and `rollout_continue` cannot drift
+    /// apart: the halt, the budget, the canary, the failure share.
+    async fn advance(&self, id: &str, started: Instant) -> Option<serde_json::Value> {
+        let (stage, index, action, policy) = {
+            let mut rollouts = self.rollouts.lock().ok()?;
+            mcp_rollout::expire(&mut rollouts, std::time::Instant::now());
+            let r = rollouts.get_mut(id)?;
+            r.last_touched = std::time::Instant::now();
+            if r.done() {
+                return Some(r.report());
+            }
+            (
+                r.stages[r.stage_index].clone(),
+                r.stage_index,
+                r.action.clone(),
+                self.vault().fleet.clone(),
+            )
+        };
+
+        // Stopped, or out of budget: neither is a reason to change half a
+        // stage, so both are decided before anything runs (KR-11-F12).
+        if mcp_budget::is_halted(&self.halt_file) {
+            return Some(self.stop_rollout(id, Stopped::Halted));
+        }
+        if let Some(ledger) = &self.ledger {
+            let now = now_ms();
+            let spend = Spend::Change {
+                hosts: stage.len() as u32,
+            };
+            match mcp_budget::check(&ledger.recent(now), now, &self.vault().budgets, spend) {
+                Ok(()) => {
+                    let _ = ledger.record(now, spend);
+                }
+                Err(refusal) => {
+                    let which = match refusal {
+                        mcp_budget::Refusal::Budget { which, .. } => which.to_string(),
+                        mcp_budget::Refusal::Halted => "halted".to_string(),
+                    };
+                    return Some(self.stop_rollout(id, Stopped::Budget { which }));
+                }
+            }
+        }
+
+        let timeout = std::time::Duration::from_secs(120);
+        let results = self
+            .fan_out(&stage, timeout, |host| {
+                let action = action.clone();
+                let policy = policy.clone();
+                async move { self.change_one(host, action, policy).await }
+            })
+            .await;
+
+        // fan_out speaks in outcomes; a rollout speaks in changes.
+        let changes: Vec<HostChange> = results
+            .into_iter()
+            .map(|r| match r.outcome {
+                HostOutcome::Ok { .. } => HostChange {
+                    host: r.host,
+                    changed: true,
+                    detail: None,
+                    healthy: None,
+                },
+                HostOutcome::NonZeroExit { exit_code, .. } => HostChange {
+                    host: r.host,
+                    changed: true,
+                    detail: Some(format!("exit {exit_code}")),
+                    healthy: Some(false),
+                },
+                HostOutcome::Timeout => HostChange {
+                    host: r.host,
+                    changed: false,
+                    detail: Some("timed out".into()),
+                    healthy: None,
+                },
+                HostOutcome::Unreachable { detail } => HostChange {
+                    host: r.host,
+                    changed: false,
+                    detail: Some(detail),
+                    healthy: None,
+                },
+                HostOutcome::Denied { reason } => HostChange {
+                    host: r.host,
+                    changed: false,
+                    detail: Some(format!("refused: {reason}")),
+                    healthy: None,
+                },
+            })
+            .collect();
+
+        // Health checks, on the hosts that just changed (KR-11-F11).
+        let changes = self.check_health(&stage, changes, &policy).await;
+
+        let mut rollouts = self.rollouts.lock().ok()?;
+        let r = rollouts.get_mut(id)?;
+        r.results.extend(changes.clone());
+        r.stage_index += 1;
+        r.unchecked = r.unchecked && changes.iter().all(|c| c.healthy.is_none());
+        let all = r.results.clone();
+        if let Some(stop) = mcp_rollout::verdict(index, &changes, &all, &policy) {
+            r.stopped = Some(stop);
+        }
+        let report = r.report();
+        drop(rollouts);
+
+        self.record(
+            "rollout",
+            None,
+            action.argument(),
+            started,
+            Outcome {
+                bytes_out: Some(report.to_string().len()),
+                ..Outcome::allowed()
+            },
+        );
+        Some(report)
+    }
+
+    /// Do the action on one host, gated as the single call it is.
+    async fn change_one(
+        &self,
+        host: Host,
+        action: Action,
+        _policy: mcp_rollout::FleetPolicy,
+    ) -> HostOutcome {
+        let started = Instant::now();
+        let tool = action.tool();
+        if let Some(refused) = self.gate(&host, tool, action.argument(), started).await {
+            return HostOutcome::Denied {
+                reason: refusal_reason(&refused),
+            };
+        }
+
+        let command = match &action {
+            Action::Exec(command) => command.clone(),
+            Action::Snippet { commands, .. } => commands.clone(),
+            Action::Write { path, content } => {
+                use base64::{engine::general_purpose::STANDARD, Engine};
+                // Base64 for the same reason sftp_write uses it: content that
+                // contains the heredoc marker would otherwise become shell.
+                format!(
+                    "printf '%s' '{}' | base64 -d > {}",
+                    STANDARD.encode(content.as_bytes()),
+                    crate::exec::shell_quote(path)
+                )
+            }
+        };
+
+        match ssh_session::exec_once_full(&host, &command).await {
+            Ok(out) => {
+                let recording = self.record_cast(&host, &command, &out.stdout);
+                self.record(
+                    tool,
+                    Some(&host),
+                    action.argument(),
+                    started,
+                    Outcome {
+                        exit_code: out.code.map(|c| c as i32),
+                        bytes_out: Some(out.stdout.len() + out.stderr.len()),
+                        recording,
+                        ..Outcome::allowed()
+                    },
+                );
+                match out.code {
+                    Some(0) | None => HostOutcome::Ok {
+                        output: out.stdout,
+                        exit_code: out.code.map(|c| c as i32),
+                    },
+                    Some(code) => HostOutcome::NonZeroExit {
+                        output: out.stderr,
+                        exit_code: code as i32,
+                    },
+                }
+            }
+            Err(e) => {
+                self.record(
+                    tool,
+                    Some(&host),
+                    action.argument(),
+                    started,
+                    Outcome {
+                        error: Some(e.to_string()),
+                        ..Outcome::allowed()
+                    },
+                );
+                HostOutcome::Unreachable {
+                    detail: e.to_string(),
+                }
+            }
+        }
+    }
+
+    /// Run each host's health check, where one is configured (KR-11-F11).
+    ///
+    /// Only on hosts that actually changed: a host that refused the action is
+    /// as healthy as it was, and asking it would muddle "did not run" with
+    /// "ran and broke something".
+    async fn check_health(
+        &self,
+        stage: &[Host],
+        changes: Vec<HostChange>,
+        policy: &mcp_rollout::FleetPolicy,
+    ) -> Vec<HostChange> {
+        let vault = self.vault();
+        let mut out = Vec::with_capacity(changes.len());
+        for mut change in changes {
+            if !change.changed {
+                out.push(change);
+                continue;
+            }
+            let Some(host) = stage.iter().find(|h| h.name == change.host) else {
+                out.push(change);
+                continue;
+            };
+            let Some(snippet_id) = policy.health_check_for(host) else {
+                out.push(change);
+                continue;
+            };
+            let Some(snippet) = vault.snippets.iter().find(|s| s.id == snippet_id) else {
+                change.detail = Some(format!(
+                    "health check snippet {snippet_id} is not exposed to this server"
+                ));
+                out.push(change);
+                continue;
+            };
+
+            let healthy = match ssh_session::exec_once_full(host, &snippet.commands).await {
+                Ok(result) => matches!(result.code, Some(0) | None),
+                // Unreachable right after a change is a failure, not an
+                // unknown: something it did stopped answering.
+                Err(_) => false,
+            };
+            change.healthy = Some(healthy);
+            if !healthy && change.detail.is_none() {
+                change.detail = Some("health check failed".into());
+            }
+            out.push(change);
+        }
+        out
+    }
+
+    fn stop_rollout(&self, id: &str, reason: Stopped) -> serde_json::Value {
+        let mut rollouts = match self.rollouts.lock() {
+            Ok(r) => r,
+            Err(e) => e.into_inner(),
+        };
+        match rollouts.get_mut(id) {
+            Some(r) => {
+                r.stopped = Some(reason);
+                r.report()
+            }
+            None => serde_json::json!({
+                "error": "no_such_rollout",
+                "message": "That rollout has expired or was never started. Nothing was run.",
+            }),
+        }
+    }
+
     /// Cut output to what this host's policy allows, saying so in the text.
     fn cap(&self, host: &Host, text: String) -> mcp_limits::Capped {
         mcp_limits::cap(text, self.policy_for(host).max_bytes_per_call)
@@ -1037,6 +1302,32 @@ pub struct FleetParams {
     pub reason: Option<String>,
     #[schemars(description = "A ticket or change reference, if there is one.")]
     pub ticket: Option<String>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct RolloutStartParams {
+    #[schemars(description = "Which hosts. Production is excluded unless it is allowed in Kino.")]
+    pub target: Target,
+    #[schemars(
+        description = "Shell command to run on each host. One of command, snippet or path."
+    )]
+    pub command: Option<String>,
+    #[schemars(description = "Snippet name or ID to run on each host")]
+    pub snippet: Option<String>,
+    #[schemars(description = "Remote file path to write on each host, with `content`")]
+    pub path: Option<String>,
+    #[schemars(description = "Content for `path`")]
+    pub content: Option<String>,
+    #[schemars(description = "Why you are making this change. Recorded, not used to decide.")]
+    pub reason: Option<String>,
+    #[schemars(description = "A ticket or change reference, if there is one.")]
+    pub ticket: Option<String>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct RolloutParams {
+    #[schemars(description = "The rollout_id from rollout_start")]
+    pub rollout_id: String,
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -1768,6 +2059,29 @@ impl KinoMcpServer {
             return Ok(stop);
         }
 
+        // A change across many hosts belongs in a rollout, where it meets a
+        // canary and a health check first (KR-11-F9). This cannot be decided
+        // properly: it is the danger list, matched on the command as written,
+        // so it catches `rm -rf` and not a command that assembles itself at
+        // runtime. A signpost, not a boundary - the boundary is each host's
+        // own policy, which every stage of a rollout still goes through.
+        if let Some(danger) = crate::danger::first_danger(&params.command) {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "error": "use_a_rollout",
+                    "matched": danger.matched,
+                    "why": danger.explains,
+                    "message": format!(
+                        "`{}` changes things, and a fleet-wide change runs as a rollout: one \
+                         host first, then a check, then batches. Use rollout_start with the \
+                         same target. Nothing was run.",
+                        params.command
+                    ),
+                }))
+                .unwrap_or_default(),
+            )]));
+        }
+
         let timeout =
             std::time::Duration::from_secs(params.timeout_secs.unwrap_or(30).clamp(1, 300));
         let results = self
@@ -1787,6 +2101,183 @@ impl KinoMcpServer {
         }))
         .unwrap_or_default();
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+    }
+
+    /// Begin a staged change: one host, then a check, then batches.
+    #[tool(
+        description = "Start a staged change across many hosts: one canary host first, then \
+                       batches, with a health check after each stage where one is configured. \
+                       Give exactly one of `command`, `snippet`, or `path` with `content`. \
+                       Returns a rollout_id and the canary's result; call rollout_continue for \
+                       each following batch. The canary must pass before anything else runs, \
+                       and the rollout stops itself if too much fails. Production hosts are \
+                       left out unless they have been allowed in Kino."
+    )]
+    async fn rollout_start(
+        &self,
+        Parameters(params): Parameters<RolloutStartParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let started = Instant::now();
+        if self.refresh().is_err() {
+            return Ok(vault_unreadable());
+        }
+        let vault = self.vault();
+
+        let action = match (&params.command, &params.snippet, &params.path) {
+            (Some(command), None, None) => Action::Exec(command.clone()),
+            (None, Some(name), None) => {
+                let lower = name.to_lowercase();
+                match vault
+                    .snippets
+                    .iter()
+                    .find(|s| s.id == *name || s.name.to_lowercase() == lower)
+                {
+                    Some(s) => Action::Snippet {
+                        id: s.name.clone(),
+                        commands: s.commands.clone(),
+                    },
+                    None => {
+                        return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                            "Snippet '{name}' not found. Use list_snippets to see what there is."
+                        ))]))
+                    }
+                }
+            }
+            (None, None, Some(path)) => match &params.content {
+                Some(content) => Action::Write {
+                    path: path.clone(),
+                    content: content.clone(),
+                },
+                None => {
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(
+                        "`path` needs `content` to write to it.".to_string(),
+                    )]))
+                }
+            },
+            _ => {
+                return Ok(CallToolResult::error(vec![ContentBlock::text(
+                    "Give exactly one of `command`, `snippet`, or `path` with `content`."
+                        .to_string(),
+                )]))
+            }
+        };
+
+        let hosts = match mcp_fleet::resolve(&vault.hosts, &params.target) {
+            Ok(hosts) => hosts,
+            Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(e)])),
+        };
+        let policy = vault.fleet.clone();
+        let stages = match mcp_rollout::plan(&hosts, &policy) {
+            Ok(stages) => stages,
+            Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(e)])),
+        };
+
+        // Only the canary is spent here; each stage pays for itself as it runs.
+        if let Some(stop) =
+            self.before_call_spending("rollout_start", started, Spend::Change { hosts: 1 })
+        {
+            return Ok(stop);
+        }
+
+        let id = uuid::Uuid::new_v4().to_string();
+        {
+            let mut rollouts = match self.rollouts.lock() {
+                Ok(r) => r,
+                Err(e) => e.into_inner(),
+            };
+            mcp_rollout::expire(&mut rollouts, std::time::Instant::now());
+            rollouts.insert(
+                id.clone(),
+                Rollout {
+                    id: id.clone(),
+                    action,
+                    stages,
+                    stage_index: 0,
+                    results: vec![],
+                    excluded: mcp_rollout::excluded(&hosts, &policy),
+                    stopped: None,
+                    last_touched: std::time::Instant::now(),
+                    unchecked: true,
+                },
+            );
+        }
+
+        match self.advance(&id, started).await {
+            Some(report) => Ok(CallToolResult::success(vec![ContentBlock::text(
+                serde_json::to_string_pretty(&report).unwrap_or_default(),
+            )])),
+            None => Ok(CallToolResult::error(vec![ContentBlock::text(
+                "The rollout could not be started.".to_string(),
+            )])),
+        }
+    }
+
+    /// The next batch, if the last one was good enough.
+    #[tool(
+        description = "Run the next batch of a rollout. Refused if the rollout has stopped, \
+                       finished, or expired - there is no way to skip a stage or to continue \
+                       one that stopped."
+    )]
+    async fn rollout_continue(
+        &self,
+        Parameters(params): Parameters<RolloutParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let started = Instant::now();
+        if self.refresh().is_err() {
+            return Ok(vault_unreadable());
+        }
+        match self.advance(&params.rollout_id, started).await {
+            Some(report) => Ok(CallToolResult::success(vec![ContentBlock::text(
+                serde_json::to_string_pretty(&report).unwrap_or_default(),
+            )])),
+            None => Ok(CallToolResult::error(vec![ContentBlock::text(
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "error": "no_such_rollout",
+                    "message": "That rollout has expired or was never started. Nothing was run. \
+                                A rollout is forgotten after 30 minutes without a batch, and \
+                                whenever kino-mcp restarts.",
+                }))
+                .unwrap_or_default(),
+            )])),
+        }
+    }
+
+    /// Where a rollout got to.
+    #[tool(
+        description = "Report a rollout's progress: which hosts changed, what stopped it, \
+                          and how many hosts are left."
+    )]
+    async fn rollout_status(
+        &self,
+        Parameters(params): Parameters<RolloutParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let rollouts = match self.rollouts.lock() {
+            Ok(r) => r,
+            Err(e) => e.into_inner(),
+        };
+        match rollouts.get(&params.rollout_id) {
+            Some(r) => Ok(CallToolResult::success(vec![ContentBlock::text(
+                serde_json::to_string_pretty(&r.report()).unwrap_or_default(),
+            )])),
+            None => Ok(CallToolResult::error(vec![ContentBlock::text(
+                "No such rollout. It may have expired, or kino-mcp may have restarted.".to_string(),
+            )])),
+        }
+    }
+
+    /// Stop a rollout where it is.
+    #[tool(
+        description = "Stop a rollout. Hosts already changed stay changed - the report says \
+                          which - and no further batch will run."
+    )]
+    async fn rollout_abort(
+        &self,
+        Parameters(params): Parameters<RolloutParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let report = self.stop_rollout(&params.rollout_id, Stopped::Aborted);
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            serde_json::to_string_pretty(&report).unwrap_or_default(),
+        )]))
     }
 
     /// The same file, across the fleet.
@@ -1936,6 +2427,7 @@ mod tests {
             global_rules: vec![],
             approval_timeout_secs: crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
             budgets: Default::default(),
+            fleet: Default::default(),
         })
         // Nothing is listening here, which is what a test wants: the real
         // socket belongs to whatever Kino is running on this machine.
@@ -2132,6 +2624,219 @@ mod tests {
         assert_eq!(r.is_error, Some(true));
     }
 
+    // ── Rolling a change out (KR-11-F9..F13) ────────────────────────────────
+    //
+    // `mcp_rollout` proves the planning and the stop rules. These prove the
+    // server's half: that a rollout starts at one host, that it will not go
+    // on after a failure, and that the tools cannot be used to skip a stage.
+    // Nothing reaches a host - port 1 on loopback refuses - so every stage
+    // "fails", which is exactly the case worth testing.
+
+    fn rollout_server(hosts: Vec<Host>) -> (KinoMcpServer, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut policies = HashMap::new();
+        for h in &hosts {
+            policies.insert(
+                h.id.clone(),
+                HostPolicy {
+                    mode: McpMode::Full,
+                    ..Default::default()
+                },
+            );
+        }
+        let vault = McpVault {
+            hosts,
+            snippets: vec![],
+            policies,
+            global_rules: vec![],
+            approval_timeout_secs: crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
+            budgets: Default::default(),
+            fleet: Default::default(),
+        };
+        let mut s = KinoMcpServer::with_audit(
+            vault,
+            crate::mcp_audit::AuditLog::new(dir.path().join("audit.enc"), [3u8; 32]),
+        )
+        .counting_in(dir.path().join("budget.enc"), [3u8; 32])
+        .asking_at("/nonexistent/kino-test-approval.sock".into());
+        s.halt_file = dir.path().join("mcp_halt");
+        (s, dir)
+    }
+
+    fn fleet_of(n: usize, environment: Option<&str>) -> Vec<Host> {
+        (0..n)
+            .map(|i| Host {
+                id: format!("h{i}"),
+                name: format!("web-{i:02}"),
+                environment: environment.map(str::to_string),
+                ..host()
+            })
+            .collect()
+    }
+
+    fn rt() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    fn start_rollout(s: &KinoMcpServer, command: &str) -> serde_json::Value {
+        let body = text(
+            &rt()
+                .block_on(s.rollout_start(Parameters(RolloutStartParams {
+                    target: Target::default(),
+                    command: Some(command.into()),
+                    snippet: None,
+                    path: None,
+                    content: None,
+                    reason: None,
+                    ticket: None,
+                })))
+                .unwrap(),
+        );
+        serde_json::from_str(&body).unwrap_or_else(|e| panic!("{e}: {body}"))
+    }
+
+    #[test]
+    fn a_rollout_starts_with_one_host() {
+        let (s, _dir) = rollout_server(fleet_of(10, Some("staging")));
+        let v = start_rollout(&s, "systemctl restart nginx");
+        assert_eq!(v["results"].as_array().unwrap().len(), 1, "{v:#}");
+        assert_eq!(v["stage"], 1, "one stage done");
+    }
+
+    #[test]
+    fn a_canary_that_fails_stops_the_rollout() {
+        // Nothing is listening, so the canary cannot succeed - and that is
+        // the whole point of running it first.
+        let (s, _dir) = rollout_server(fleet_of(10, Some("staging")));
+        let v = start_rollout(&s, "systemctl restart nginx");
+        assert_eq!(v["state"], "stopped", "{v:#}");
+        assert_eq!(v["stopped_because"], "canary_failed");
+        assert_eq!(v["changed_hosts"].as_array().unwrap().len(), 0);
+        assert_eq!(v["hosts_remaining"], 9, "and it says what it did not touch");
+    }
+
+    #[test]
+    fn a_stopped_rollout_cannot_be_continued() {
+        // There is no argument that gets past this: the only way on is a
+        // stage that passed.
+        let (s, _dir) = rollout_server(fleet_of(10, Some("staging")));
+        let started = start_rollout(&s, "systemctl restart nginx");
+        let id = started["rollout_id"].as_str().unwrap().to_string();
+
+        let body = text(
+            &rt()
+                .block_on(s.rollout_continue(Parameters(RolloutParams { rollout_id: id })))
+                .unwrap(),
+        );
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["state"], "stopped", "{v:#}");
+        assert_eq!(v["stage"], 1, "it did not run another stage");
+    }
+
+    #[test]
+    fn a_rollout_that_was_never_started_is_refused() {
+        let (s, _dir) = rollout_server(fleet_of(2, Some("staging")));
+        let body = text(
+            &rt()
+                .block_on(s.rollout_continue(Parameters(RolloutParams {
+                    rollout_id: "made-up".into(),
+                })))
+                .unwrap(),
+        );
+        assert!(body.contains("no_such_rollout"), "{body}");
+    }
+
+    #[test]
+    fn production_is_left_out_of_a_rollout_by_default() {
+        let mut hosts = fleet_of(2, Some("staging"));
+        hosts.push(Host {
+            id: "prod".into(),
+            name: "db-prod".into(),
+            environment: Some("production".into()),
+            ..host()
+        });
+        let (s, _dir) = rollout_server(hosts);
+        let v = start_rollout(&s, "systemctl restart nginx");
+        assert_eq!(v["excluded_production"][0], "db-prod", "{v:#}");
+        assert_eq!(v["hosts_remaining"], 1, "two staging hosts, one done");
+    }
+
+    #[test]
+    fn a_target_of_only_production_refuses_to_start() {
+        let (s, _dir) = rollout_server(fleet_of(3, Some("production")));
+        let body = text(
+            &rt()
+                .block_on(s.rollout_start(Parameters(RolloutStartParams {
+                    target: Target::default(),
+                    command: Some("systemctl restart nginx".into()),
+                    snippet: None,
+                    path: None,
+                    content: None,
+                    reason: None,
+                    ticket: None,
+                })))
+                .unwrap(),
+        );
+        assert!(body.contains("production"), "{body}");
+        assert!(
+            body.contains("Settings"),
+            "it says where to change it: {body}"
+        );
+    }
+
+    #[test]
+    fn aborting_says_what_had_already_changed() {
+        let (s, _dir) = rollout_server(fleet_of(5, Some("staging")));
+        let started = start_rollout(&s, "systemctl restart nginx");
+        let id = started["rollout_id"].as_str().unwrap().to_string();
+        let body = text(
+            &rt()
+                .block_on(s.rollout_abort(Parameters(RolloutParams { rollout_id: id })))
+                .unwrap(),
+        );
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["stopped_because"], "aborted");
+        assert!(v["changed_hosts"].is_array(), "{v:#}");
+    }
+
+    #[test]
+    fn a_rollout_says_when_nothing_checked_its_work() {
+        // With no health check configured, the only judge is the command's
+        // own exit code - and the report has to admit that.
+        let (s, _dir) = rollout_server(fleet_of(3, Some("staging")));
+        let v = start_rollout(&s, "systemctl restart nginx");
+        assert!(
+            v["health_checks"]
+                .as_str()
+                .unwrap()
+                .contains("none configured"),
+            "{v:#}"
+        );
+    }
+
+    #[test]
+    fn a_fleet_command_that_obviously_changes_things_is_sent_to_a_rollout() {
+        // fleet_exec is for asking, not changing (KR-11-F9). The danger list
+        // is a signpost rather than a boundary, and says so.
+        let (s, _dir) = rollout_server(fleet_of(2, Some("staging")));
+        let body = text(
+            &rt()
+                .block_on(s.fleet_exec(Parameters(FleetParams {
+                    target: Target::default(),
+                    command: "rm -rf /var/log/old".into(),
+                    timeout_secs: Some(5),
+                    reason: None,
+                    ticket: None,
+                })))
+                .unwrap(),
+        );
+        assert!(body.contains("use_a_rollout"), "{body}");
+        assert!(body.contains("rollout_start"), "{body}");
+    }
+
     // ── Asking many hosts at once (KR-11-F5..F8) ────────────────────────────
     //
     // `mcp_fleet` proves the selection and the summary on their own. These
@@ -2172,6 +2877,7 @@ mod tests {
             global_rules: vec![],
             approval_timeout_secs: crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
             budgets: Default::default(),
+            fleet: Default::default(),
         };
         let mut s =
             KinoMcpServer::with_audit(vault, crate::mcp_audit::AuditLog::new(audit, [3u8; 32]))
@@ -2552,6 +3258,7 @@ mod tests {
             global_rules: vec![],
             approval_timeout_secs: crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
             budgets: Default::default(),
+            fleet: Default::default(),
         }
     }
 
@@ -3086,6 +3793,7 @@ mod tests {
             global_rules: vec![],
             approval_timeout_secs: crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
             budgets: Default::default(),
+            fleet: Default::default(),
         });
         assert!(text(&exec(&s, "uptime")).contains("\"reason\": \"default_deny\""));
     }

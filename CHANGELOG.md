@@ -7,6 +7,16 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 ## [Unreleased]
 
 ### Added
+- **Staged rollouts for fleet-wide changes.** `rollout_start` changes one host
+  first, runs its health check, and stops there; `rollout_continue` asks for
+  the next batch. A failed canary stops everything, as does crossing the
+  failure share, the stop switch, or the hourly budget. Nothing can skip a
+  stage. Production hosts are left out unless you type the word in the MCP
+  panel to allow them, and even then they go last and are never the canary.
+  Whatever changed before a rollout stopped stays changed, and the report says
+  exactly which hosts. Health checks are snippets chosen per group or
+  environment; with none set, the report says the command's exit code was the
+  only judge.
 - **Fleet tools for MCP.** `fleet_exec` runs one command across many hosts at
   once and answers with a summary rather than one reply per host: the hosts
   that agreed are reported together, and anything that failed, timed out or
