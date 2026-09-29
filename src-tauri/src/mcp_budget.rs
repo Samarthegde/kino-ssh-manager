@@ -46,6 +46,10 @@ pub struct Budgets {
     /// Every tool call, including the ones that only read.
     #[serde(default = "d_calls")]
     pub max_calls_per_hour: u32,
+    /// Hosts a fleet call talks to at once. Each one is a fresh SSH
+    /// handshake, so this is politeness to the network as much as anything.
+    #[serde(default = "d_concurrency")]
+    pub concurrency: u8,
 }
 
 fn d_changes() -> u32 {
@@ -57,6 +61,9 @@ fn d_hosts() -> u32 {
 fn d_calls() -> u32 {
     600
 }
+fn d_concurrency() -> u8 {
+    8
+}
 
 impl Default for Budgets {
     fn default() -> Self {
@@ -64,6 +71,7 @@ impl Default for Budgets {
             max_changes_per_hour: d_changes(),
             max_hosts_per_call: d_hosts(),
             max_calls_per_hour: d_calls(),
+            concurrency: d_concurrency(),
         }
     }
 }

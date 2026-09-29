@@ -249,6 +249,48 @@ pub fn load_vault(password: &str) -> Result<VaultData, String> {
     Ok((hosts, key, salt))
 }
 
+/// A `Host` with nothing set but the essentials, for tests in any module.
+///
+/// One definition rather than a copy per test module: `Host` has thirty-odd
+/// fields, and a literal that big gets copied rather than updated.
+#[cfg(test)]
+pub fn bare_host() -> Host {
+    Host {
+        id: "h1".into(),
+        name: "web-prod".into(),
+        // Port 1 on loopback refuses immediately - no waiting, no network.
+        hostname: "127.0.0.1".into(),
+        port: 1,
+        username: "root".into(),
+        default_auth: "Password".into(),
+        password: Some("x".into()),
+        private_key: None,
+        public_key: None,
+        passphrase: None,
+        port_forwards: vec![],
+        on_connect_snippets: vec![],
+        color: None,
+        notes: None,
+        group: None,
+        os: None,
+        connection_mode: None,
+        agent_id: None,
+        relay_url: None,
+        relay_token: None,
+        control_url: None,
+        proxy_type: None,
+        proxy_host: None,
+        proxy_port: None,
+        proxy_username: None,
+        proxy_password: None,
+        jump_host: None,
+        jump: None,
+        key_added_at: None,
+        ntfy_topic: None,
+        environment: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

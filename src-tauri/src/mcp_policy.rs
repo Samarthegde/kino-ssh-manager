@@ -67,9 +67,11 @@ pub enum Capability {
 /// most restricted class - so forgetting to add a case here fails closed.
 pub fn capability(tool: &str) -> Capability {
     match tool {
-        "list_hosts" | "get_host" | "list_snippets" => Capability::Metadata,
-        "sftp_list" | "sftp_read" => Capability::Read,
-        "ssh_exec" => Capability::Exec,
+        "list_hosts" | "get_host" | "list_snippets" | "fleet_resolve" => Capability::Metadata,
+        "sftp_list" | "sftp_read" | "check_drift" => Capability::Read,
+        // A fleet command is still a command: what it does is unknowable from
+        // here, so it is classed by what it *could* do, like ssh_exec.
+        "ssh_exec" | "fleet_exec" => Capability::Exec,
         "sftp_write" | "run_snippet" => Capability::Write,
         _ => Capability::Write,
     }

@@ -21,6 +21,7 @@ pub mod mcp_audit;
 mod mcp_binary;
 pub mod mcp_budget;
 pub mod mcp_config;
+pub mod mcp_fleet;
 pub mod mcp_limits;
 pub mod mcp_policy;
 mod metrics;

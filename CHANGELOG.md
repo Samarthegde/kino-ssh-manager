@@ -4,6 +4,22 @@ All notable changes to Kino SSH Manager are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Fleet tools for MCP.** `fleet_exec` runs one command across many hosts at
+  once and answers with a summary rather than one reply per host: the hosts
+  that agreed are reported together, and anything that failed, timed out or
+  was refused is listed individually. `check_drift` compares a file across the
+  fleet by hash and names the hosts that differ. `fleet_resolve` says which
+  hosts a target covers without touching any of them.
+
+  Hosts are chosen by group, environment and name combined, and each one is
+  still gated by its own mode and rules - a command can run on some and be
+  refused on others, and the refusals appear in the answer rather than going
+  missing. Eight hosts at a time by default, each with its own deadline, and a
+  call spends one change per host against the hourly budget.
+
 ## [0.9.3] - 2026-09-28
 
 Everything the MCP server was missing when it shipped: a record of what an

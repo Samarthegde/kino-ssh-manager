@@ -150,6 +150,21 @@ this snippet with a copy button.
   vault, mode `0600`, so another user on the machine cannot answer for you.
   Windows has no channel yet: there, a guarded call is still refused, with a
   message saying so.
+- **Three tools work on many hosts at once.** `fleet_resolve` says which hosts
+  a target names without touching any of them. `fleet_exec` runs one command
+  across them in parallel and answers with a *summary* - hosts that returned
+  the same output reported together, anything that failed, timed out or was
+  refused listed on its own. `check_drift` compares one file across the fleet
+  by hash, with the largest group as the baseline, and keeps "missing" and
+  "could not read" apart.
+
+  A target is a group, an environment and a list of hosts, combined - so
+  `group: web` with `environment: production` means the production web hosts,
+  and naming a host that is not exposed is an error rather than a quiet
+  omission. **Each host is still gated on its own**: a command can run on the
+  hosts whose rules allow it and be refused on the rest, and the refusals are
+  in the answer rather than missing from it. A fleet call spends one change
+  per host against the hourly budget.
 - **One switch stops everything.** *Stop all MCP activity* in the MCP panel,
   or **Stop MCP activity** in the tray menu, refuses every call from the next
   one onward. It is a file - `mcp_halt`, beside your vault - so a script, a

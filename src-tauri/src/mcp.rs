@@ -8,6 +8,7 @@ use crate::mcp_approval::{self, ApprovalRequest, Verdict};
 use crate::mcp_audit::{AuditLog, AuditRecord};
 use crate::mcp_budget::{self, Ledger, Refusal, Spend};
 use crate::mcp_config::McpVault;
+use crate::mcp_fleet::{self, FileState, HostOutcome, HostResult, Target};
 use crate::mcp_limits::{self, Window};
 use crate::mcp_policy::{self, Decision, HostPolicy, McpMode};
 use crate::ssh_session;
@@ -146,20 +147,37 @@ impl KinoMcpServer {
     /// an assistant hitting a budget or a halt over and over is exactly the
     /// shape worth seeing in the log afterwards.
     fn before_call(&self, tool: &str, started: Instant) -> Option<CallToolResult> {
+        let capability = mcp_policy::capability(tool);
+        let spend = if matches!(
+            capability,
+            mcp_policy::Capability::Exec | mcp_policy::Capability::Write
+        ) {
+            Spend::Change { hosts: 1 }
+        } else {
+            Spend::Call
+        };
+        self.before_call_spending(tool, started, spend)
+    }
+
+    /// The same, for a call that knows how many hosts it is about to touch.
+    ///
+    /// A fleet call has to resolve its target before it can say what it will
+    /// spend, so it refreshes, resolves, and then comes here (KR-11-F2).
+    fn before_call_spending(
+        &self,
+        tool: &str,
+        started: Instant,
+        spend: Spend,
+    ) -> Option<CallToolResult> {
         if self.refresh().is_err() {
             return Some(vault_unreadable());
         }
 
         let capability = mcp_policy::capability(tool);
-        let changes = matches!(
-            capability,
-            mcp_policy::Capability::Exec | mcp_policy::Capability::Write
-        );
-
         // Metadata still answers while stopped, carrying `halted: true`: an
         // assistant that cannot see anything cannot explain to its user why
         // it has stopped doing things (KR-11-F1).
-        let stoppable = changes || matches!(capability, mcp_policy::Capability::Read);
+        let stoppable = !matches!(capability, mcp_policy::Capability::Metadata);
         if stoppable && mcp_budget::is_halted(&self.halt_file) {
             self.record(
                 tool,
@@ -179,11 +197,6 @@ impl KinoMcpServer {
             return None;
         };
         let now = now_ms();
-        let spend = if changes {
-            Spend::Change { hosts: 1 }
-        } else {
-            Spend::Call
-        };
         match mcp_budget::check(&ledger.recent(now), now, &self.vault().budgets, spend) {
             Ok(()) => {
                 if let Err(e) = ledger.record(now, spend) {
@@ -431,6 +444,167 @@ impl KinoMcpServer {
         }
     }
 
+    /// Run `work` on every host at once, a few at a time (KR-11-F6).
+    ///
+    /// Eight at a time by default: each one is a fresh SSH handshake, and a
+    /// fleet call that opens fifty at once is a small denial of service
+    /// against the network it runs on. Every host is given the same deadline,
+    /// so one unreachable machine cannot hold up the answer for the rest.
+    async fn fan_out<F, Fut>(
+        &self,
+        hosts: &[Host],
+        timeout: std::time::Duration,
+        work: F,
+    ) -> Vec<HostResult>
+    where
+        F: Fn(Host) -> Fut,
+        Fut: std::future::Future<Output = HostOutcome>,
+    {
+        use futures_util::stream::{self, StreamExt};
+        let concurrency = (self.vault().budgets.concurrency as usize).clamp(1, 32);
+        stream::iter(hosts.iter().cloned())
+            .map(|host| {
+                let name = host.name.clone();
+                let fut = work(host);
+                async move {
+                    let outcome = match tokio::time::timeout(timeout, fut).await {
+                        Ok(outcome) => outcome,
+                        Err(_) => HostOutcome::Timeout,
+                    };
+                    HostResult {
+                        host: name,
+                        outcome,
+                    }
+                }
+            })
+            .buffer_unordered(concurrency)
+            .collect()
+            .await
+    }
+
+    /// One host's part of a `fleet_exec`: gated like any single call, and
+    /// recorded like one.
+    ///
+    /// The gate runs per host, so a command can run on the hosts whose rules
+    /// allow it and be refused on the rest - and the refusal is reported
+    /// rather than the host quietly missing from the answer.
+    async fn one_of_the_fleet(
+        &self,
+        host: Host,
+        command: String,
+        reason: Option<String>,
+        ticket: Option<String>,
+    ) -> HostOutcome {
+        let started = Instant::now();
+        if let Some(refused) = self.gate(&host, "ssh_exec", &command, started).await {
+            return HostOutcome::Denied {
+                reason: refusal_reason(&refused),
+            };
+        }
+        match ssh_session::exec_once_full(&host, &command).await {
+            Ok(out) => {
+                let produced = out.stdout.len() + out.stderr.len();
+                let limit = self.policy_for(&host).max_bytes_per_call;
+                let text = mcp_limits::cap(format!("{}{}", out.stdout, out.stderr), limit);
+                let recording = self.record_cast(&host, &command, &text.text);
+                self.record(
+                    "fleet_exec",
+                    Some(&host),
+                    &command,
+                    started,
+                    Outcome {
+                        exit_code: out.code.map(|c| c as i32),
+                        bytes_out: Some(produced),
+                        recording,
+                        reason: label(&reason),
+                        ticket: label(&ticket),
+                        ..Outcome::allowed()
+                    },
+                );
+                match out.code {
+                    Some(0) | None => HostOutcome::Ok {
+                        output: text.text,
+                        exit_code: out.code.map(|c| c as i32),
+                    },
+                    Some(code) => HostOutcome::NonZeroExit {
+                        output: text.text,
+                        exit_code: code as i32,
+                    },
+                }
+            }
+            Err(e) => {
+                self.record(
+                    "fleet_exec",
+                    Some(&host),
+                    &command,
+                    started,
+                    Outcome {
+                        error: Some(e.to_string()),
+                        reason: label(&reason),
+                        ticket: label(&ticket),
+                        ..Outcome::allowed()
+                    },
+                );
+                HostOutcome::Unreachable {
+                    detail: e.to_string(),
+                }
+            }
+        }
+    }
+
+    /// Read one file for `check_drift`, gated as the read it is.
+    async fn file_state(&self, host: Host, path: String) -> HostOutcome {
+        let started = Instant::now();
+        if let Some(refused) = self.gate(&host, "sftp_read", &path, started).await {
+            return HostOutcome::Denied {
+                reason: refusal_reason(&refused),
+            };
+        }
+        // `cat`, as sftp_read does: the point is that this is classed and
+        // gated as a read, not that it avoids the shell.
+        let command = format!("cat {}", crate::exec::shell_quote(&path));
+        match ssh_session::exec_once_full(&host, &command).await {
+            Ok(out) => {
+                self.record(
+                    "check_drift",
+                    Some(&host),
+                    &path,
+                    started,
+                    Outcome {
+                        exit_code: out.code.map(|c| c as i32),
+                        bytes_out: Some(out.stdout.len()),
+                        ..Outcome::allowed()
+                    },
+                );
+                match out.code {
+                    Some(0) | None => HostOutcome::Ok {
+                        output: out.stdout,
+                        exit_code: out.code.map(|c| c as i32),
+                    },
+                    Some(code) => HostOutcome::NonZeroExit {
+                        output: out.stderr,
+                        exit_code: code as i32,
+                    },
+                }
+            }
+            Err(e) => {
+                self.record(
+                    "check_drift",
+                    Some(&host),
+                    &path,
+                    started,
+                    Outcome {
+                        error: Some(e.to_string()),
+                        ..Outcome::allowed()
+                    },
+                );
+                HostOutcome::Unreachable {
+                    detail: e.to_string(),
+                }
+            }
+        }
+    }
+
     /// Cut output to what this host's policy allows, saying so in the text.
     fn cap(&self, host: &Host, text: String) -> mcp_limits::Capped {
         mcp_limits::cap(text, self.policy_for(host).max_bytes_per_call)
@@ -624,6 +798,40 @@ fn stamp_of(path: &std::path::Path) -> Option<(std::time::SystemTime, u64)> {
     Some((meta.modified().ok()?, meta.len()))
 }
 
+/// The reason out of a refusal, for a fleet result. The body is the JSON the
+/// single-host tools return; the reason field is the part worth repeating
+/// fifty times, and the message is not.
+fn refusal_reason(result: &CallToolResult) -> String {
+    let text: String = result
+        .content
+        .iter()
+        .filter_map(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .collect();
+    serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|v| {
+            v.get("reason")
+                .or_else(|| v.get("error"))
+                .and_then(|r| r.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "refused".to_string())
+}
+
+/// What `cat` said about a file, as a state.
+fn file_state_from(output: &str) -> FileState {
+    use sha2::{Digest, Sha256};
+    let lower = output.to_lowercase();
+    if lower.contains("no such file or directory") {
+        return FileState::Missing;
+    }
+    if lower.contains("permission denied") {
+        return FileState::Unreadable("permission denied".into());
+    }
+    FileState::Hash(format!("{:x}", Sha256::digest(output.as_bytes())))
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -812,6 +1020,37 @@ pub struct WriteParams {
     pub reason: Option<String>,
     #[schemars(description = "A ticket or change reference, if there is one.")]
     pub ticket: Option<String>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct FleetParams {
+    #[schemars(description = "Which hosts. Fields are combined: group AND environment AND hosts.")]
+    pub target: Target,
+    #[schemars(description = "Shell command to run on each of them")]
+    pub command: String,
+    #[schemars(description = "Seconds to allow each host before giving up on it. Default 30.")]
+    pub timeout_secs: Option<u64>,
+    #[schemars(
+        description = "Why you are running this. Recorded in Kino's audit log, once per host. \
+                       It is not used to decide anything."
+    )]
+    pub reason: Option<String>,
+    #[schemars(description = "A ticket or change reference, if there is one.")]
+    pub ticket: Option<String>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct DriftParams {
+    #[schemars(description = "Which hosts to compare")]
+    pub target: Target,
+    #[schemars(description = "Absolute path of the file to compare across them")]
+    pub path: String,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct TargetParams {
+    #[schemars(description = "Which hosts to resolve")]
+    pub target: Target,
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -1446,6 +1685,166 @@ impl KinoMcpServer {
             }
         }
     }
+
+    /// Which hosts a target names, without touching any of them.
+    #[tool(
+        description = "Resolve a fleet target to the hosts it names, without connecting to any \
+                       of them. Use this to confirm what a fleet_exec or check_drift would \
+                       touch before running it."
+    )]
+    async fn fleet_resolve(
+        &self,
+        Parameters(params): Parameters<TargetParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let started = Instant::now();
+        if let Some(stop) = self.before_call("fleet_resolve", started) {
+            return Ok(stop);
+        }
+        let vault = self.vault();
+        let hosts = match mcp_fleet::resolve(&vault.hosts, &params.target) {
+            Ok(hosts) => hosts,
+            Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(e)])),
+        };
+        let list: Vec<serde_json::Value> = hosts
+            .iter()
+            .map(|h| {
+                serde_json::json!({
+                    "name": h.name,
+                    "group": h.group,
+                    "environment": h.environment,
+                    "access": self.policy_for(h).mode.as_str(),
+                })
+            })
+            .collect();
+        let json = serde_json::to_string_pretty(&serde_json::json!({
+            "count": list.len(),
+            "hosts": list,
+        }))
+        .unwrap_or_default();
+        self.record(
+            "fleet_resolve",
+            None,
+            "",
+            started,
+            Outcome {
+                bytes_out: Some(json.len()),
+                ..Outcome::allowed()
+            },
+        );
+        Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+    }
+
+    /// One command, many hosts, one summary.
+    #[tool(
+        description = "Run one command on every host a target names, in parallel, and get a \
+                       summary rather than one reply per host: hosts that returned the same \
+                       output are reported together, and anything that failed, timed out or \
+                       was refused is listed individually. Each host's own access mode and \
+                       rules still apply, so a command can run on some and be refused on \
+                       others. Use fleet_resolve first if you are unsure what it will touch."
+    )]
+    async fn fleet_exec(
+        &self,
+        Parameters(params): Parameters<FleetParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let started = Instant::now();
+        // Resolving comes first: what this spends depends on how many hosts
+        // it is about to touch (KR-11-F2).
+        if self.refresh().is_err() {
+            return Ok(vault_unreadable());
+        }
+        let vault = self.vault();
+        let hosts = match mcp_fleet::resolve(&vault.hosts, &params.target) {
+            Ok(hosts) => hosts,
+            Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(e)])),
+        };
+        if let Some(stop) = self.before_call_spending(
+            "fleet_exec",
+            started,
+            Spend::Change {
+                hosts: hosts.len() as u32,
+            },
+        ) {
+            return Ok(stop);
+        }
+
+        let timeout =
+            std::time::Duration::from_secs(params.timeout_secs.unwrap_or(30).clamp(1, 300));
+        let results = self
+            .fan_out(&hosts, timeout, |host| {
+                let command = params.command.clone();
+                let reason = params.reason.clone();
+                let ticket = params.ticket.clone();
+                async move { self.one_of_the_fleet(host, command, reason, ticket).await }
+            })
+            .await;
+
+        let summary = mcp_fleet::summarise(results, mcp_fleet::TOTAL_BYTES);
+        let json = serde_json::to_string_pretty(&serde_json::json!({
+            "command": params.command,
+            "hosts": hosts.len(),
+            "summary": summary,
+        }))
+        .unwrap_or_default();
+        Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+    }
+
+    /// The same file, across the fleet.
+    #[tool(
+        description = "Compare one file across every host a target names, by hash. Reports the \
+                       hosts grouped by what they have, with the largest group as the baseline, \
+                       and lists the hosts that differ, that are missing the file, or that \
+                       could not be read. Reads the file rather than running a command, so it \
+                       works on read-only hosts."
+    )]
+    async fn check_drift(
+        &self,
+        Parameters(params): Parameters<DriftParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let started = Instant::now();
+        if self.refresh().is_err() {
+            return Ok(vault_unreadable());
+        }
+        let vault = self.vault();
+        let hosts = match mcp_fleet::resolve(&vault.hosts, &params.target) {
+            Ok(hosts) => hosts,
+            Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(e)])),
+        };
+        // A read, so it costs calls rather than changes.
+        if let Some(stop) = self.before_call_spending("check_drift", started, Spend::Call) {
+            return Ok(stop);
+        }
+
+        let timeout = std::time::Duration::from_secs(30);
+        let results = self
+            .fan_out(&hosts, timeout, |host| {
+                let path = params.path.clone();
+                async move { self.file_state(host, path).await }
+            })
+            .await;
+
+        let states: Vec<(String, FileState)> = results
+            .into_iter()
+            .map(|r| {
+                let state = match r.outcome {
+                    HostOutcome::Ok { output, .. } => file_state_from(&output),
+                    HostOutcome::NonZeroExit { output, .. } => file_state_from(&output),
+                    HostOutcome::Timeout => FileState::Unreadable("timed out".into()),
+                    HostOutcome::Unreachable { detail } => FileState::Unreadable(detail),
+                    HostOutcome::Denied { reason } => FileState::Denied(reason),
+                };
+                (r.host, state)
+            })
+            .collect();
+
+        let json = serde_json::to_string_pretty(&serde_json::json!({
+            "path": params.path,
+            "hosts": hosts.len(),
+            "drift": mcp_fleet::drift(states),
+        }))
+        .unwrap_or_default();
+        Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+    }
 }
 
 #[tool_handler]
@@ -1507,38 +1906,12 @@ mod tests {
     /// rather than `policy_denied` is what proves the gate let it through.
     fn host() -> Host {
         Host {
-            id: "h1".into(),
-            name: "web-prod".into(),
             // Port 1 on loopback refuses immediately - no waiting, no network.
+            // A refusal happening before a connection is opened is the
+            // property these tests are about.
             hostname: "127.0.0.1".into(),
             port: 1,
-            username: "root".into(),
-            default_auth: "Password".into(),
-            password: Some("x".into()),
-            private_key: None,
-            public_key: None,
-            passphrase: None,
-            port_forwards: vec![],
-            on_connect_snippets: vec![],
-            color: None,
-            notes: None,
-            group: None,
-            os: None,
-            connection_mode: None,
-            agent_id: None,
-            relay_url: None,
-            relay_token: None,
-            control_url: None,
-            proxy_type: None,
-            proxy_host: None,
-            proxy_port: None,
-            proxy_username: None,
-            proxy_password: None,
-            jump_host: None,
-            jump: None,
-            key_added_at: None,
-            ntfy_topic: None,
-            environment: None,
+            ..crate::vault::bare_host()
         }
     }
 
@@ -1757,6 +2130,200 @@ mod tests {
         // be opened: recording is best effort, refusing calls is not.
         let r = exec(&server(McpMode::ReadOnly, ""), "uptime");
         assert_eq!(r.is_error, Some(true));
+    }
+
+    // ── Asking many hosts at once (KR-11-F5..F8) ────────────────────────────
+    //
+    // `mcp_fleet` proves the selection and the summary on their own. These
+    // prove the *server* half: that each host is gated individually, that the
+    // budget is spent per host rather than per call, and that a host which is
+    // refused appears in the answer rather than vanishing from it.
+
+    /// Two hosts, one read-only and one with full access.
+    fn mixed_fleet_server() -> (KinoMcpServer, tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let audit = dir.path().join("audit.jsonl.enc");
+        let ledger = dir.path().join("mcp_budget.enc");
+
+        let open_host = Host {
+            id: "h2".into(),
+            name: "web-02".into(),
+            ..host()
+        };
+        let mut policies = HashMap::new();
+        policies.insert(
+            "h1".to_string(),
+            HostPolicy {
+                mode: McpMode::ReadOnly,
+                ..Default::default()
+            },
+        );
+        policies.insert(
+            "h2".to_string(),
+            HostPolicy {
+                mode: McpMode::Full,
+                ..Default::default()
+            },
+        );
+        let vault = McpVault {
+            hosts: vec![host(), open_host],
+            snippets: vec![],
+            policies,
+            global_rules: vec![],
+            approval_timeout_secs: crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
+            budgets: Default::default(),
+        };
+        let mut s =
+            KinoMcpServer::with_audit(vault, crate::mcp_audit::AuditLog::new(audit, [3u8; 32]))
+                .counting_in(ledger.clone(), [3u8; 32])
+                .asking_at("/nonexistent/kino-test-approval.sock".into());
+        s.halt_file = dir.path().join("mcp_halt");
+        (s, dir, ledger)
+    }
+
+    fn fleet_exec(s: &KinoMcpServer, command: &str) -> serde_json::Value {
+        let body = text(
+            &tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(s.fleet_exec(Parameters(FleetParams {
+                    target: Target::default(),
+                    command: command.into(),
+                    timeout_secs: Some(5),
+                    reason: None,
+                    ticket: None,
+                })))
+                .unwrap(),
+        );
+        serde_json::from_str(&body).unwrap_or_else(|e| panic!("{e}: {body}"))
+    }
+
+    #[test]
+    fn every_host_is_gated_on_its_own() {
+        // The read-only host refuses; the full-access one gets as far as the
+        // network. One call, two different answers, both reported.
+        let (s, _dir, _ledger) = mixed_fleet_server();
+        let v = fleet_exec(&s, "uptime");
+
+        let attention = v["summary"]["attention"].as_array().unwrap();
+        let denied: Vec<&serde_json::Value> = attention
+            .iter()
+            .filter(|a| a["outcome"] == "denied")
+            .collect();
+        assert_eq!(denied.len(), 1, "{v:#}");
+        assert_eq!(denied[0]["host"], "web-prod");
+        assert_eq!(denied[0]["reason"], "default_deny");
+
+        // And the other host is accounted for too - unreachable here, since
+        // nothing is listening on port 1.
+        assert_eq!(v["summary"]["counts"]["unreachable"], 1, "{v:#}");
+    }
+
+    #[test]
+    fn a_refused_host_is_never_missing_from_the_answer() {
+        let (s, _dir, _ledger) = mixed_fleet_server();
+        let v = fleet_exec(&s, "uptime");
+        let counted: u64 = v["summary"]["counts"]
+            .as_object()
+            .unwrap()
+            .values()
+            .map(|n| n.as_u64().unwrap())
+            .sum();
+        assert_eq!(counted, 2, "every targeted host is in the counts: {v:#}");
+    }
+
+    #[test]
+    fn a_fleet_call_spends_one_change_per_host() {
+        // KR-11-F2's worked example: a call on N hosts spends N.
+        let (s, _dir, ledger) = mixed_fleet_server();
+        fleet_exec(&s, "uptime");
+        let spent: u32 = crate::mcp_budget::Ledger::new(ledger, [3u8; 32])
+            .recent(now_ms())
+            .iter()
+            .map(|e| e.changed)
+            .sum();
+        assert_eq!(spent, 2);
+    }
+
+    #[test]
+    fn a_fleet_call_over_the_per_call_ceiling_runs_on_nobody() {
+        let (mut s, _dir, _ledger) = mixed_fleet_server();
+        let mut vault = (*s.vault()).clone();
+        vault.budgets.max_hosts_per_call = 1;
+        s = KinoMcpServer::with_audit(
+            vault,
+            crate::mcp_audit::AuditLog::new(_dir.path().join("a2.enc"), [3u8; 32]),
+        )
+        .counting_in(_dir.path().join("b2.enc"), [3u8; 32])
+        .asking_at("/nonexistent/kino-test-approval.sock".into());
+
+        let body = text(
+            &tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(s.fleet_exec(Parameters(FleetParams {
+                    target: Target::default(),
+                    command: "uptime".into(),
+                    timeout_secs: Some(5),
+                    reason: None,
+                    ticket: None,
+                })))
+                .unwrap(),
+        );
+        assert!(body.contains("budget_exhausted"), "{body}");
+        assert!(body.contains("hosts per call"), "{body}");
+    }
+
+    #[test]
+    fn resolving_a_target_touches_nothing() {
+        let (s, _dir, _ledger) = mixed_fleet_server();
+        let body = text(
+            &tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(s.fleet_resolve(Parameters(TargetParams {
+                    target: Target::default(),
+                })))
+                .unwrap(),
+        );
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["count"], 2);
+        // The access mode is part of the answer: an assistant should know
+        // which of these would refuse before it tries.
+        let modes: Vec<&str> = v["hosts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["access"].as_str().unwrap())
+            .collect();
+        assert!(
+            modes.contains(&"read_only") && modes.contains(&"full"),
+            "{v:#}"
+        );
+    }
+
+    #[test]
+    fn a_fleet_call_is_stopped_by_the_halt_like_any_other() {
+        let (s, _dir, _ledger) = mixed_fleet_server();
+        crate::mcp_budget::set_halted(&s.halt_file, true).unwrap();
+        let body = text(
+            &tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(s.fleet_exec(Parameters(FleetParams {
+                    target: Target::default(),
+                    command: "uptime".into(),
+                    timeout_secs: Some(5),
+                    reason: None,
+                    ticket: None,
+                })))
+                .unwrap(),
+        );
+        assert!(body.contains("\"error\": \"halted\""), "{body}");
     }
 
     // ── Stopping, and the hour's ceiling (KR-11-F1..F4) ─────────────────────
