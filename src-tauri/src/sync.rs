@@ -150,6 +150,36 @@ impl SyncConfig {
     }
 }
 
+/// What is missing before this config can be used, in the words the user
+/// needs to hear. `None` means it is ready.
+///
+/// A function rather than a condition at the call site: restore and save both
+/// check it, and a folder restore was rejected with "enter the repo owner,
+/// name, and a token" because the GitHub check ran for every provider.
+pub fn missing_settings(config: &SyncConfig) -> Option<String> {
+    match config.provider.as_str() {
+        "folder" => config
+            .folder
+            .trim()
+            .is_empty()
+            .then(|| "Pick a folder to sync through.".to_string()),
+        _ => (config.token.is_empty() || config.owner.is_empty() || config.repo.is_empty())
+            .then(|| "Enter the repo owner, name, and a token.".to_string()),
+    }
+}
+
+/// Where the vault would have been, for a "nothing there" message that names
+/// the place the user is actually looking at.
+pub fn nothing_found(config: &SyncConfig) -> String {
+    match config.provider.as_str() {
+        "folder" => format!(
+            "No vault.enc in {}. Sync from your other device first, or check the folder.",
+            config.folder
+        ),
+        _ => "No vault found in that repo - push from your other device first.".to_string(),
+    }
+}
+
 // ── Backend abstraction ───────────────────────────────────────────────────────
 
 pub struct RemoteBlob {
@@ -323,6 +353,46 @@ pub fn is_conflict(err: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn folder_cfg(dir: &str) -> SyncConfig {
+        SyncConfig {
+            provider: "folder".into(),
+            folder: dir.into(),
+            token: String::new(),
+            owner: String::new(),
+            repo: String::new(),
+            ..cfg("vault.enc")
+        }
+    }
+
+    #[test]
+    fn a_folder_restore_does_not_ask_for_a_repo() {
+        // It used to: the GitHub check ran for every provider, so restoring
+        // on a new machine from a folder was refused outright.
+        assert_eq!(missing_settings(&folder_cfg("/home/me/Dropbox/Kino")), None);
+    }
+
+    #[test]
+    fn a_folder_with_no_folder_says_which_thing_is_missing() {
+        let missing = missing_settings(&folder_cfg("   ")).unwrap();
+        assert!(missing.contains("folder"), "{missing}");
+        assert!(!missing.contains("token"), "{missing}");
+    }
+
+    #[test]
+    fn github_still_needs_its_three_things() {
+        let mut c = cfg("vault.enc");
+        c.token = String::new();
+        assert!(missing_settings(&c).unwrap().contains("token"));
+        assert_eq!(missing_settings(&cfg("vault.enc")), None);
+    }
+
+    #[test]
+    fn an_empty_folder_names_the_folder_rather_than_a_repo() {
+        let message = nothing_found(&folder_cfg("/home/me/Dropbox/Kino"));
+        assert!(message.contains("/home/me/Dropbox/Kino"), "{message}");
+        assert!(!message.contains("repo"), "{message}");
+    }
 
     fn cfg(path: &str) -> SyncConfig {
         SyncConfig {

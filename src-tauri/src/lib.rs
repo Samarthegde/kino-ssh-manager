@@ -829,14 +829,12 @@ fn sync_restore(
         shell_history_sha: None,
         last_synced_at: None,
     };
-    if cfg.token.is_empty() || cfg.owner.is_empty() || cfg.repo.is_empty() {
-        return Err("Enter the repo owner, name, and a token.".to_string());
+    if let Some(missing) = sync::missing_settings(&cfg) {
+        return Err(missing);
     }
 
     let backend = sync::backend_for(&cfg)?;
-    let blob = backend
-        .pull()?
-        .ok_or("No vault found in that repo - push from your other device first.")?;
+    let blob = backend.pull()?.ok_or_else(|| sync::nothing_found(&cfg))?;
 
     let path = vault::vault_path();
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
