@@ -6161,6 +6161,16 @@ textarea.mono,
 .mcp-health-row { justify-content: space-between; max-width: 420px; }
 .mcp-health-row select { width: 200px; }
 
+.unlock-restore-from { display: flex; gap: 6px; margin-bottom: 10px; justify-content: center; }
+
+/* Sync provider choice: two options, each saying what it costs you. */
+.sync-providers { display: flex; flex-direction: column; gap: 10px; }
+.sync-provider { display: flex; align-items: flex-start; gap: 9px; cursor: pointer; }
+.sync-provider > span { display: flex; flex-direction: column; gap: 2px; }
+.sync-provider .hint-inline { font-size: 11px; }
+.sync-folder-row { display: flex; gap: 8px; align-items: center; }
+.sync-folder-row input { flex: 1; }
+
 /* Interface zoom: two steps and the number between them, so it reads as one
  * control rather than three buttons that happen to sit together. */
 .ui-scale { display: flex; align-items: center; gap: 6px; }

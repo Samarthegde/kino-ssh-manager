@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useVaultStore, isAutoSyncEnabled, setAutoSyncEnabled } from "../store";
 
 interface Props {
@@ -15,6 +16,8 @@ type Status =
 export function SyncModal({ onClose }: Props) {
   const { syncGetConfig, syncSetConfig, syncTest, syncPush, syncPull } = useVaultStore();
 
+  const [provider, setProvider] = useState("github");
+  const [folder, setFolder] = useState("");
   const [owner, setOwner] = useState("");
   const [repo, setRepo] = useState("");
   const [path, setPath] = useState("vault.enc");
@@ -32,6 +35,8 @@ export function SyncModal({ onClose }: Props) {
     syncGetConfig()
       .then((cfg) => {
         if (!cfg) return;
+        setProvider(cfg.provider || "github");
+        setFolder(cfg.folder || "");
         setOwner(cfg.owner);
         setRepo(cfg.repo);
         setPath(cfg.path || "vault.enc");
@@ -42,11 +47,22 @@ export function SyncModal({ onClose }: Props) {
       .catch((e) => setStatus({ kind: "error", msg: String(e) }));
   }, [syncGetConfig]);
 
-  const canSave = owner.trim() && repo.trim() && (hasToken || token.trim());
+  const isFolder = provider === "folder";
+  const canSave = isFolder
+    ? !!folder.trim()
+    : !!(owner.trim() && repo.trim() && (hasToken || token.trim()));
+
+  async function pickFolder() {
+    const picked = await open({
+      directory: true,
+      title: "Folder to sync through",
+    });
+    if (typeof picked === "string") setFolder(picked);
+  }
 
   async function persistConfig(): Promise<boolean> {
     try {
-      const view = await syncSetConfig({ token, owner, repo, path, branch });
+      const view = await syncSetConfig({ provider, token, owner, repo, path, branch, folder });
       setHasToken(view.has_token);
       setLastSynced(view.last_synced_at ?? null);
       setToken(""); // never keep the token in component state after saving
@@ -129,48 +145,106 @@ export function SyncModal({ onClose }: Props) {
 
         <div className="host-form">
           <p className="hint" style={{ marginTop: 0 }}>
-            Syncs the <strong>encrypted</strong> vault to a private GitHub repo. Your master
-            password and credentials never leave this device. Use the same master password on
-            every device.
+            Syncs the <strong>encrypted</strong> vault. Your master password and credentials
+            never leave this device - the other end only ever holds ciphertext. Use the same
+            master password on every device.
           </p>
 
-          <div className="form-row two-col">
-            <div>
-              <label>Owner (user / org)</label>
-              <input value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="your-username" />
-            </div>
-            <div>
-              <label>Repository</label>
-              <input value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="ssh-vault" />
-            </div>
-          </div>
-
-          <div className="form-row two-col">
-            <div>
-              <label>File path</label>
-              <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="vault.enc" />
-            </div>
-            <div>
-              <label>Branch</label>
-              <input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="main" />
-            </div>
-          </div>
-
           <div className="form-row">
-            <label>
-              Personal access token{" "}
-              <span className="hint-inline">
-                {hasToken ? "(saved - leave blank to keep)" : "(fine-grained, Contents: read & write)"}
-              </span>
-            </label>
-            <input
-              type="password"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              placeholder={hasToken ? "••••••••••••" : "github_pat_…"}
-              autoComplete="off"
-            />
+            <label>Sync through</label>
+            <div className="sync-providers">
+              <label className="sync-provider">
+                <input
+                  type="radio"
+                  checked={!isFolder}
+                  onChange={() => setProvider("github")}
+                />
+                <span>
+                  <strong>A private GitHub repo</strong>
+                  <span className="hint-inline">Needs a token. Detects conflicts properly.</span>
+                </span>
+              </label>
+              <label className="sync-provider">
+                <input
+                  type="radio"
+                  checked={isFolder}
+                  onChange={() => setProvider("folder")}
+                />
+                <span>
+                  <strong>A folder</strong>
+                  <span className="hint-inline">
+                    One that Dropbox, Syncthing, iCloud Drive, OneDrive or a network share
+                    already syncs. No account, no token.
+                  </span>
+                </span>
+              </label>
+            </div>
           </div>
+
+          {isFolder ? (
+            <>
+              <div className="form-row">
+                <label>Folder</label>
+                <div className="sync-folder-row">
+                  <input
+                    value={folder}
+                    onChange={(e) => setFolder(e.target.value)}
+                    placeholder="~/Dropbox/Kino"
+                  />
+                  <button className="btn btn-sm" onClick={() => void pickFolder()}>
+                    Choose…
+                  </button>
+                </div>
+              </div>
+              <p className="hint">
+                Kino writes <span className="mono">vault.enc</span> and its sibling files there,
+                and whatever you already use carries them to your other machines. Two devices
+                writing in the same moment is the one case this cannot detect - the vault is
+                only read when you unlock and written when you change something, so it takes
+                some doing, and your sync tool will usually keep both copies if it happens.
+              </p>
+            </>
+          ) : (
+            <>
+              <div className="form-row two-col">
+                <div>
+                  <label>Owner (user / org)</label>
+                  <input value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="your-username" />
+                </div>
+                <div>
+                  <label>Repository</label>
+                  <input value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="ssh-vault" />
+                </div>
+              </div>
+
+              <div className="form-row two-col">
+                <div>
+                  <label>File path</label>
+                  <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="vault.enc" />
+                </div>
+                <div>
+                  <label>Branch</label>
+                  <input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="main" />
+                </div>
+              </div>
+
+              <div className="form-row">
+                <label>
+                  Personal access token{" "}
+                  <span className="hint-inline">
+                    {hasToken ? "(saved - leave blank to keep)" : "(fine-grained, Contents: read & write)"}
+                  </span>
+                </label>
+                <input
+                  type="password"
+                  value={token}
+                  onChange={(e) => setToken(e.target.value)}
+                  placeholder={hasToken ? "••••••••••••" : "github_pat_…"}
+                  autoComplete="off"
+                />
+              </div>
+            </>
+          )}
 
           {lastSynced && (
             <p className="hint">Last synced: {new Date(lastSynced * 1000).toLocaleString()}</p>

@@ -15,7 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Sentinel error string meaning "remote moved under us - don't clobber".
 /// Commands translate this into a structured outcome for the frontend.
-const CONFLICT: &str = "__SYNC_CONFLICT__";
+pub const CONFLICT: &str = "__SYNC_CONFLICT__";
 
 pub fn now_secs() -> u64 {
     SystemTime::now()
@@ -31,7 +31,7 @@ pub fn now_secs() -> u64 {
 /// device-local: each device is configured once with its own copy.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SyncConfig {
-    /// Currently only "github".
+    /// `github`, or `folder` for a directory something else syncs.
     pub provider: String,
     pub token: String,
     pub owner: String,
@@ -39,6 +39,9 @@ pub struct SyncConfig {
     /// Path of the blob within the repo, e.g. "vault.enc".
     pub path: String,
     pub branch: String,
+    /// For the folder provider: the directory to write the blobs into.
+    #[serde(default)]
+    pub folder: String,
     /// Blob sha we last successfully synced - our optimistic-concurrency token.
     #[serde(default)]
     pub last_sha: Option<String>,
@@ -87,6 +90,8 @@ pub fn shell_history_remote_path(config: &SyncConfig) -> String {
 pub struct SyncConfigView {
     pub configured: bool,
     pub provider: String,
+    /// Where the folder provider writes. Empty for github.
+    pub folder: String,
     pub owner: String,
     pub repo: String,
     pub path: String,
@@ -99,11 +104,15 @@ pub struct SyncConfigView {
 /// "keep the existing one" so the user doesn't have to retype it.
 #[derive(Deserialize)]
 pub struct SyncConfigInput {
+    /// `github` or `folder`. Absent means github, which is what every
+    /// existing install has.
+    pub provider: Option<String>,
     pub token: String,
     pub owner: String,
     pub repo: String,
     pub path: Option<String>,
     pub branch: Option<String>,
+    pub folder: Option<String>,
 }
 
 pub fn config_path() -> PathBuf {
@@ -125,8 +134,12 @@ pub fn save_config(config: &SyncConfig, key: &[u8; 32], salt: &[u8; 16]) -> Resu
 impl SyncConfig {
     pub fn view(&self) -> SyncConfigView {
         SyncConfigView {
-            configured: !self.owner.is_empty() && !self.repo.is_empty() && !self.token.is_empty(),
+            configured: match self.provider.as_str() {
+                "folder" => !self.folder.is_empty(),
+                _ => !self.owner.is_empty() && !self.repo.is_empty() && !self.token.is_empty(),
+            },
             provider: self.provider.clone(),
+            folder: self.folder.clone(),
             owner: self.owner.clone(),
             repo: self.repo.clone(),
             path: self.path.clone(),
@@ -164,6 +177,10 @@ pub fn backend_for(config: &SyncConfig) -> Result<Box<dyn SyncBackend>, String> 
 pub fn backend_for_path(config: &SyncConfig, path: String) -> Result<Box<dyn SyncBackend>, String> {
     match config.provider.as_str() {
         "github" | "" => Ok(Box::new(GitHubBackend::for_path(config, path))),
+        "folder" => Ok(Box::new(crate::sync_folder::FolderBackend::new(
+            config.folder.clone(),
+            path,
+        ))),
         other => Err(format!("Unknown sync provider: {}", other)),
     }
 }
@@ -315,6 +332,7 @@ mod tests {
             repo: "vault".into(),
             path: path.into(),
             branch: "main".into(),
+            folder: String::new(),
             last_sha: None,
             history_sha: None,
             notes_sha: None,

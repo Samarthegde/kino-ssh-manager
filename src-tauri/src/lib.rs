@@ -38,6 +38,7 @@ mod snippets;
 mod ssh_config;
 mod ssh_session;
 mod sync;
+pub mod sync_folder;
 mod update;
 mod vault;
 
@@ -484,8 +485,17 @@ fn sync_set_config(
         config.token.trim().to_string()
     };
 
+    // A folder needs checking while the user is still looking at the
+    // setting; a sync that fails tomorrow is a worse way to find out.
+    let provider = config.provider.clone().unwrap_or_else(|| "github".into());
+    let folder = config.folder.clone().unwrap_or_default().trim().to_string();
+    if provider == "folder" {
+        sync_folder::check(&folder)?;
+    }
+
     let merged = sync::SyncConfig {
-        provider: "github".to_string(),
+        provider: provider.clone(),
+        folder: folder.clone(),
         token,
         owner: config.owner.trim().to_string(),
         repo: config.repo.trim().to_string(),
@@ -784,8 +794,15 @@ fn sync_restore(
     config: sync::SyncConfigInput,
     password: String,
 ) -> Result<Vec<Host>, String> {
+    let provider = config.provider.clone().unwrap_or_else(|| "github".into());
+    let folder = config.folder.clone().unwrap_or_default().trim().to_string();
+    if provider == "folder" {
+        sync_folder::check(&folder)?;
+    }
+
     let mut cfg = sync::SyncConfig {
-        provider: "github".to_string(),
+        provider: provider.clone(),
+        folder: folder.clone(),
         token: config.token.trim().to_string(),
         owner: config.owner.trim().to_string(),
         repo: config.repo.trim().to_string(),

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useVaultStore } from "../store";
 import { getVersion } from "@tauri-apps/api/app";
+import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ReleaseNote, notesFor, shouldShowNotes } from "../releaseNotes";
 import { WhatsNew } from "./WhatsNew";
@@ -17,6 +18,8 @@ export function Unlock() {
   const [mode, setMode] = useState<"vault" | "restore">("vault");
 
   // Restore-from-cloud fields
+  const [restoreFrom, setRestoreFrom] = useState("github");
+  const [folder, setFolder] = useState("");
   const [owner, setOwner] = useState("");
   const [repo, setRepo] = useState("");
   const [path, setPath] = useState("vault.enc");
@@ -62,13 +65,25 @@ export function Unlock() {
     }
   }
 
+  async function pickFolder() {
+    const picked = await open({ directory: true, title: "Folder holding your vault" });
+    if (typeof picked === "string") setFolder(picked);
+  }
+
   async function handleRestore(e: React.FormEvent) {
     e.preventDefault();
-    if (!owner.trim() || !repo.trim() || !token.trim() || !password) return;
+    const ready =
+      restoreFrom === "folder"
+        ? folder.trim() && password
+        : owner.trim() && repo.trim() && token.trim() && password;
+    if (!ready) return;
     setLoading(true);
     setError("");
     try {
-      await syncRestore({ token, owner, repo, path, branch }, password);
+      await syncRestore(
+        { provider: restoreFrom, token, owner, repo, path, branch, folder },
+        password
+      );
     } catch (err: any) {
       setError(err?.message || String(err));
     } finally {
@@ -173,10 +188,41 @@ export function Unlock() {
         ) : (
           <>
             <p className="unlock-subtitle">
-              Pull your vault from a private GitHub repo. Use the same master password as your
-              other device.
+              Pull your vault from wherever your other device syncs it. Use the same master
+              password as that device.
             </p>
+            <div className="unlock-restore-from">
+              <button
+                type="button"
+                className={`audit-tab ${restoreFrom === "github" ? "on" : ""}`}
+                onClick={() => setRestoreFrom("github")}
+              >
+                GitHub repo
+              </button>
+              <button
+                type="button"
+                className={`audit-tab ${restoreFrom === "folder" ? "on" : ""}`}
+                onClick={() => setRestoreFrom("folder")}
+              >
+                A folder
+              </button>
+            </div>
             <form onSubmit={handleRestore}>
+              {restoreFrom === "folder" ? (
+                <div className="sync-folder-row">
+                  <input
+                    className="unlock-input"
+                    placeholder="Folder holding vault.enc"
+                    value={folder}
+                    onChange={(e) => setFolder(e.target.value)}
+                    autoFocus
+                  />
+                  <button type="button" className="btn btn-sm" onClick={() => void pickFolder()}>
+                    Choose…
+                  </button>
+                </div>
+              ) : (
+              <>
               <div className="form-row two-col">
                 <input
                   className="unlock-input"
@@ -214,6 +260,8 @@ export function Unlock() {
                 onChange={(e) => setToken(e.target.value)}
                 autoComplete="off"
               />
+              </>
+              )}
               <input
                 type="password"
                 className="unlock-input"

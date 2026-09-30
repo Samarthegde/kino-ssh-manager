@@ -585,7 +585,9 @@ export interface HistoryEvent {
 
 export interface SyncConfigView {
   configured: boolean;
+  /** "github", or "folder" for a directory another tool syncs. */
   provider: string;
+  folder: string;
   owner: string;
   repo: string;
   path: string;
@@ -595,11 +597,14 @@ export interface SyncConfigView {
 }
 
 export interface SyncConfigInput {
+  provider?: string;
   token: string;
   owner: string;
   repo: string;
   path?: string;
   branch?: string;
+  /** Where the folder provider writes. */
+  folder?: string;
 }
 
 export type PushOutcome =
