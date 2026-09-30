@@ -18,6 +18,7 @@ mod local_session;
 pub mod mcp;
 pub mod mcp_approval;
 pub mod mcp_audit;
+pub mod mcp_backup;
 mod mcp_binary;
 pub mod mcp_budget;
 pub mod mcp_config;

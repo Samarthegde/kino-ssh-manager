@@ -7,6 +7,14 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 ## [Unreleased]
 
 ### Added
+- **Every write an assistant makes can be undone.** Before `sftp_write` or a
+  fleet write replaces a file, the previous version is kept on the host -
+  five per path, `0600`, in the SSH user's own home rather than `/tmp`.
+  `restore_file` puts one back with its mode, or lists what is kept. A file
+  that did not exist before the write leaves a marker, so undoing it deletes
+  the file. The copy and the write are one script, so a dropped connection
+  cannot leave a file replaced with nothing to restore.
+- **`fleet_write` and `fleet_snippet_run`**, both as rollouts.
 - **Staged rollouts for fleet-wide changes.** `rollout_start` changes one host
   first, runs its health check, and stops there; `rollout_continue` asks for
   the next batch. A failed canary stops everything, as does crossing the

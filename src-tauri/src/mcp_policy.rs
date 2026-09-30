@@ -73,6 +73,9 @@ pub fn capability(tool: &str) -> Capability {
         // worth answering.
         "rollout_status" | "rollout_abort" => Capability::Metadata,
         "rollout_start" | "rollout_continue" => Capability::Write,
+        // Putting a file back is a write, and goes through the same rules as
+        // the write that made the backup.
+        "restore_file" | "fleet_write" | "fleet_snippet_run" => Capability::Write,
         "sftp_list" | "sftp_read" | "check_drift" => Capability::Read,
         // A fleet command is still a command: what it does is unknowable from
         // here, so it is classed by what it *could* do, like ssh_exec.

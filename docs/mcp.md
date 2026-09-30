@@ -150,6 +150,22 @@ this snippet with a copy button.
   vault, mode `0600`, so another user on the machine cannot answer for you.
   Windows has no channel yet: there, a guarded call is still refused, with a
   message saying so.
+- **A write keeps what it replaced.** Before any `sftp_write` or fleet write,
+  the previous version of the file is copied on the host to
+  `~/.kino/backups/<hash of the path>/<timestamp>.<mode>`, `0600` in a `0700`
+  directory, five versions per path. `restore_file` puts one back, mode and
+  all, and `list_only: true` shows what is kept without changing anything. If
+  the file did not exist before the write, a marker records that, and
+  restoring it deletes the file - which is the correct undo for a file the
+  assistant created.
+
+  The copy and the write are one script, so a connection that drops between
+  them cannot leave a file replaced with nothing to put back. Restoring is a
+  write and goes through the same rules as the write that made the backup.
+  **Not `/tmp`**: world-readable, cleared on reboot, and one fixed name would
+  mean the second write destroyed the copy taken before the first.
+- **`fleet_write` and `fleet_snippet_run`** are rollouts like any other
+  change: one host, a health check, then batches.
 - **A fleet-wide change runs as a rollout.** `rollout_start` changes one host,
   runs its health check, and stops there; `rollout_continue` asks for the next
   batch, 10% of what is left by default. The canary failing, or its health

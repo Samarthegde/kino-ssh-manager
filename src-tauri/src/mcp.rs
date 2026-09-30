@@ -6,6 +6,7 @@
 
 use crate::mcp_approval::{self, ApprovalRequest, Verdict};
 use crate::mcp_audit::{AuditLog, AuditRecord};
+use crate::mcp_backup;
 use crate::mcp_budget::{self, Ledger, Refusal, Spend};
 use crate::mcp_config::McpVault;
 use crate::mcp_fleet::{self, FileState, HostOutcome, HostResult, Target};
@@ -610,6 +611,87 @@ impl KinoMcpServer {
         }
     }
 
+    /// Plan a rollout, run its canary, and hand back the report.
+    ///
+    /// One path for `rollout_start`, `fleet_write` and `fleet_snippet_run`:
+    /// three ways in that behaved differently would be three chances for one
+    /// of them to skip the canary.
+    async fn start_rollout_with(
+        &self,
+        target: Target,
+        action: Action,
+        reason: Option<String>,
+        ticket: Option<String>,
+    ) -> Result<CallToolResult, McpError> {
+        let started = Instant::now();
+        if self.refresh().is_err() {
+            return Ok(vault_unreadable());
+        }
+        let vault = self.vault();
+        let hosts = match mcp_fleet::resolve(&vault.hosts, &target) {
+            Ok(hosts) => hosts,
+            Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(e)])),
+        };
+        let policy = vault.fleet.clone();
+        let stages = match mcp_rollout::plan(&hosts, &policy) {
+            Ok(stages) => stages,
+            Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(e)])),
+        };
+
+        // Only the canary is spent here; each stage pays for itself as it runs.
+        if let Some(stop) =
+            self.before_call_spending("rollout_start", started, Spend::Change { hosts: 1 })
+        {
+            return Ok(stop);
+        }
+
+        // The labels belong to the change, so they are recorded against every
+        // host the rollout touches rather than only the first.
+        self.record(
+            "rollout_start",
+            None,
+            action.argument(),
+            started,
+            Outcome {
+                reason: label(&reason),
+                ticket: label(&ticket),
+                ..Outcome::allowed()
+            },
+        );
+
+        let id = uuid::Uuid::new_v4().to_string();
+        {
+            let mut rollouts = match self.rollouts.lock() {
+                Ok(r) => r,
+                Err(e) => e.into_inner(),
+            };
+            mcp_rollout::expire(&mut rollouts, std::time::Instant::now());
+            rollouts.insert(
+                id.clone(),
+                Rollout {
+                    id: id.clone(),
+                    action,
+                    stages,
+                    stage_index: 0,
+                    results: vec![],
+                    excluded: mcp_rollout::excluded(&hosts, &policy),
+                    stopped: None,
+                    last_touched: std::time::Instant::now(),
+                    unchecked: true,
+                },
+            );
+        }
+
+        match self.advance(&id, started).await {
+            Some(report) => Ok(CallToolResult::success(vec![ContentBlock::text(
+                serde_json::to_string_pretty(&report).unwrap_or_default(),
+            )])),
+            None => Ok(CallToolResult::error(vec![ContentBlock::text(
+                "The rollout could not be started.".to_string(),
+            )])),
+        }
+    }
+
     /// Run the next stage of `id`, and judge it (KR-11-F9..F12).
     ///
     /// Everything that can stop a rollout is checked here rather than at the
@@ -750,12 +832,12 @@ impl KinoMcpServer {
             Action::Snippet { commands, .. } => commands.clone(),
             Action::Write { path, content } => {
                 use base64::{engine::general_purpose::STANDARD, Engine};
-                // Base64 for the same reason sftp_write uses it: content that
-                // contains the heredoc marker would otherwise become shell.
-                format!(
-                    "printf '%s' '{}' | base64 -d > {}",
-                    STANDARD.encode(content.as_bytes()),
-                    crate::exec::shell_quote(path)
+                // Base64, and a backup first, for the same reasons as
+                // sftp_write - a rollout is where an undo matters most.
+                mcp_backup::backup_then_write(
+                    path,
+                    &STANDARD.encode(content.as_bytes()),
+                    now_ms() / 1000,
                 )
             }
         };
@@ -1325,6 +1407,47 @@ pub struct RolloutStartParams {
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct RestoreParams {
+    #[schemars(description = "Host name or ID")]
+    pub host: String,
+    #[schemars(description = "The path that was written to")]
+    pub path: String,
+    #[schemars(
+        description = "Which kept version, from a previous restore_file call. Omit for the \
+                       most recent one."
+    )]
+    pub version: Option<String>,
+    #[schemars(description = "List what is kept and change nothing")]
+    pub list_only: Option<bool>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct FleetWriteParams {
+    #[schemars(description = "Which hosts. Production is excluded unless allowed in Kino.")]
+    pub target: Target,
+    #[schemars(description = "Remote file path to write on each host")]
+    pub path: String,
+    #[schemars(description = "Content to write")]
+    pub content: String,
+    #[schemars(description = "Why. Recorded in the audit log, not used to decide anything.")]
+    pub reason: Option<String>,
+    #[schemars(description = "A ticket or change reference, if there is one.")]
+    pub ticket: Option<String>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct FleetSnippetParams {
+    #[schemars(description = "Which hosts. Production is excluded unless allowed in Kino.")]
+    pub target: Target,
+    #[schemars(description = "Snippet name or ID to run on each host")]
+    pub snippet: String,
+    #[schemars(description = "Why. Recorded in the audit log, not used to decide anything.")]
+    pub reason: Option<String>,
+    #[schemars(description = "A ticket or change reference, if there is one.")]
+    pub ticket: Option<String>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct RolloutParams {
     #[schemars(description = "The rollout_id from rollout_start")]
     pub rollout_id: String,
@@ -1784,13 +1907,13 @@ impl KinoMcpServer {
         // arbitrary command execution on a production host, from content an
         // assistant may not even have authored. Base64's alphabet cannot
         // terminate the quoting, so there is nothing to escape.
+        //
+        // The copy is taken in the same script as the write (KR-11-F14), so a
+        // connection that drops between the two cannot leave a file replaced
+        // with nothing to put back.
         use base64::{engine::general_purpose::STANDARD, Engine};
         let encoded = STANDARD.encode(params.content.as_bytes());
-        let cmd = format!(
-            "printf '%s' '{}' | base64 -d > {}",
-            encoded,
-            crate::exec::shell_quote(&params.path)
-        );
+        let cmd = mcp_backup::backup_then_write(&params.path, &encoded, now_ms() / 1000);
         match ssh_session::exec_once(h, &cmd).await {
             Ok(_) => {
                 // The content's size, not the reply's: what was written is the
@@ -2103,6 +2226,181 @@ impl KinoMcpServer {
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
     }
 
+    /// Put back what a write replaced (KR-11-F14).
+    #[tool(
+        description = "Restore a file Kino backed up before an assistant wrote to it. Every \
+                       sftp_write and fleet write keeps the previous version on the host, up \
+                       to five per path. With no version, the most recent one is restored; \
+                       with list_only, nothing changes and the kept versions are listed. If \
+                       the file did not exist before the write, restoring deletes it."
+    )]
+    async fn restore_file(
+        &self,
+        Parameters(params): Parameters<RestoreParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let started = Instant::now();
+        if let Some(stop) = self.before_call("restore_file", started) {
+            return Ok(stop);
+        }
+        let found = match self.find_host(&params.host) {
+            Some(h) => h,
+            None => {
+                self.record(
+                    "restore_file",
+                    None,
+                    &params.path,
+                    started,
+                    Outcome::not_found("host not found"),
+                );
+                return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                    "Host '{}' not found.",
+                    params.host
+                ))]));
+            }
+        };
+        let h = &found;
+
+        // Listing is a read of the host's own filesystem; restoring changes
+        // it. They are gated as what they are.
+        let listing_only = params.list_only.unwrap_or(false);
+        let tool = if listing_only {
+            "sftp_list"
+        } else {
+            "sftp_write"
+        };
+        if let Some(refused) = self.gate(h, tool, &params.path, started).await {
+            return Ok(refused);
+        }
+
+        let versions = match ssh_session::exec_once_full(h, &mcp_backup::list(&params.path)).await {
+            Ok(out) => mcp_backup::parse_versions(&out.stdout),
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                    "Could not reach '{}': {e}",
+                    h.name
+                ))]))
+            }
+        };
+        if versions.is_empty() {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "Nothing is kept for {} on '{}'. Kino keeps a copy only of files it wrote.",
+                params.path, h.name
+            ))]));
+        }
+
+        if listing_only {
+            let json = serde_json::to_string_pretty(&serde_json::json!({
+                "host": h.name,
+                "path": params.path,
+                "versions": versions,
+            }))
+            .unwrap_or_default();
+            self.record(
+                "restore_file",
+                Some(h),
+                &params.path,
+                started,
+                Outcome {
+                    bytes_out: Some(json.len()),
+                    ..Outcome::allowed()
+                },
+            );
+            return Ok(CallToolResult::success(vec![ContentBlock::text(json)]));
+        }
+
+        let script = mcp_backup::restore(&params.path, params.version.as_deref());
+        match ssh_session::exec_once_full(h, &script).await {
+            Ok(out) => {
+                let ok = matches!(out.code, Some(0) | None);
+                self.record(
+                    "restore_file",
+                    Some(h),
+                    &params.path,
+                    started,
+                    Outcome {
+                        exit_code: out.code.map(|c| c as i32),
+                        error: (!ok).then(|| out.stderr.trim().to_string()),
+                        ..Outcome::allowed()
+                    },
+                );
+                let json = serde_json::to_string_pretty(&serde_json::json!({
+                    "host": h.name,
+                    "path": params.path,
+                    "restored": ok,
+                    "detail": if ok { out.stdout.trim() } else { out.stderr.trim() },
+                    "versions_kept": versions,
+                }))
+                .unwrap_or_default();
+                Ok(if ok {
+                    CallToolResult::success(vec![ContentBlock::text(json)])
+                } else {
+                    CallToolResult::error(vec![ContentBlock::text(json)])
+                })
+            }
+            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "Could not restore on '{}': {e}",
+                h.name
+            ))])),
+        }
+    }
+
+    /// Write one file across many hosts, as a rollout (KR-11-F15).
+    #[tool(
+        description = "Write the same file to every host a target names, as a rollout: one \
+                       host first, then batches. The previous version of the file is kept on \
+                       each host, so restore_file can put it back. Returns a rollout_id - use \
+                       rollout_continue for each following batch."
+    )]
+    async fn fleet_write(
+        &self,
+        Parameters(params): Parameters<FleetWriteParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.start_rollout_with(
+            params.target,
+            Action::Write {
+                path: params.path,
+                content: params.content,
+            },
+            params.reason,
+            params.ticket,
+        )
+        .await
+    }
+
+    /// Run a snippet across many hosts, as a rollout (KR-11-F15).
+    #[tool(
+        description = "Run a saved snippet on every host a target names, as a rollout: one \
+                       host first, then batches, stopping if the first one fails. Returns a \
+                       rollout_id - use rollout_continue for each following batch."
+    )]
+    async fn fleet_snippet_run(
+        &self,
+        Parameters(params): Parameters<FleetSnippetParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let vault = self.vault();
+        let lower = params.snippet.to_lowercase();
+        let Some(snippet) = vault
+            .snippets
+            .iter()
+            .find(|s| s.id == params.snippet || s.name.to_lowercase() == lower)
+        else {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "Snippet '{}' not found. Use list_snippets to see what there is.",
+                params.snippet
+            ))]));
+        };
+        self.start_rollout_with(
+            params.target,
+            Action::Snippet {
+                id: snippet.name.clone(),
+                commands: snippet.commands.clone(),
+            },
+            params.reason,
+            params.ticket,
+        )
+        .await
+    }
+
     /// Begin a staged change: one host, then a check, then batches.
     #[tool(
         description = "Start a staged change across many hosts: one canary host first, then \
@@ -2117,7 +2415,8 @@ impl KinoMcpServer {
         &self,
         Parameters(params): Parameters<RolloutStartParams>,
     ) -> Result<CallToolResult, McpError> {
-        let started = Instant::now();
+        // The clock starts in `start_rollout_with`, which is where the work
+        // is; this only works out which action was asked for.
         if self.refresh().is_err() {
             return Ok(vault_unreadable());
         }
@@ -2162,54 +2461,8 @@ impl KinoMcpServer {
             }
         };
 
-        let hosts = match mcp_fleet::resolve(&vault.hosts, &params.target) {
-            Ok(hosts) => hosts,
-            Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(e)])),
-        };
-        let policy = vault.fleet.clone();
-        let stages = match mcp_rollout::plan(&hosts, &policy) {
-            Ok(stages) => stages,
-            Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(e)])),
-        };
-
-        // Only the canary is spent here; each stage pays for itself as it runs.
-        if let Some(stop) =
-            self.before_call_spending("rollout_start", started, Spend::Change { hosts: 1 })
-        {
-            return Ok(stop);
-        }
-
-        let id = uuid::Uuid::new_v4().to_string();
-        {
-            let mut rollouts = match self.rollouts.lock() {
-                Ok(r) => r,
-                Err(e) => e.into_inner(),
-            };
-            mcp_rollout::expire(&mut rollouts, std::time::Instant::now());
-            rollouts.insert(
-                id.clone(),
-                Rollout {
-                    id: id.clone(),
-                    action,
-                    stages,
-                    stage_index: 0,
-                    results: vec![],
-                    excluded: mcp_rollout::excluded(&hosts, &policy),
-                    stopped: None,
-                    last_touched: std::time::Instant::now(),
-                    unchecked: true,
-                },
-            );
-        }
-
-        match self.advance(&id, started).await {
-            Some(report) => Ok(CallToolResult::success(vec![ContentBlock::text(
-                serde_json::to_string_pretty(&report).unwrap_or_default(),
-            )])),
-            None => Ok(CallToolResult::error(vec![ContentBlock::text(
-                "The rollout could not be started.".to_string(),
-            )])),
-        }
+        self.start_rollout_with(params.target, action, params.reason, params.ticket)
+            .await
     }
 
     /// The next batch, if the last one was good enough.
@@ -2622,6 +2875,127 @@ mod tests {
         // be opened: recording is best effort, refusing calls is not.
         let r = exec(&server(McpMode::ReadOnly, ""), "uptime");
         assert_eq!(r.is_error, Some(true));
+    }
+
+    // ── Undo, and the two fleet actions (KR-11-F14, F15) ────────────────────
+
+    #[test]
+    fn a_write_takes_a_copy_before_it_replaces_anything() {
+        // The script sftp_write sends has to carry the backup with it: two
+        // separate calls could be split by a dropped connection, and the
+        // half that survived would be the destructive one.
+        let script = crate::mcp_backup::backup_then_write("/etc/app.conf", "eA==", 1);
+        let copy = script.find("cp -p").unwrap();
+        let write = script.rfind("base64 -d >").unwrap();
+        assert!(copy < write, "{script}");
+    }
+
+    #[test]
+    fn restoring_is_a_write_and_is_gated_as_one() {
+        // A read-only host refuses it, the same as it refuses the write that
+        // would have made the backup.
+        let (s, _dir, _path) = recording_server(McpMode::ReadOnly, "");
+        let body = text(
+            &tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(s.restore_file(Parameters(RestoreParams {
+                    host: "web-prod".into(),
+                    path: "/etc/app.conf".into(),
+                    version: None,
+                    list_only: Some(false),
+                })))
+                .unwrap(),
+        );
+        assert!(body.contains("policy_denied"), "{body}");
+    }
+
+    #[test]
+    fn listing_what_is_kept_is_only_a_read() {
+        // Read-only hosts allow listings, so asking what could be restored
+        // should not need write access.
+        let (s, _dir, _path) = recording_server(McpMode::ReadOnly, "allow *");
+        let body = text(
+            &tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(s.restore_file(Parameters(RestoreParams {
+                    host: "web-prod".into(),
+                    path: "/etc/app.conf".into(),
+                    version: None,
+                    list_only: Some(true),
+                })))
+                .unwrap(),
+        );
+        // Port 1 refuses, so it gets as far as the network: past the gate.
+        assert!(!body.contains("policy_denied"), "{body}");
+        assert!(body.contains("Could not reach"), "{body}");
+    }
+
+    #[test]
+    fn a_fleet_write_is_a_rollout_not_a_broadcast() {
+        let (s, _dir) = rollout_server(fleet_of(6, Some("staging")));
+        let body = text(
+            &rt()
+                .block_on(s.fleet_write(Parameters(FleetWriteParams {
+                    target: Target::default(),
+                    path: "/etc/app.conf".into(),
+                    content: "hello".into(),
+                    reason: None,
+                    ticket: None,
+                })))
+                .unwrap(),
+        );
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["results"].as_array().unwrap().len(), 1, "one host: {v:#}");
+        assert!(v["rollout_id"].is_string());
+        assert!(v["action"].as_str().unwrap().contains("/etc/app.conf"));
+    }
+
+    #[test]
+    fn a_fleet_snippet_run_is_a_rollout_too() {
+        let mut hosts = fleet_of(4, Some("staging"));
+        hosts[0].id = "h0".into();
+        let (s, _dir) = rollout_server(hosts);
+        let mut vault = (*s.vault()).clone();
+        vault.snippets = vec![crate::snippets::Snippet {
+            id: "s1".into(),
+            name: "deploy".into(),
+            commands: "systemctl restart app".into(),
+        }];
+        let s = KinoMcpServer::new(vault).asking_at("/nonexistent/x.sock".into());
+
+        let body = text(
+            &rt()
+                .block_on(s.fleet_snippet_run(Parameters(FleetSnippetParams {
+                    target: Target::default(),
+                    snippet: "deploy".into(),
+                    reason: None,
+                    ticket: None,
+                })))
+                .unwrap(),
+        );
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["results"].as_array().unwrap().len(), 1, "{v:#}");
+        assert!(v["action"].as_str().unwrap().contains("deploy"), "{v:#}");
+    }
+
+    #[test]
+    fn a_fleet_snippet_run_needs_a_snippet_that_exists() {
+        let (s, _dir) = rollout_server(fleet_of(2, Some("staging")));
+        let body = text(
+            &rt()
+                .block_on(s.fleet_snippet_run(Parameters(FleetSnippetParams {
+                    target: Target::default(),
+                    snippet: "nope".into(),
+                    reason: None,
+                    ticket: None,
+                })))
+                .unwrap(),
+        );
+        assert!(body.contains("not found"), "{body}");
     }
 
     // ── Rolling a change out (KR-11-F9..F13) ────────────────────────────────
