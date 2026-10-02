@@ -7,6 +7,8 @@
 No account, no cloud, no telemetry. Free and open source under the GPL.
 [![Kino SSH Manager | AlternativeTo](https://alternativeto.net/static/badges/badge-wide-light.svg)](https://alternativeto.net/software/kino-ssh-manager/about/?utm_source=badge&utm_medium=referral)
 
+[![Listed on MCP Market](https://mcpmarket.com/badge/server/kino-ssh-manager.svg)](https://mcpmarket.com/server/kino-ssh-manager?utm_source=readme&utm_medium=badge)
+
 [**Website**](https://samarthegde.github.io/kino-ssh-manager/) · [Releases](https://github.com/Samarthegde/kino-ssh-manager/releases) · [Security](SECURITY.md)
 
 </div>
