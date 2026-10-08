@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
 import { useVaultStore, isAutoSyncEnabled, setAutoSyncEnabled } from "../store";
 
 interface Props {
@@ -14,7 +13,8 @@ type Status =
   | { kind: "conflict" };
 
 export function SyncModal({ onClose }: Props) {
-  const { syncGetConfig, syncSetConfig, syncTest, syncPush, syncPull } = useVaultStore();
+  const { syncGetConfig, syncSetConfig, syncTest, syncPush, syncPull, syncFolderPath } =
+    useVaultStore();
 
   const [provider, setProvider] = useState("github");
   const [folder, setFolder] = useState("");
@@ -32,11 +32,14 @@ export function SyncModal({ onClose }: Props) {
   const [autoSync, setAutoSync] = useState(isAutoSyncEnabled());
 
   useEffect(() => {
+    syncFolderPath().then(setFolder).catch(() => {});
+  }, [syncFolderPath]);
+
+  useEffect(() => {
     syncGetConfig()
       .then((cfg) => {
         if (!cfg) return;
         setProvider(cfg.provider || "github");
-        setFolder(cfg.folder || "");
         setOwner(cfg.owner);
         setRepo(cfg.repo);
         setPath(cfg.path || "vault.enc");
@@ -49,20 +52,12 @@ export function SyncModal({ onClose }: Props) {
 
   const isFolder = provider === "folder";
   const canSave = isFolder
-    ? !!folder.trim()
+    ? true
     : !!(owner.trim() && repo.trim() && (hasToken || token.trim()));
-
-  async function pickFolder() {
-    const picked = await open({
-      directory: true,
-      title: "Folder to sync through",
-    });
-    if (typeof picked === "string") setFolder(picked);
-  }
 
   async function persistConfig(): Promise<boolean> {
     try {
-      const view = await syncSetConfig({ provider, token, owner, repo, path, branch, folder });
+      const view = await syncSetConfig({ provider, token, owner, repo, path, branch });
       setHasToken(view.has_token);
       setLastSynced(view.last_synced_at ?? null);
       setToken(""); // never keep the token in component state after saving
@@ -171,10 +166,10 @@ export function SyncModal({ onClose }: Props) {
                   onChange={() => setProvider("folder")}
                 />
                 <span>
-                  <strong>A folder</strong>
+                  <strong>A folder in Documents</strong>
                   <span className="hint-inline">
-                    One that Dropbox, Syncthing, iCloud Drive, OneDrive or a network share
-                    already syncs. No account, no token.
+                    Carried by whatever already syncs your Documents - OneDrive, iCloud Drive,
+                    Dropbox, Syncthing. No account, no token.
                   </span>
                 </span>
               </label>
@@ -185,23 +180,18 @@ export function SyncModal({ onClose }: Props) {
             <>
               <div className="form-row">
                 <label>Folder</label>
-                <div className="sync-folder-row">
-                  <input
-                    value={folder}
-                    onChange={(e) => setFolder(e.target.value)}
-                    placeholder="~/Dropbox/Kino"
-                  />
-                  <button className="btn btn-sm" onClick={() => void pickFolder()}>
-                    Choose…
-                  </button>
-                </div>
+                <p className="sync-folder-path mono">{folder || "Documents/ssh-manager"}</p>
               </div>
               <p className="hint">
-                Kino writes <span className="mono">vault.enc</span> and its sibling files there,
-                and whatever you already use carries them to your other machines. Two devices
-                writing in the same moment is the one case this cannot detect - the vault is
-                only read when you unlock and written when you change something, so it takes
-                some doing, and your sync tool will usually keep both copies if it happens.
+                Kino always uses this folder, so your other machines find it without being
+                told - set up there is the same two clicks and your master password. Point
+                your sync tool at it if it is not already carrying Documents.
+              </p>
+              <p className="hint">
+                Two devices writing in the same moment is the one case this cannot detect. The
+                vault is read when you unlock and written when you change something, so it
+                takes some doing, and your sync tool will usually keep both copies if it
+                happens.
               </p>
             </>
           ) : (

@@ -603,8 +603,6 @@ export interface SyncConfigInput {
   repo: string;
   path?: string;
   branch?: string;
-  /** Where the folder provider writes. */
-  folder?: string;
 }
 
 export type PushOutcome =
@@ -825,6 +823,8 @@ interface VaultStore {
   refreshSnippets: () => Promise<void>;
   saveSnippet: (snippet: Snippet) => Promise<Snippet>;
   deleteSnippet: (id: string) => Promise<void>;
+  /** Where folder sync reads and writes: Documents/ssh-manager. */
+  syncFolderPath: () => Promise<string>;
   syncGetConfig: () => Promise<SyncConfigView | null>;
   syncSetConfig: (config: SyncConfigInput) => Promise<SyncConfigView>;
   syncTest: () => Promise<boolean>;
@@ -2108,6 +2108,7 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
     autoPush();
   },
 
+  syncFolderPath: () => invoke<string>("sync_folder_path"),
   syncGetConfig: () => invoke<SyncConfigView | null>("sync_get_config"),
 
   syncSetConfig: (config) => invoke<SyncConfigView>("sync_set_config", { config }),

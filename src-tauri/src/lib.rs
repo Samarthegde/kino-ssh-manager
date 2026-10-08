@@ -464,6 +464,14 @@ fn sync_get_config(state: State<'_, AppState>) -> Result<Option<sync::SyncConfig
     Ok(sync::load_config(key).map(|c| c.view()))
 }
 
+/// Where folder sync reads and writes. Shown in the panel so the user knows
+/// which folder to point their sync tool at, and on the restore screen so a
+/// new device can be told where to look.
+#[tauri::command]
+fn sync_folder_path() -> String {
+    sync_folder::sync_dir().to_string_lossy().into_owned()
+}
+
 /// Save sync settings. An empty token keeps the previously stored one.
 #[tauri::command]
 fn sync_set_config(
@@ -485,13 +493,18 @@ fn sync_set_config(
         config.token.trim().to_string()
     };
 
-    // A folder needs checking while the user is still looking at the
-    // setting; a sync that fails tomorrow is a worse way to find out.
+    // The folder is fixed (Documents/ssh-manager), so what the panel sent is
+    // not consulted: two devices pointed at different folders is the failure
+    // this avoids. Created and checked now, while the user is looking at the
+    // setting, rather than at their next sync.
     let provider = config.provider.clone().unwrap_or_else(|| "github".into());
-    let folder = config.folder.clone().unwrap_or_default().trim().to_string();
-    if provider == "folder" {
-        sync_folder::check(&folder)?;
-    }
+    let folder = if provider == "folder" {
+        let dir = sync_folder::sync_dir();
+        sync_folder::prepare(&dir)?;
+        dir.to_string_lossy().into_owned()
+    } else {
+        String::new()
+    };
 
     let merged = sync::SyncConfig {
         provider: provider.clone(),
@@ -795,10 +808,13 @@ fn sync_restore(
     password: String,
 ) -> Result<Vec<Host>, String> {
     let provider = config.provider.clone().unwrap_or_else(|| "github".into());
-    let folder = config.folder.clone().unwrap_or_default().trim().to_string();
-    if provider == "folder" {
-        sync_folder::check(&folder)?;
-    }
+    let folder = if provider == "folder" {
+        let dir = sync_folder::sync_dir();
+        sync_folder::prepare(&dir)?;
+        dir.to_string_lossy().into_owned()
+    } else {
+        String::new()
+    };
 
     let mut cfg = sync::SyncConfig {
         provider: provider.clone(),
@@ -2212,6 +2228,7 @@ pub fn run() {
             cloud::cloud_add_machine,
             cloud::cloud_remove_machine,
             sync_get_config,
+            sync_folder_path,
             sync_set_config,
             sync_test,
             sync_push,

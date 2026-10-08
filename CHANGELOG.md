@@ -7,14 +7,18 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 ## [Unreleased]
 
 ### Added
-- **Sync through a folder.** Point Kino at a directory that Dropbox,
-  Syncthing, iCloud Drive, OneDrive or a network share already syncs, and it
-  writes the encrypted vault there - no account, no token, nothing to
-  register, and it works with services Kino will never have a backend for. The
-  new-device restore screen can read from a folder too. Conflicts are caught
-  by comparing the file's hash with the one last seen, which covers the case
-  this is for - two machines, edits days apart - but not two machines writing
-  in the same moment; the panel says so.
+- **Sync through a folder.** Kino can write the encrypted vault to
+  `Documents/ssh-manager`, and whatever already carries your Documents -
+  OneDrive, iCloud Drive, Dropbox, Syncthing - takes it to your other
+  machines. No account, no token, nothing to register, and it works with
+  services Kino will never have a backend for.
+
+  The folder is always the same one, so a new machine needs your master
+  password and nothing else: no remembering which folder the other device
+  used, and no way to point two devices at different folders and wonder why
+  nothing arrives. Conflicts are caught by comparing the file's hash with the
+  one last seen, which covers the case this is for - two machines, edits days
+  apart - but not two machines writing in the same moment; the panel says so.
 - **Every write an assistant makes can be undone.** Before `sftp_write` or a
   fleet write replaces a file, the previous version is kept on the host -
   five per path, `0600`, in the SSH user's own home rather than `/tmp`.
@@ -54,14 +58,18 @@ something no rule covers, and one switch that stops all of it. `kino-mcp` now
 comes with the app instead of being a separate download.
 
 ### Added
-- **Sync through a folder.** Point Kino at a directory that Dropbox,
-  Syncthing, iCloud Drive, OneDrive or a network share already syncs, and it
-  writes the encrypted vault there - no account, no token, nothing to
-  register, and it works with services Kino will never have a backend for. The
-  new-device restore screen can read from a folder too. Conflicts are caught
-  by comparing the file's hash with the one last seen, which covers the case
-  this is for - two machines, edits days apart - but not two machines writing
-  in the same moment; the panel says so.
+- **Sync through a folder.** Kino can write the encrypted vault to
+  `Documents/ssh-manager`, and whatever already carries your Documents -
+  OneDrive, iCloud Drive, Dropbox, Syncthing - takes it to your other
+  machines. No account, no token, nothing to register, and it works with
+  services Kino will never have a backend for.
+
+  The folder is always the same one, so a new machine needs your master
+  password and nothing else: no remembering which folder the other device
+  used, and no way to point two devices at different folders and wonder why
+  nothing arrives. Conflicts are caught by comparing the file's hash with the
+  one last seen, which covers the case this is for - two machines, edits days
+  apart - but not two machines writing in the same moment; the panel says so.
 - **Interface size.** Settings → Appearance scales the whole window, terminal
   included, from 80% to 150%. It uses the webview's own zoom, so the type stays
   crisp rather than being stretched.
@@ -184,14 +192,18 @@ are on 0.9.1, upgrade.
   give up after ten seconds.
 
 ### Added
-- **Sync through a folder.** Point Kino at a directory that Dropbox,
-  Syncthing, iCloud Drive, OneDrive or a network share already syncs, and it
-  writes the encrypted vault there - no account, no token, nothing to
-  register, and it works with services Kino will never have a backend for. The
-  new-device restore screen can read from a folder too. Conflicts are caught
-  by comparing the file's hash with the one last seen, which covers the case
-  this is for - two machines, edits days apart - but not two machines writing
-  in the same moment; the panel says so.
+- **Sync through a folder.** Kino can write the encrypted vault to
+  `Documents/ssh-manager`, and whatever already carries your Documents -
+  OneDrive, iCloud Drive, Dropbox, Syncthing - takes it to your other
+  machines. No account, no token, nothing to register, and it works with
+  services Kino will never have a backend for.
+
+  The folder is always the same one, so a new machine needs your master
+  password and nothing else: no remembering which folder the other device
+  used, and no way to point two devices at different folders and wonder why
+  nothing arrives. Conflicts are caught by comparing the file's hash with the
+  one last seen, which covers the case this is for - two machines, edits days
+  apart - but not two machines writing in the same moment; the panel says so.
 - **Interface size.** Settings → Appearance scales the whole window, terminal
   included, from 80% to 150%. It uses the webview's own zoom, so the type stays
   crisp rather than being stretched.
@@ -241,14 +253,18 @@ are on 0.9.1, upgrade.
 ## [0.9.1] - 2026-09-07
 
 ### Added
-- **Sync through a folder.** Point Kino at a directory that Dropbox,
-  Syncthing, iCloud Drive, OneDrive or a network share already syncs, and it
-  writes the encrypted vault there - no account, no token, nothing to
-  register, and it works with services Kino will never have a backend for. The
-  new-device restore screen can read from a folder too. Conflicts are caught
-  by comparing the file's hash with the one last seen, which covers the case
-  this is for - two machines, edits days apart - but not two machines writing
-  in the same moment; the panel says so.
+- **Sync through a folder.** Kino can write the encrypted vault to
+  `Documents/ssh-manager`, and whatever already carries your Documents -
+  OneDrive, iCloud Drive, Dropbox, Syncthing - takes it to your other
+  machines. No account, no token, nothing to register, and it works with
+  services Kino will never have a backend for.
+
+  The folder is always the same one, so a new machine needs your master
+  password and nothing else: no remembering which folder the other device
+  used, and no way to point two devices at different folders and wonder why
+  nothing arrives. Conflicts are caught by comparing the file's hash with the
+  one last seen, which covers the case this is for - two machines, edits days
+  apart - but not two machines writing in the same moment; the panel says so.
 - **Interface size.** Settings → Appearance scales the whole window, terminal
   included, from 80% to 150%. It uses the webview's own zoom, so the type stays
   crisp rather than being stretched.
@@ -502,14 +518,18 @@ are on 0.9.1, upgrade.
 ## [0.9.0] - 2026-09-01
 
 ### Added
-- **Sync through a folder.** Point Kino at a directory that Dropbox,
-  Syncthing, iCloud Drive, OneDrive or a network share already syncs, and it
-  writes the encrypted vault there - no account, no token, nothing to
-  register, and it works with services Kino will never have a backend for. The
-  new-device restore screen can read from a folder too. Conflicts are caught
-  by comparing the file's hash with the one last seen, which covers the case
-  this is for - two machines, edits days apart - but not two machines writing
-  in the same moment; the panel says so.
+- **Sync through a folder.** Kino can write the encrypted vault to
+  `Documents/ssh-manager`, and whatever already carries your Documents -
+  OneDrive, iCloud Drive, Dropbox, Syncthing - takes it to your other
+  machines. No account, no token, nothing to register, and it works with
+  services Kino will never have a backend for.
+
+  The folder is always the same one, so a new machine needs your master
+  password and nothing else: no remembering which folder the other device
+  used, and no way to point two devices at different folders and wonder why
+  nothing arrives. Conflicts are caught by comparing the file's hash with the
+  one last seen, which covers the case this is for - two machines, edits days
+  apart - but not two machines writing in the same moment; the panel says so.
 - **Interface size.** Settings → Appearance scales the whole window, terminal
   included, from 80% to 150%. It uses the webview's own zoom, so the type stays
   crisp rather than being stretched.
@@ -617,14 +637,18 @@ are on 0.9.1, upgrade.
 ## [0.8.0] - 2026-08-13
 
 ### Added
-- **Sync through a folder.** Point Kino at a directory that Dropbox,
-  Syncthing, iCloud Drive, OneDrive or a network share already syncs, and it
-  writes the encrypted vault there - no account, no token, nothing to
-  register, and it works with services Kino will never have a backend for. The
-  new-device restore screen can read from a folder too. Conflicts are caught
-  by comparing the file's hash with the one last seen, which covers the case
-  this is for - two machines, edits days apart - but not two machines writing
-  in the same moment; the panel says so.
+- **Sync through a folder.** Kino can write the encrypted vault to
+  `Documents/ssh-manager`, and whatever already carries your Documents -
+  OneDrive, iCloud Drive, Dropbox, Syncthing - takes it to your other
+  machines. No account, no token, nothing to register, and it works with
+  services Kino will never have a backend for.
+
+  The folder is always the same one, so a new machine needs your master
+  password and nothing else: no remembering which folder the other device
+  used, and no way to point two devices at different folders and wonder why
+  nothing arrives. Conflicts are caught by comparing the file's hash with the
+  one last seen, which covers the case this is for - two machines, edits days
+  apart - but not two machines writing in the same moment; the panel says so.
 - **Interface size.** Settings → Appearance scales the whole window, terminal
   included, from 80% to 150%. It uses the webview's own zoom, so the type stays
   crisp rather than being stretched.
@@ -704,14 +728,18 @@ are on 0.9.1, upgrade.
 ## [0.7.1] - 2026-08-06
 
 ### Added
-- **Sync through a folder.** Point Kino at a directory that Dropbox,
-  Syncthing, iCloud Drive, OneDrive or a network share already syncs, and it
-  writes the encrypted vault there - no account, no token, nothing to
-  register, and it works with services Kino will never have a backend for. The
-  new-device restore screen can read from a folder too. Conflicts are caught
-  by comparing the file's hash with the one last seen, which covers the case
-  this is for - two machines, edits days apart - but not two machines writing
-  in the same moment; the panel says so.
+- **Sync through a folder.** Kino can write the encrypted vault to
+  `Documents/ssh-manager`, and whatever already carries your Documents -
+  OneDrive, iCloud Drive, Dropbox, Syncthing - takes it to your other
+  machines. No account, no token, nothing to register, and it works with
+  services Kino will never have a backend for.
+
+  The folder is always the same one, so a new machine needs your master
+  password and nothing else: no remembering which folder the other device
+  used, and no way to point two devices at different folders and wonder why
+  nothing arrives. Conflicts are caught by comparing the file's hash with the
+  one last seen, which covers the case this is for - two machines, edits days
+  apart - but not two machines writing in the same moment; the panel says so.
 - **Interface size.** Settings → Appearance scales the whole window, terminal
   included, from 80% to 150%. It uses the webview's own zoom, so the type stays
   crisp rather than being stretched.
@@ -935,14 +963,18 @@ are on 0.9.1, upgrade.
 ## [0.7.0] - 2026-07-31
 
 ### Added
-- **Sync through a folder.** Point Kino at a directory that Dropbox,
-  Syncthing, iCloud Drive, OneDrive or a network share already syncs, and it
-  writes the encrypted vault there - no account, no token, nothing to
-  register, and it works with services Kino will never have a backend for. The
-  new-device restore screen can read from a folder too. Conflicts are caught
-  by comparing the file's hash with the one last seen, which covers the case
-  this is for - two machines, edits days apart - but not two machines writing
-  in the same moment; the panel says so.
+- **Sync through a folder.** Kino can write the encrypted vault to
+  `Documents/ssh-manager`, and whatever already carries your Documents -
+  OneDrive, iCloud Drive, Dropbox, Syncthing - takes it to your other
+  machines. No account, no token, nothing to register, and it works with
+  services Kino will never have a backend for.
+
+  The folder is always the same one, so a new machine needs your master
+  password and nothing else: no remembering which folder the other device
+  used, and no way to point two devices at different folders and wonder why
+  nothing arrives. Conflicts are caught by comparing the file's hash with the
+  one last seen, which covers the case this is for - two machines, edits days
+  apart - but not two machines writing in the same moment; the panel says so.
 - **Interface size.** Settings → Appearance scales the whole window, terminal
   included, from 80% to 150%. It uses the webview's own zoom, so the type stays
   crisp rather than being stretched.
@@ -1023,14 +1055,18 @@ are on 0.9.1, upgrade.
 ## [0.6.1] - 2026-07-23
 
 ### Added
-- **Sync through a folder.** Point Kino at a directory that Dropbox,
-  Syncthing, iCloud Drive, OneDrive or a network share already syncs, and it
-  writes the encrypted vault there - no account, no token, nothing to
-  register, and it works with services Kino will never have a backend for. The
-  new-device restore screen can read from a folder too. Conflicts are caught
-  by comparing the file's hash with the one last seen, which covers the case
-  this is for - two machines, edits days apart - but not two machines writing
-  in the same moment; the panel says so.
+- **Sync through a folder.** Kino can write the encrypted vault to
+  `Documents/ssh-manager`, and whatever already carries your Documents -
+  OneDrive, iCloud Drive, Dropbox, Syncthing - takes it to your other
+  machines. No account, no token, nothing to register, and it works with
+  services Kino will never have a backend for.
+
+  The folder is always the same one, so a new machine needs your master
+  password and nothing else: no remembering which folder the other device
+  used, and no way to point two devices at different folders and wonder why
+  nothing arrives. Conflicts are caught by comparing the file's hash with the
+  one last seen, which covers the case this is for - two machines, edits days
+  apart - but not two machines writing in the same moment; the panel says so.
 - **Interface size.** Settings → Appearance scales the whole window, terminal
   included, from 80% to 150%. It uses the webview's own zoom, so the type stays
   crisp rather than being stretched.
@@ -1072,14 +1108,18 @@ are on 0.9.1, upgrade.
 ## [0.6.0] - 2026-07-22
 
 ### Added
-- **Sync through a folder.** Point Kino at a directory that Dropbox,
-  Syncthing, iCloud Drive, OneDrive or a network share already syncs, and it
-  writes the encrypted vault there - no account, no token, nothing to
-  register, and it works with services Kino will never have a backend for. The
-  new-device restore screen can read from a folder too. Conflicts are caught
-  by comparing the file's hash with the one last seen, which covers the case
-  this is for - two machines, edits days apart - but not two machines writing
-  in the same moment; the panel says so.
+- **Sync through a folder.** Kino can write the encrypted vault to
+  `Documents/ssh-manager`, and whatever already carries your Documents -
+  OneDrive, iCloud Drive, Dropbox, Syncthing - takes it to your other
+  machines. No account, no token, nothing to register, and it works with
+  services Kino will never have a backend for.
+
+  The folder is always the same one, so a new machine needs your master
+  password and nothing else: no remembering which folder the other device
+  used, and no way to point two devices at different folders and wonder why
+  nothing arrives. Conflicts are caught by comparing the file's hash with the
+  one last seen, which covers the case this is for - two machines, edits days
+  apart - but not two machines writing in the same moment; the panel says so.
 - **Interface size.** Settings → Appearance scales the whole window, terminal
   included, from 80% to 150%. It uses the webview's own zoom, so the type stays
   crisp rather than being stretched.
@@ -1154,14 +1194,18 @@ are on 0.9.1, upgrade.
 ## [0.5.0] - 2026-07-14
 
 ### Added
-- **Sync through a folder.** Point Kino at a directory that Dropbox,
-  Syncthing, iCloud Drive, OneDrive or a network share already syncs, and it
-  writes the encrypted vault there - no account, no token, nothing to
-  register, and it works with services Kino will never have a backend for. The
-  new-device restore screen can read from a folder too. Conflicts are caught
-  by comparing the file's hash with the one last seen, which covers the case
-  this is for - two machines, edits days apart - but not two machines writing
-  in the same moment; the panel says so.
+- **Sync through a folder.** Kino can write the encrypted vault to
+  `Documents/ssh-manager`, and whatever already carries your Documents -
+  OneDrive, iCloud Drive, Dropbox, Syncthing - takes it to your other
+  machines. No account, no token, nothing to register, and it works with
+  services Kino will never have a backend for.
+
+  The folder is always the same one, so a new machine needs your master
+  password and nothing else: no remembering which folder the other device
+  used, and no way to point two devices at different folders and wonder why
+  nothing arrives. Conflicts are caught by comparing the file's hash with the
+  one last seen, which covers the case this is for - two machines, edits days
+  apart - but not two machines writing in the same moment; the panel says so.
 - **Interface size.** Settings → Appearance scales the whole window, terminal
   included, from 80% to 150%. It uses the webview's own zoom, so the type stays
   crisp rather than being stretched.
@@ -1247,14 +1291,18 @@ are on 0.9.1, upgrade.
 ## [0.4.3] - 2026-06-30
 
 ### Added
-- **Sync through a folder.** Point Kino at a directory that Dropbox,
-  Syncthing, iCloud Drive, OneDrive or a network share already syncs, and it
-  writes the encrypted vault there - no account, no token, nothing to
-  register, and it works with services Kino will never have a backend for. The
-  new-device restore screen can read from a folder too. Conflicts are caught
-  by comparing the file's hash with the one last seen, which covers the case
-  this is for - two machines, edits days apart - but not two machines writing
-  in the same moment; the panel says so.
+- **Sync through a folder.** Kino can write the encrypted vault to
+  `Documents/ssh-manager`, and whatever already carries your Documents -
+  OneDrive, iCloud Drive, Dropbox, Syncthing - takes it to your other
+  machines. No account, no token, nothing to register, and it works with
+  services Kino will never have a backend for.
+
+  The folder is always the same one, so a new machine needs your master
+  password and nothing else: no remembering which folder the other device
+  used, and no way to point two devices at different folders and wonder why
+  nothing arrives. Conflicts are caught by comparing the file's hash with the
+  one last seen, which covers the case this is for - two machines, edits days
+  apart - but not two machines writing in the same moment; the panel says so.
 - **Interface size.** Settings → Appearance scales the whole window, terminal
   included, from 80% to 150%. It uses the webview's own zoom, so the type stays
   crisp rather than being stretched.
@@ -1323,14 +1371,18 @@ are on 0.9.1, upgrade.
 ## [0.4.1] - 2026-06-10
 
 ### Added
-- **Sync through a folder.** Point Kino at a directory that Dropbox,
-  Syncthing, iCloud Drive, OneDrive or a network share already syncs, and it
-  writes the encrypted vault there - no account, no token, nothing to
-  register, and it works with services Kino will never have a backend for. The
-  new-device restore screen can read from a folder too. Conflicts are caught
-  by comparing the file's hash with the one last seen, which covers the case
-  this is for - two machines, edits days apart - but not two machines writing
-  in the same moment; the panel says so.
+- **Sync through a folder.** Kino can write the encrypted vault to
+  `Documents/ssh-manager`, and whatever already carries your Documents -
+  OneDrive, iCloud Drive, Dropbox, Syncthing - takes it to your other
+  machines. No account, no token, nothing to register, and it works with
+  services Kino will never have a backend for.
+
+  The folder is always the same one, so a new machine needs your master
+  password and nothing else: no remembering which folder the other device
+  used, and no way to point two devices at different folders and wonder why
+  nothing arrives. Conflicts are caught by comparing the file's hash with the
+  one last seen, which covers the case this is for - two machines, edits days
+  apart - but not two machines writing in the same moment; the panel says so.
 - **Interface size.** Settings → Appearance scales the whole window, terminal
   included, from 80% to 150%. It uses the webview's own zoom, so the type stays
   crisp rather than being stretched.
@@ -1352,14 +1404,18 @@ are on 0.9.1, upgrade.
 ## [0.4.0] - 2026-06-10
 
 ### Added
-- **Sync through a folder.** Point Kino at a directory that Dropbox,
-  Syncthing, iCloud Drive, OneDrive or a network share already syncs, and it
-  writes the encrypted vault there - no account, no token, nothing to
-  register, and it works with services Kino will never have a backend for. The
-  new-device restore screen can read from a folder too. Conflicts are caught
-  by comparing the file's hash with the one last seen, which covers the case
-  this is for - two machines, edits days apart - but not two machines writing
-  in the same moment; the panel says so.
+- **Sync through a folder.** Kino can write the encrypted vault to
+  `Documents/ssh-manager`, and whatever already carries your Documents -
+  OneDrive, iCloud Drive, Dropbox, Syncthing - takes it to your other
+  machines. No account, no token, nothing to register, and it works with
+  services Kino will never have a backend for.
+
+  The folder is always the same one, so a new machine needs your master
+  password and nothing else: no remembering which folder the other device
+  used, and no way to point two devices at different folders and wonder why
+  nothing arrives. Conflicts are caught by comparing the file's hash with the
+  one last seen, which covers the case this is for - two machines, edits days
+  apart - but not two machines writing in the same moment; the panel says so.
 - **Interface size.** Settings → Appearance scales the whole window, terminal
   included, from 80% to 150%. It uses the webview's own zoom, so the type stays
   crisp rather than being stretched.
@@ -1444,14 +1500,18 @@ are on 0.9.1, upgrade.
 ## [0.3.0] - 2026-06-09
 
 ### Added
-- **Sync through a folder.** Point Kino at a directory that Dropbox,
-  Syncthing, iCloud Drive, OneDrive or a network share already syncs, and it
-  writes the encrypted vault there - no account, no token, nothing to
-  register, and it works with services Kino will never have a backend for. The
-  new-device restore screen can read from a folder too. Conflicts are caught
-  by comparing the file's hash with the one last seen, which covers the case
-  this is for - two machines, edits days apart - but not two machines writing
-  in the same moment; the panel says so.
+- **Sync through a folder.** Kino can write the encrypted vault to
+  `Documents/ssh-manager`, and whatever already carries your Documents -
+  OneDrive, iCloud Drive, Dropbox, Syncthing - takes it to your other
+  machines. No account, no token, nothing to register, and it works with
+  services Kino will never have a backend for.
+
+  The folder is always the same one, so a new machine needs your master
+  password and nothing else: no remembering which folder the other device
+  used, and no way to point two devices at different folders and wonder why
+  nothing arrives. Conflicts are caught by comparing the file's hash with the
+  one last seen, which covers the case this is for - two machines, edits days
+  apart - but not two machines writing in the same moment; the panel says so.
 - **Interface size.** Settings → Appearance scales the whole window, terminal
   included, from 80% to 150%. It uses the webview's own zoom, so the type stays
   crisp rather than being stretched.
@@ -1487,14 +1547,18 @@ are on 0.9.1, upgrade.
 ## [0.2.0] - 2026-06-04
 
 ### Added
-- **Sync through a folder.** Point Kino at a directory that Dropbox,
-  Syncthing, iCloud Drive, OneDrive or a network share already syncs, and it
-  writes the encrypted vault there - no account, no token, nothing to
-  register, and it works with services Kino will never have a backend for. The
-  new-device restore screen can read from a folder too. Conflicts are caught
-  by comparing the file's hash with the one last seen, which covers the case
-  this is for - two machines, edits days apart - but not two machines writing
-  in the same moment; the panel says so.
+- **Sync through a folder.** Kino can write the encrypted vault to
+  `Documents/ssh-manager`, and whatever already carries your Documents -
+  OneDrive, iCloud Drive, Dropbox, Syncthing - takes it to your other
+  machines. No account, no token, nothing to register, and it works with
+  services Kino will never have a backend for.
+
+  The folder is always the same one, so a new machine needs your master
+  password and nothing else: no remembering which folder the other device
+  used, and no way to point two devices at different folders and wonder why
+  nothing arrives. Conflicts are caught by comparing the file's hash with the
+  one last seen, which covers the case this is for - two machines, edits days
+  apart - but not two machines writing in the same moment; the panel says so.
 - **Interface size.** Settings → Appearance scales the whole window, terminal
   included, from 80% to 150%. It uses the webview's own zoom, so the type stays
   crisp rather than being stretched.
@@ -1572,14 +1636,18 @@ are on 0.9.1, upgrade.
 ## [0.1.0]
 
 ### Added
-- **Sync through a folder.** Point Kino at a directory that Dropbox,
-  Syncthing, iCloud Drive, OneDrive or a network share already syncs, and it
-  writes the encrypted vault there - no account, no token, nothing to
-  register, and it works with services Kino will never have a backend for. The
-  new-device restore screen can read from a folder too. Conflicts are caught
-  by comparing the file's hash with the one last seen, which covers the case
-  this is for - two machines, edits days apart - but not two machines writing
-  in the same moment; the panel says so.
+- **Sync through a folder.** Kino can write the encrypted vault to
+  `Documents/ssh-manager`, and whatever already carries your Documents -
+  OneDrive, iCloud Drive, Dropbox, Syncthing - takes it to your other
+  machines. No account, no token, nothing to register, and it works with
+  services Kino will never have a backend for.
+
+  The folder is always the same one, so a new machine needs your master
+  password and nothing else: no remembering which folder the other device
+  used, and no way to point two devices at different folders and wonder why
+  nothing arrives. Conflicts are caught by comparing the file's hash with the
+  one last seen, which covers the case this is for - two machines, edits days
+  apart - but not two machines writing in the same moment; the panel says so.
 - **Interface size.** Settings → Appearance scales the whole window, terminal
   included, from 80% to 150%. It uses the webview's own zoom, so the type stays
   crisp rather than being stretched.

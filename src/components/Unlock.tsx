@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import { useVaultStore } from "../store";
 import { getVersion } from "@tauri-apps/api/app";
-import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ReleaseNote, notesFor, shouldShowNotes } from "../releaseNotes";
 import { WhatsNew } from "./WhatsNew";
@@ -28,7 +27,7 @@ export function Unlock() {
   const [version, setVersion] = useState("");
   const [whatsNew, setWhatsNew] = useState<ReleaseNote | null>(null);
 
-  const { unlock, checkVaultExists, syncRestore, updateInfo } = useVaultStore();
+  const { unlock, checkVaultExists, syncRestore, updateInfo, syncFolderPath } = useVaultStore();
 
   useState(() => {
     checkVaultExists().then((exists) => setIsNew(!exists));
@@ -36,7 +35,8 @@ export function Unlock() {
 
   useEffect(() => {
     getVersion().then(setVersion).catch(() => setVersion(""));
-  }, []);
+    syncFolderPath().then(setFolder).catch(() => {});
+  }, [syncFolderPath]);
 
   // Both answers are needed before the notes can be judged: which version this
   // is, and whether a vault already exists - a fresh install is not an upgrade
@@ -65,25 +65,17 @@ export function Unlock() {
     }
   }
 
-  async function pickFolder() {
-    const picked = await open({ directory: true, title: "Folder holding your vault" });
-    if (typeof picked === "string") setFolder(picked);
-  }
-
   async function handleRestore(e: React.FormEvent) {
     e.preventDefault();
     const ready =
       restoreFrom === "folder"
-        ? folder.trim() && password
+        ? !!password
         : owner.trim() && repo.trim() && token.trim() && password;
     if (!ready) return;
     setLoading(true);
     setError("");
     try {
-      await syncRestore(
-        { provider: restoreFrom, token, owner, repo, path, branch, folder },
-        password
-      );
+      await syncRestore({ provider: restoreFrom, token, owner, repo, path, branch }, password);
     } catch (err: any) {
       setError(err?.message || String(err));
     } finally {
@@ -209,18 +201,12 @@ export function Unlock() {
             </div>
             <form onSubmit={handleRestore}>
               {restoreFrom === "folder" ? (
-                <div className="sync-folder-row">
-                  <input
-                    className="unlock-input"
-                    placeholder="Folder holding vault.enc"
-                    value={folder}
-                    onChange={(e) => setFolder(e.target.value)}
-                    autoFocus
-                  />
-                  <button type="button" className="btn btn-sm" onClick={() => void pickFolder()}>
-                    Choose…
-                  </button>
-                </div>
+                // Nothing to fill in: the folder is the same on every machine,
+                // so the master password is the only thing this device lacks.
+                <p className="unlock-foot-note">
+                  Reading <span className="mono">{folder || "Documents/ssh-manager"}</span>.
+                  Make sure your sync tool has carried it to this machine first.
+                </p>
               ) : (
               <>
               <div className="form-row two-col">

@@ -103,22 +103,37 @@ impl SyncBackend for FolderBackend {
     }
 }
 
-/// Check a folder is usable before it is saved, so the failure arrives while
-/// the user is looking at the setting rather than at their next sync.
-pub fn check(dir: &str) -> Result<(), String> {
-    let path = PathBuf::from(dir);
-    if dir.trim().is_empty() {
-        return Err("Pick a folder to sync through.".into());
-    }
-    if !path.exists() {
-        return Err(format!("{dir} does not exist."));
-    }
-    if !path.is_dir() {
-        return Err(format!("{dir} is a file, not a folder."));
-    }
-    let probe = path.join(".kino-write-test");
-    std::fs::write(&probe, b"")
-        .map_err(|_| format!("{dir} cannot be written to. Check the folder's permissions."))?;
+/// The one folder Kino syncs through: `Documents/ssh-manager`.
+///
+/// Fixed rather than chosen. Both machines then agree without being told, so
+/// restoring on a new device needs the master password and nothing else - no
+/// remembering which folder the other one used, and no way to point two
+/// devices at different folders and wonder why nothing arrives.
+///
+/// Documents because it is the directory people already sync: OneDrive and
+/// iCloud Drive include it by default, and anyone using Dropbox or Syncthing
+/// can add one folder to it.
+pub fn sync_dir() -> PathBuf {
+    dirs::document_dir()
+        .or_else(|| dirs::home_dir().map(|h| h.join("Documents")))
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("ssh-manager")
+}
+
+/// Make the folder and prove it can be written, when sync is switched on.
+///
+/// Created rather than demanded: the user is being told where to point their
+/// sync tool, and a folder that does not exist yet is not something to point
+/// anything at.
+pub fn prepare(dir: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    let probe = dir.join(".kino-write-test");
+    std::fs::write(&probe, b"").map_err(|_| {
+        format!(
+            "{} cannot be written to. Check the folder's permissions.",
+            dir.display()
+        )
+    })?;
     let _ = std::fs::remove_file(&probe);
     Ok(())
 }
@@ -231,26 +246,34 @@ mod tests {
     }
 
     #[test]
-    fn checking_a_folder_catches_the_obvious_mistakes() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(check(&dir.path().to_string_lossy()).is_ok());
-        assert!(check("").unwrap_err().contains("Pick a folder"));
-        assert!(check("/definitely/not/here")
-            .unwrap_err()
-            .contains("does not exist"));
-
-        let file = dir.path().join("a-file");
-        std::fs::write(&file, b"x").unwrap();
-        assert!(check(&file.to_string_lossy())
-            .unwrap_err()
-            .contains("not a folder"));
+    fn the_folder_is_always_the_same_one() {
+        // Both machines agree without being told, which is what makes
+        // restoring on a new device need nothing but the master password.
+        let dir = sync_dir();
+        assert!(dir.ends_with("ssh-manager"), "{}", dir.display());
+        assert_eq!(sync_dir(), dir, "and it does not wander between calls");
     }
 
     #[test]
-    fn checking_leaves_nothing_behind() {
+    fn preparing_creates_the_folder() {
         let dir = tempfile::tempdir().unwrap();
-        check(&dir.path().to_string_lossy()).unwrap();
+        let target = dir.path().join("Documents").join("ssh-manager");
+        prepare(&target).unwrap();
+        assert!(target.is_dir());
+    }
+
+    #[test]
+    fn preparing_leaves_nothing_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        prepare(dir.path()).unwrap();
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn preparing_an_existing_folder_is_fine() {
+        let dir = tempfile::tempdir().unwrap();
+        prepare(dir.path()).unwrap();
+        prepare(dir.path()).unwrap();
     }
 
     #[cfg(unix)]
@@ -262,7 +285,7 @@ mod tests {
         std::fs::create_dir(&locked).unwrap();
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o500)).unwrap();
 
-        let result = check(&locked.to_string_lossy());
+        let result = prepare(&locked);
 
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
         // Root ignores the permission bits, so only assert where it bites.

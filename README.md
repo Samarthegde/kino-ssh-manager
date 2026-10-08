@@ -27,8 +27,7 @@ attestation. [How to check them](SECURITY.md#verifying-what-you-downloaded).
 - **One encrypted vault.** Argon2 and AES-256-GCM; one master password unlocks
   every host, key and snippet. Nothing leaves the machine unless you turn on
   sync - and then only the encrypted blob, either to a private GitHub repo or
-  to a folder that Dropbox, Syncthing, iCloud Drive or a network share already
-  carries for you.
+  to `Documents/ssh-manager`, carried by whatever already syncs your Documents.
 - **A real terminal per host.** Split panes, broadcast input, search with match
   counts, 200,000 lines of scrollback, and output coloured by the active theme.
 - **The whole session in one window.** SFTP browser with a built-in editor,

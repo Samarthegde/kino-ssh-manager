@@ -112,7 +112,6 @@ pub struct SyncConfigInput {
     pub repo: String,
     pub path: Option<String>,
     pub branch: Option<String>,
-    pub folder: Option<String>,
 }
 
 pub fn config_path() -> PathBuf {

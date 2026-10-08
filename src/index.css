@@ -6168,8 +6168,16 @@ textarea.mono,
 .sync-provider { display: flex; align-items: flex-start; gap: 9px; cursor: pointer; }
 .sync-provider > span { display: flex; flex-direction: column; gap: 2px; }
 .sync-provider .hint-inline { font-size: 11px; }
-.sync-folder-row { display: flex; gap: 8px; align-items: center; }
-.sync-folder-row input { flex: 1; }
+/* The folder is fixed, so it is shown rather than entered. */
+.sync-folder-path {
+  margin: 0;
+  padding: 7px 10px;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  font-size: 12px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
 
 /* Interface zoom: two steps and the number between them, so it reads as one
  * control rather than three buttons that happen to sit together. */
