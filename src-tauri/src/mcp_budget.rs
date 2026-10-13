@@ -46,6 +46,12 @@ pub struct Budgets {
     /// Every tool call, including the ones that only read.
     #[serde(default = "d_calls")]
     pub max_calls_per_hour: u32,
+    /// Biggest single file transfer. Separate from `max_bytes_per_call`,
+    /// which caps what comes back into the conversation: a transfer puts
+    /// bytes on disk, where a hundred megabytes is ordinary and a hundred
+    /// megabytes of context is not.
+    #[serde(default = "d_transfer")]
+    pub max_transfer_bytes: u64,
     /// Hosts a fleet call talks to at once. Each one is a fresh SSH
     /// handshake, so this is politeness to the network as much as anything.
     #[serde(default = "d_concurrency")]
@@ -64,6 +70,9 @@ fn d_calls() -> u32 {
 fn d_concurrency() -> u8 {
     8
 }
+fn d_transfer() -> u64 {
+    crate::mcp_transfer::DEFAULT_MAX_BYTES
+}
 
 impl Default for Budgets {
     fn default() -> Self {
@@ -72,6 +81,7 @@ impl Default for Budgets {
             max_hosts_per_call: d_hosts(),
             max_calls_per_hour: d_calls(),
             concurrency: d_concurrency(),
+            max_transfer_bytes: d_transfer(),
         }
     }
 }

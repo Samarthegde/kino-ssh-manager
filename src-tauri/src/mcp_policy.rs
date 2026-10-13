@@ -76,7 +76,11 @@ pub fn capability(tool: &str) -> Capability {
         // Putting a file back is a write, and goes through the same rules as
         // the write that made the backup.
         "restore_file" | "fleet_write" | "fleet_snippet_run" => Capability::Write,
+        "sftp_upload" => Capability::Write,
         "sftp_list" | "sftp_read" | "check_drift" => Capability::Read,
+        // Taking a copy of a file is a read of the host, whatever it then
+        // does with it locally.
+        "sftp_download" => Capability::Read,
         // A fleet command is still a command: what it does is unknowable from
         // here, so it is classed by what it *could* do, like ssh_exec.
         "ssh_exec" | "fleet_exec" => Capability::Exec,

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   McpBinaryStatus,
   McpBudgets,
@@ -63,6 +64,7 @@ export function McpSettingsPanel() {
     mcpSetApprovalTimeout,
     mcpSetBudgets,
     mcpSetFleetPolicy,
+    mcpSetTransfersDir,
     mcpHalted,
     mcpSetHalted,
     checkMcpBinary,
@@ -91,7 +93,10 @@ export function McpSettingsPanel() {
     max_changes_per_hour: 50,
     max_hosts_per_call: 25,
     max_calls_per_hour: 600,
+    concurrency: 8,
+    max_transfer_bytes: 100 * 1024 * 1024,
   });
+  const [transfersDir, setTransfersDir] = useState("");
   const [fleet, setFleet] = useState<McpFleetPolicy>({
     batch_percent: 10,
     max_failure_ratio: 0.05,
@@ -158,6 +163,7 @@ export function McpSettingsPanel() {
         setApprovalTimeout(c.approval_timeout_secs || 120);
         if (c.budgets) setBudgets(c.budgets);
         if (c.fleet) setFleet(c.fleet);
+        setTransfersDir(c.transfers_dir || "");
       })
       .catch((e) => setError(String(e)));
   }, [mcpGetConfig]);
@@ -229,6 +235,7 @@ export function McpSettingsPanel() {
       await mcpSetApprovalTimeout(approvalTimeout);
       await mcpSetBudgets(budgets);
       await mcpSetFleetPolicy(fleet);
+      await mcpSetTransfersDir(transfersDir);
       // Only the exposed hosts: a policy for a host nobody shares is noise.
       for (const id of exposed) {
         const d = draft(id);
@@ -265,6 +272,11 @@ export function McpSettingsPanel() {
       ),
     [config, binary]
   );
+
+  async function pickTransfersDir() {
+    const picked = await open({ directory: true, title: "Folder for MCP file transfers" });
+    if (typeof picked === "string") setTransfersDir(picked);
+  }
 
   async function install() {
     setInstalling(true);
@@ -587,6 +599,58 @@ export function McpSettingsPanel() {
                     setBudgets({
                       ...budgets,
                       max_calls_per_hour: Math.max(0, Number(e.target.value) || 0),
+                    })
+                  }
+                />
+              </label>
+            </div>
+          </section>
+
+          <section className="mcp-section">
+            <p className="mcp-section-title">
+              File transfers
+              {transfersDir && <span className="mcp-badge">on</span>}
+            </p>
+            <p className="mcp-hint">
+              Lets an assistant copy whole files to and from a host over SFTP - logs, dumps,
+              archives, anything too big or too binary to go through a conversation. The
+              contents are never shown to it: it gets the size and a checksum, and the file
+              lands here.
+            </p>
+            <p className="mcp-hint">
+              Off until you pick a folder, and nothing outside that folder can be read or
+              written. Everything else in MCP only reaches the hosts you ticked; this is the one
+              part that touches your own machine, so it is yours to point somewhere deliberate.
+            </p>
+            <div className="sync-folder-row">
+              <input
+                className="mcp-input"
+                value={transfersDir}
+                onChange={(e) => setTransfersDir(e.target.value)}
+                placeholder="No folder set - transfers are off"
+              />
+              <button type="button" className="btn btn-sm" onClick={() => void pickTransfersDir()}>
+                Choose…
+              </button>
+              {transfersDir && (
+                <button type="button" className="btn btn-sm" onClick={() => setTransfersDir("")}>
+                  Turn off
+                </button>
+              )}
+            </div>
+            <div className="mcp-limits">
+              <label className="mcp-limit">
+                <span>Largest transfer (MB)</span>
+                <input
+                  type="number"
+                  min={1}
+                  className="mcp-input"
+                  value={Math.round(budgets.max_transfer_bytes / (1024 * 1024))}
+                  onChange={(e) =>
+                    setBudgets({
+                      ...budgets,
+                      max_transfer_bytes:
+                        Math.max(1, Number(e.target.value) || 100) * 1024 * 1024,
                     })
                   }
                 />

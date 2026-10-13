@@ -19,6 +19,17 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
   nothing arrives. Conflicts are caught by comparing the file's hash with the
   one last seen, which covers the case this is for - two machines, edits days
   apart - but not two machines writing in the same moment; the panel says so.
+- **File transfers over SFTP, without the file entering the conversation.**
+  `sftp_download` copies a file from a host into a folder on your machine and
+  `sftp_upload` sends one back, both streamed, so size stops being the limit
+  that `sftp_write`'s base64-in-a-command-line imposed. The assistant is given
+  the path, the size and a SHA-256 - never the contents - so a 200 MB dump
+  costs nothing in context and shows up in no transcript.
+
+  Transfers are **off until you name a folder** in the MCP panel, and nothing
+  outside it can be read or written: it is the only part of MCP that touches
+  your own machine rather than a host you exposed. Uploads keep the previous
+  version on the host, so `restore_file` undoes them.
 - **Every write an assistant makes can be undone.** Before `sftp_write` or a
   fleet write replaces a file, the previous version is kept on the host -
   five per path, `0600`, in the SSH user's own home rather than `/tmp`.

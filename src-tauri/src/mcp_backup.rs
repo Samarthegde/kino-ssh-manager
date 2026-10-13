@@ -78,6 +78,35 @@ printf '%s' {content} | base64 -d > {q}"#,
     )
 }
 
+/// Take the copy without writing anything new.
+///
+/// An upload streams its own bytes over SFTP, so it cannot carry the write
+/// inside this script the way `backup_then_write` does. The copy still has to
+/// happen first, and a failure here has to stop the upload - which is why it
+/// is a separate call rather than a best-effort afterthought.
+pub fn backup_only(path: &str, stamp: u64) -> String {
+    let dir = dir_word(path);
+    let q = shell_quote(path);
+    format!(
+        r#"set -e
+dir={dir}
+mkdir -p "$dir" && chmod 700 "$dir"
+if [ -e {q} ]; then
+  mode=$(stat -c '%a' {q} 2>/dev/null || stat -f '%Lp' {q} 2>/dev/null || echo 644)
+  cp -p {q} "$dir/{stamp}.$mode"
+  chmod 600 "$dir/{stamp}.$mode"
+else
+  : > "$dir/{stamp}.absent"
+  chmod 600 "$dir/{stamp}.absent"
+fi
+ls -1 "$dir" | sort -r | tail -n +{keep_plus_one} | while read -r old; do rm -f "$dir/$old"; done"#,
+        dir = dir,
+        q = q,
+        stamp = stamp,
+        keep_plus_one = KEEP + 1,
+    )
+}
+
 /// Put a version back. `None` means the most recent one.
 ///
 /// Restoring a marker deletes the file: that is what undoing "this file did
@@ -317,6 +346,40 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o640, "the mode came back too");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_can_be_taken_without_writing_anything() {
+        // What an upload needs: the bytes arrive over SFTP, so the backup
+        // cannot ride along inside the write script.
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("app.conf");
+        std::fs::write(&path, b"original\n").unwrap();
+
+        let out = run(
+            &backup_only(&path.display().to_string(), STAMP),
+            home.path(),
+        );
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "original\n",
+            "the file itself is untouched"
+        );
+
+        // And it is the copy restore_file would use.
+        let out = run(&restore(&path.display().to_string(), None), home.path());
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "original\n");
     }
 
     #[cfg(unix)]

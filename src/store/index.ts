@@ -398,6 +398,10 @@ export interface McpBudgets {
   max_hosts_per_call: number;
   /** Every call, reads included. */
   max_calls_per_hour: number;
+  /** Hosts a fleet call talks to at once. Round-tripped, not edited here. */
+  concurrency: number;
+  /** Biggest single file transfer, in bytes. */
+  max_transfer_bytes: number;
 }
 
 /** Mirrors `FleetPolicy` in mcp_rollout.rs - how a fleet change rolls out. */
@@ -475,6 +479,8 @@ export interface McpConfig {
   budgets: McpBudgets;
   /** How a fleet change rolls out. */
   fleet: McpFleetPolicy;
+  /** Folder file transfers use. Empty means transfers are off. */
+  transfers_dir: string;
   /** Set when saved settings exist but could not be read. */
   problem?: string | null;
   /** True once an MCP password has been set. */
@@ -900,6 +906,8 @@ interface VaultStore {
   mcpSetApprovalTimeout: (seconds: number) => Promise<void>;
   mcpSetBudgets: (budgets: McpBudgets) => Promise<void>;
   mcpSetFleetPolicy: (policy: McpFleetPolicy) => Promise<void>;
+  /** Folder MCP file transfers may use. Empty turns them off. */
+  mcpSetTransfersDir: (dir: string) => Promise<void>;
   /** Is all MCP activity stopped? Works with the vault locked. */
   mcpHalted: () => Promise<boolean>;
   mcpSetHalted: (halted: boolean) => Promise<void>;
@@ -2241,6 +2249,7 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
     invoke<void>("mcp_set_approval_timeout", { seconds }),
   mcpSetBudgets: (budgets) => invoke<void>("mcp_set_budgets", { budgets }),
   mcpSetFleetPolicy: (policy) => invoke<void>("mcp_set_fleet_policy", { policy }),
+  mcpSetTransfersDir: (dir) => invoke<void>("mcp_set_transfers_dir", { dir }),
   mcpHalted: () => invoke<boolean>("mcp_halted"),
   mcpSetHalted: (halted) => invoke<void>("mcp_set_halted", { halted }),
   respondToApproval: async (id, decision) => {

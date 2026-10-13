@@ -709,7 +709,13 @@ pub async fn exec_once(host: &Host, command: &str) -> Result<String, String> {
     }
 }
 
-pub async fn exec_once_full(host: &Host, command: &str) -> Result<OnceOutput, String> {
+/// Connect to a host and authenticate, with nothing opened on top of it.
+///
+/// Factored out of `exec_once_full` so an SFTP transfer reaches a host by
+/// exactly the same route a one-off command does - same timeouts, same host
+/// key check, same auth. Two ways in would eventually disagree about one of
+/// those, and the one that matters is the host key check.
+pub async fn connect_authenticated(host: &Host) -> Result<client::Handle<ClientHandler>, String> {
     let config = Arc::new(client::Config {
         keepalive_interval: Some(Duration::from_secs(15)),
         keepalive_max: 3,
@@ -730,6 +736,11 @@ pub async fn exec_once_full(host: &Host, command: &str) -> Result<OnceOutput, St
     .map_err(|e| format!("Connection failed: {}", e))?;
 
     authenticate(&mut handle, host).await?;
+    Ok(handle)
+}
+
+pub async fn exec_once_full(host: &Host, command: &str) -> Result<OnceOutput, String> {
+    let handle = connect_authenticated(host).await?;
 
     let mut channel = handle
         .channel_open_session()

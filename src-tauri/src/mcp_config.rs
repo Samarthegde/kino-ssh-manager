@@ -68,6 +68,11 @@ pub struct McpConfig {
     /// (KR-11-F9, F13).
     #[serde(default)]
     pub fleet: crate::mcp_rollout::FleetPolicy,
+    /// Folder on this machine that file transfers read from and write to.
+    /// Empty means no transfers: there is deliberately no default, because
+    /// this is the only part of MCP that touches the user's own disk.
+    #[serde(default)]
+    pub transfers_dir: String,
 }
 
 fn default_approval_timeout() -> u32 {
@@ -103,6 +108,8 @@ pub struct McpConfigView {
     pub budgets: crate::mcp_budget::Budgets,
     /// How a fleet change rolls out.
     pub fleet: crate::mcp_rollout::FleetPolicy,
+    /// Folder transfers use, or empty when none is set.
+    pub transfers_dir: String,
     /// Set when the settings exist but could not be read, so the panel can say
     /// why everything looks empty instead of implying it always was.
     pub problem: Option<String>,
@@ -161,6 +168,7 @@ pub fn build_mcp_vault(
         approval_timeout_secs: config.approval_timeout_secs,
         budgets: config.budgets.clone(),
         fleet: config.fleet.clone(),
+        transfers_dir: config.transfers_dir.clone(),
     }
 }
 
@@ -227,6 +235,10 @@ pub struct McpVault {
     pub budgets: crate::mcp_budget::Budgets,
     #[serde(default)]
     pub fleet: crate::mcp_rollout::FleetPolicy,
+    /// Where transfers land. Carried here so `kino-mcp` knows the one folder
+    /// it may touch; empty means transfers are off.
+    #[serde(default)]
+    pub transfers_dir: String,
     /// One entry per exposed host, written explicitly even when it is the
     /// default, so the vault says what it means without the reader guessing.
     #[serde(default)]
@@ -642,6 +654,7 @@ mod tests {
             approval_timeout_secs: crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
             budgets: Default::default(),
             fleet: Default::default(),
+            transfers_dir: String::new(),
         };
         save_encrypted(&path, &vault, &key, &salt).unwrap();
         let loaded: McpVault = load_encrypted(&path, &key).unwrap();
@@ -703,6 +716,7 @@ mod tests {
             approval_timeout_secs: crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
             budgets: Default::default(),
             fleet: Default::default(),
+            transfers_dir: String::new(),
         };
         save_encrypted(&path, &vault, &key, &salt).unwrap();
 

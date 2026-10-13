@@ -26,6 +26,7 @@ pub mod mcp_fleet;
 pub mod mcp_limits;
 pub mod mcp_policy;
 pub mod mcp_rollout;
+pub mod mcp_transfer;
 mod metrics;
 mod notes;
 mod patches;
@@ -1683,6 +1684,35 @@ fn list_active_forwards(state: State<'_, AppState>) -> Vec<String> {
 
 // ── MCP commands ────────────────────────────────────────────────────────────
 
+/// The folder file transfers may use, or empty to turn them off.
+///
+/// No default on purpose: this is the one part of MCP that touches the user's
+/// own disk, so it exists only once a person has named a folder for it.
+#[tauri::command]
+fn mcp_set_transfers_dir(state: State<'_, AppState>, dir: String) -> Result<(), String> {
+    let dir = dir.trim().to_string();
+    if !dir.is_empty() {
+        let path = std::path::Path::new(&dir);
+        if !path.is_dir() {
+            return Err(format!("{dir} is not a folder."));
+        }
+        let probe = path.join(".kino-write-test");
+        std::fs::write(&probe, b"")
+            .map_err(|_| format!("{dir} cannot be written to. Check its permissions."))?;
+        let _ = std::fs::remove_file(&probe);
+    }
+    {
+        let key_guard = state.vault_key.lock().unwrap();
+        let key = key_guard.as_ref().ok_or("Vault is locked")?;
+        let salt = state.vault_salt.lock().unwrap();
+        let salt = salt.as_ref().ok_or("Vault is locked")?;
+        let mut config = mcp_config::load_for_edit(key);
+        config.transfers_dir = dir;
+        mcp_config::save_config(&config, key, salt)?;
+    }
+    sync_mcp_vault(&state)
+}
+
 /// How a fleet change rolls out, and whether production is in it (KR-11-F13).
 ///
 /// The production switch is the one that matters here; the panel makes the
@@ -1867,6 +1897,7 @@ fn mcp_get_config(state: State<'_, AppState>) -> Result<mcp_config::McpConfigVie
         approval_timeout_secs: config.approval_timeout_secs,
         budgets: config.budgets.clone(),
         fleet: config.fleet.clone(),
+        transfers_dir: config.transfers_dir.clone(),
         global_rules_text: mcp_policy::rules_to_text(&config.global_rules),
         exposed_host_ids: config.exposed_host_ids,
         configured: config.configured,
@@ -2288,6 +2319,7 @@ pub fn run() {
             mcp_set_halted,
             mcp_set_budgets,
             mcp_set_fleet_policy,
+            mcp_set_transfers_dir,
             mcp_audit_read,
             mcp_binary::check_mcp_binary,
             mcp_binary::install_mcp_binary,

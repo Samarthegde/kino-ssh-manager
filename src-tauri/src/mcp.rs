@@ -13,6 +13,7 @@ use crate::mcp_fleet::{self, FileState, HostOutcome, HostResult, Target};
 use crate::mcp_limits::{self, Window};
 use crate::mcp_policy::{self, Decision, HostPolicy, McpMode};
 use crate::mcp_rollout::{self, Action, HostChange, Rollout, Stopped};
+use crate::mcp_transfer;
 use crate::ssh_session;
 use crate::vault::Host;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -952,6 +953,31 @@ impl KinoMcpServer {
         }
     }
 
+    /// The folder transfers may use, or a refusal naming what is missing.
+    ///
+    /// There is no default. Transfers are the only part of MCP that touches
+    /// the user's own disk, so they exist only once a person has said where.
+    fn transfers_folder(&self) -> Result<std::path::PathBuf, CallToolResult> {
+        let dir = self.vault().transfers_dir.clone();
+        if dir.trim().is_empty() {
+            return Err(CallToolResult::error(vec![ContentBlock::text(
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "error": "no_transfers_folder",
+                    "message": "File transfers are off. Someone has to pick a folder for them \
+                                in Kino - Settings - MCP Server first; there is no default, \
+                                because this is the one thing here that writes to their own \
+                                machine. Nothing was transferred.",
+                }))
+                .unwrap_or_default(),
+            )]));
+        }
+        Ok(std::path::PathBuf::from(dir))
+    }
+
+    fn max_transfer_bytes(&self) -> u64 {
+        self.vault().budgets.max_transfer_bytes
+    }
+
     /// Cut output to what this host's policy allows, saying so in the text.
     fn cap(&self, host: &Host, text: String) -> mcp_limits::Capped {
         mcp_limits::cap(text, self.policy_for(host).max_bytes_per_call)
@@ -1401,6 +1427,33 @@ pub struct RolloutStartParams {
     #[schemars(description = "Content for `path`")]
     pub content: Option<String>,
     #[schemars(description = "Why you are making this change. Recorded, not used to decide.")]
+    pub reason: Option<String>,
+    #[schemars(description = "A ticket or change reference, if there is one.")]
+    pub ticket: Option<String>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct DownloadParams {
+    #[schemars(description = "Host name or ID")]
+    pub host: String,
+    #[schemars(description = "Path of the file on the host")]
+    pub remote_path: String,
+    #[schemars(
+        description = "What to call it in the transfers folder. A plain file name, not a path. \
+                       Defaults to the name it has on the host."
+    )]
+    pub save_as: Option<String>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct UploadParams {
+    #[schemars(description = "Host name or ID")]
+    pub host: String,
+    #[schemars(description = "File name in the transfers folder to send. A name, not a path.")]
+    pub file: String,
+    #[schemars(description = "Where to write it on the host")]
+    pub remote_path: String,
+    #[schemars(description = "Why. Recorded in the audit log, not used to decide anything.")]
     pub reason: Option<String>,
     #[schemars(description = "A ticket or change reference, if there is one.")]
     pub ticket: Option<String>,
@@ -2226,6 +2279,203 @@ impl KinoMcpServer {
         Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
     }
 
+    /// Copy a file off a host, onto this machine, without reading it.
+    #[tool(
+        description = "Copy a file from a host into Kino's transfers folder on the user's \
+                       machine, over SFTP and without loading it into this conversation. Use \
+                       this for anything large or binary - logs, dumps, archives - where \
+                       sftp_read would be hopeless. You get back where it was saved, how big \
+                       it is and its SHA-256; you do not get its contents. A folder must be \
+                       set in Kino first."
+    )]
+    async fn sftp_download(
+        &self,
+        Parameters(params): Parameters<DownloadParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let started = Instant::now();
+        if let Some(stop) = self.before_call("sftp_download", started) {
+            return Ok(stop);
+        }
+        let folder = match self.transfers_folder() {
+            Ok(folder) => folder,
+            Err(refusal) => return Ok(refusal),
+        };
+        let found = match self.find_host(&params.host) {
+            Some(h) => h,
+            None => {
+                self.record(
+                    "sftp_download",
+                    None,
+                    &params.remote_path,
+                    started,
+                    Outcome::not_found("host not found"),
+                );
+                return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                    "Host '{}' not found.",
+                    params.host
+                ))]));
+            }
+        };
+        let h = &found;
+        if let Some(refused) = self
+            .gate(h, "sftp_download", &params.remote_path, started)
+            .await
+        {
+            return Ok(refused);
+        }
+
+        let name = mcp_transfer::name_for(&params.remote_path, params.save_as.as_deref());
+        let dest = match mcp_transfer::local_file(&folder, &name) {
+            Ok(path) => path,
+            Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(e)])),
+        };
+
+        match mcp_transfer::download(h, &params.remote_path, &dest, self.max_transfer_bytes()).await
+        {
+            Ok(moved) => {
+                self.record(
+                    "sftp_download",
+                    Some(h),
+                    &params.remote_path,
+                    started,
+                    Outcome {
+                        bytes_out: Some(moved.bytes as usize),
+                        ..Outcome::allowed()
+                    },
+                );
+                Ok(CallToolResult::success(vec![ContentBlock::text(
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "saved_to": moved.local_path,
+                        "bytes": moved.bytes,
+                        "size": mcp_transfer::human(moved.bytes),
+                        "sha256": moved.sha256,
+                        "note": "The file is on the user's machine. Its contents were not read \
+                                 into this conversation.",
+                    }))
+                    .unwrap_or_default(),
+                )]))
+            }
+            Err(e) => {
+                self.record(
+                    "sftp_download",
+                    Some(h),
+                    &params.remote_path,
+                    started,
+                    Outcome {
+                        error: Some(e.clone()),
+                        ..Outcome::allowed()
+                    },
+                );
+                Ok(CallToolResult::error(vec![ContentBlock::text(e)]))
+            }
+        }
+    }
+
+    /// Send a file from this machine to a host.
+    #[tool(
+        description = "Send a file from Kino's transfers folder to a host, over SFTP. The file \
+                       must already be in that folder - give its name, not a path, because the \
+                       folder is the user's to choose and nothing outside it can be read. Use \
+                       this for anything large or binary; sftp_write is for small text. The \
+                       previous version on the host is kept, so restore_file can undo it."
+    )]
+    async fn sftp_upload(
+        &self,
+        Parameters(params): Parameters<UploadParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let started = Instant::now();
+        if let Some(stop) = self.before_call("sftp_upload", started) {
+            return Ok(stop);
+        }
+        let folder = match self.transfers_folder() {
+            Ok(folder) => folder,
+            Err(refusal) => return Ok(refusal),
+        };
+        let found = match self.find_host(&params.host) {
+            Some(h) => h,
+            None => {
+                self.record(
+                    "sftp_upload",
+                    None,
+                    &params.remote_path,
+                    started,
+                    Outcome::not_found("host not found"),
+                );
+                return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                    "Host '{}' not found.",
+                    params.host
+                ))]));
+            }
+        };
+        let h = &found;
+        if let Some(refused) = self
+            .gate(h, "sftp_upload", &params.remote_path, started)
+            .await
+        {
+            return Ok(refused);
+        }
+
+        let source = match mcp_transfer::local_file(&folder, &params.file) {
+            Ok(path) => path,
+            Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(e)])),
+        };
+
+        // The same backup the small writes take (KR-11-F14), so an upload
+        // over a live config is as undoable as any other write.
+        let backup = mcp_backup::backup_only(&params.remote_path, now_ms() / 1000);
+        if let Err(e) = ssh_session::exec_once(h, &backup).await {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "Could not keep a copy of the existing {} on '{}': {e}. Nothing was uploaded.",
+                params.remote_path, h.name
+            ))]));
+        }
+
+        match mcp_transfer::upload(h, &source, &params.remote_path, self.max_transfer_bytes()).await
+        {
+            Ok(moved) => {
+                self.record(
+                    "sftp_upload",
+                    Some(h),
+                    &params.remote_path,
+                    started,
+                    Outcome {
+                        bytes_out: Some(moved.bytes as usize),
+                        reason: label(&params.reason),
+                        ticket: label(&params.ticket),
+                        ..Outcome::allowed()
+                    },
+                );
+                Ok(CallToolResult::success(vec![ContentBlock::text(
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "host": h.name,
+                        "wrote": params.remote_path,
+                        "bytes": moved.bytes,
+                        "size": mcp_transfer::human(moved.bytes),
+                        "sha256": moved.sha256,
+                        "note": "The previous version is kept on the host; restore_file can put \
+                                 it back.",
+                    }))
+                    .unwrap_or_default(),
+                )]))
+            }
+            Err(e) => {
+                self.record(
+                    "sftp_upload",
+                    Some(h),
+                    &params.remote_path,
+                    started,
+                    Outcome {
+                        error: Some(e.clone()),
+                        reason: label(&params.reason),
+                        ticket: label(&params.ticket),
+                        ..Outcome::allowed()
+                    },
+                );
+                Ok(CallToolResult::error(vec![ContentBlock::text(e)]))
+            }
+        }
+    }
+
     /// Put back what a write replaced (KR-11-F14).
     #[tool(
         description = "Restore a file Kino backed up before an assistant wrote to it. Every \
@@ -2681,6 +2931,7 @@ mod tests {
             approval_timeout_secs: crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
             budgets: Default::default(),
             fleet: Default::default(),
+            transfers_dir: String::new(),
         })
         // Nothing is listening here, which is what a test wants: the real
         // socket belongs to whatever Kino is running on this machine.
@@ -2877,6 +3128,113 @@ mod tests {
         assert_eq!(r.is_error, Some(true));
     }
 
+    // ── Moving whole files ──────────────────────────────────────────────────
+
+    #[test]
+    fn transfers_are_off_until_someone_names_a_folder() {
+        // The only part of MCP that writes to the user's own machine, so it
+        // does not exist until a person has said where.
+        let (s, _dir, _path) = recording_server(McpMode::Full, "");
+        let body = text(
+            &tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(s.sftp_download(Parameters(DownloadParams {
+                    host: "web-prod".into(),
+                    remote_path: "/var/log/app.log".into(),
+                    save_as: None,
+                })))
+                .unwrap(),
+        );
+        assert!(body.contains("no_transfers_folder"), "{body}");
+        assert!(body.contains("Nothing was transferred"), "{body}");
+    }
+
+    /// A server whose transfers folder is this test's own.
+    fn transferring_server(dir: &std::path::Path) -> KinoMcpServer {
+        let mut vault = (*server(McpMode::Full, "").vault()).clone();
+        vault.transfers_dir = dir.to_string_lossy().into_owned();
+        KinoMcpServer::new(vault).asking_at("/nonexistent/x.sock".into())
+    }
+
+    #[test]
+    fn a_download_cannot_choose_where_it_lands() {
+        // The folder is the user's; the name is the assistant's. Anything
+        // that looks like a path is refused before a connection is opened.
+        let dir = tempfile::tempdir().unwrap();
+        let s = transferring_server(dir.path());
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        for attempt in ["../../.ssh/authorized_keys", "/etc/passwd", "sub/file"] {
+            let body = text(
+                &rt.block_on(s.sftp_download(Parameters(DownloadParams {
+                    host: "web-prod".into(),
+                    remote_path: "/tmp/x".into(),
+                    save_as: Some(attempt.into()),
+                })))
+                .unwrap(),
+            );
+            assert!(body.contains("plain file name"), "{attempt}: {body}");
+        }
+    }
+
+    #[test]
+    fn an_upload_can_only_send_what_is_in_the_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = transferring_server(dir.path());
+        let body = text(
+            &tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(s.sftp_upload(Parameters(UploadParams {
+                    host: "web-prod".into(),
+                    file: "../../../etc/passwd".into(),
+                    remote_path: "/tmp/stolen".into(),
+                    reason: None,
+                    ticket: None,
+                })))
+                .unwrap(),
+        );
+        assert!(body.contains("plain file name"), "{body}");
+    }
+
+    #[test]
+    fn a_read_only_host_refuses_an_upload_like_any_other_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = (*server(McpMode::ReadOnly, "").vault()).clone();
+        vault.transfers_dir = dir.path().to_string_lossy().into_owned();
+        let s = KinoMcpServer::new(vault).asking_at("/nonexistent/x.sock".into());
+        std::fs::write(dir.path().join("payload.bin"), b"x").unwrap();
+
+        let body = text(
+            &tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(s.sftp_upload(Parameters(UploadParams {
+                    host: "web-prod".into(),
+                    file: "payload.bin".into(),
+                    remote_path: "/etc/app.conf".into(),
+                    reason: None,
+                    ticket: None,
+                })))
+                .unwrap(),
+        );
+        assert!(body.contains("policy_denied"), "{body}");
+    }
+
+    #[test]
+    fn a_download_is_a_read_and_an_upload_is_a_write() {
+        use crate::mcp_policy::{capability, Capability};
+        assert_eq!(capability("sftp_download"), Capability::Read);
+        assert_eq!(capability("sftp_upload"), Capability::Write);
+    }
+
     // ── Undo, and the two fleet actions (KR-11-F14, F15) ────────────────────
 
     #[test]
@@ -3026,6 +3384,7 @@ mod tests {
             approval_timeout_secs: crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
             budgets: Default::default(),
             fleet: Default::default(),
+            transfers_dir: String::new(),
         };
         let mut s = KinoMcpServer::with_audit(
             vault,
@@ -3252,6 +3611,7 @@ mod tests {
             approval_timeout_secs: crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
             budgets: Default::default(),
             fleet: Default::default(),
+            transfers_dir: String::new(),
         };
         let mut s =
             KinoMcpServer::with_audit(vault, crate::mcp_audit::AuditLog::new(audit, [3u8; 32]))
@@ -3633,6 +3993,7 @@ mod tests {
             approval_timeout_secs: crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
             budgets: Default::default(),
             fleet: Default::default(),
+            transfers_dir: String::new(),
         }
     }
 
@@ -4168,6 +4529,7 @@ mod tests {
             approval_timeout_secs: crate::mcp_approval::DEFAULT_TIMEOUT_SECS,
             budgets: Default::default(),
             fleet: Default::default(),
+            transfers_dir: String::new(),
         });
         assert!(text(&exec(&s, "uptime")).contains("\"reason\": \"default_deny\""));
     }

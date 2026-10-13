@@ -150,6 +150,23 @@ this snippet with a copy button.
   vault, mode `0600`, so another user on the machine cannot answer for you.
   Windows has no channel yet: there, a guarded call is still refused, with a
   message saying so.
+- **Whole files move over SFTP, without being read.** `sftp_download` copies a
+  file from a host into a folder on your machine; `sftp_upload` sends one the
+  other way. Both stream over real SFTP, so size is not a problem, and the
+  assistant is told the path, the size and a SHA-256 - **never the contents**.
+  A 200 MB dump costs nothing in context and appears in no transcript.
+
+  **Transfers are off until you pick a folder** in the MCP panel. There is no
+  default. Everything else in MCP reaches only the hosts you ticked; this is
+  the one part that touches your own machine, and without that line an
+  assistant allowed to write to a host could have uploaded your private key to
+  it - no host policy would have had an opinion, because none of that is about
+  a host. Inside the folder, a name is a name: no paths, no `..`, no symlink
+  out, no subdirectories. An upload keeps the previous version on the host, so
+  `restore_file` undoes it.
+
+  `sftp_read` and `sftp_write` still exist for small text, where having the
+  content in the conversation is the point.
 - **A write keeps what it replaced.** Before any `sftp_write` or fleet write,
   the previous version of the file is copied on the host to
   `~/.kino/backups/<hash of the path>/<timestamp>.<mode>`, `0600` in a `0700`
