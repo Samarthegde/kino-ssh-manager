@@ -591,7 +591,7 @@
   <section class="hero">
     <div class="wrap">
       <div class="hero-inner reel">
-        <span class="pill"><span class="tag">v0.9.3</span> New: approvals, an audit trail and a stop switch for AI access</span>
+        <span class="pill"><span class="tag">v0.9.4</span> New: an assistant can work a whole fleet, one careful stage at a time</span>
         <h1>Every SSH host<br><span class="soft">without the cloud</span><span class="stop">.</span></h1>
         <p class="lead">
           A cross-platform credential manager and terminal. Your hosts, keys, and passwords
@@ -716,7 +716,7 @@
         </div>
         <div class="feat">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.9 4.6 4.6 1.9-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z" stroke-linejoin="round"/><path d="M18 15l.8 2.2 2.2.8-2.2.8L18 21l-.8-2.2-2.2-.8 2.2-.8z" stroke-linejoin="round"/></svg></div>
-          <h3>MCP server <span class="new">New</span></h3><p>Expose chosen hosts to an AI assistant over the Model Context Protocol. A newly ticked host is <em>read-only</em>. Anything no rule covers stops and asks you, with the command on screen and a countdown. Every call is recorded - the refusals too - and one switch stops the lot. The assistant never sees the rest of your vault, and the headless binary never gets your master password.</p>
+          <h3>MCP server <span class="new">New</span></h3><p>Expose chosen hosts to an AI assistant over the Model Context Protocol. A newly ticked host is <em>read-only</em>. Anything no rule covers stops and asks you, with the command on screen and a countdown. Every call is recorded - the refusals too - and one switch stops the lot. It can ask a whole group of hosts at once and get one summary back rather than fifty replies, and change them only as a rollout: one host first, a health check, then batches, stopping itself if too much fails. Production is left out unless you put it in, and the previous version of every file it writes is kept on the host. The assistant never sees the rest of your vault, and the headless binary never gets your master password.</p>
         </div>
         <div class="feat">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.4 8.3-8 10-4.6-1.7-8-5-8-10V6l8-4z" stroke-linejoin="round"/><path d="M12 8v5M12 16v.5" stroke-linecap="round"/></svg></div>
@@ -736,7 +736,7 @@
         </div>
         <div class="feat">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4" stroke-linecap="round"/></svg></div>
-          <h3>Encrypted vault</h3><p>Argon2 key derivation and AES-256-GCM. One master password unlocks every host, key, and snippet.</p>
+          <h3>Encrypted vault</h3><p>Argon2 key derivation and AES-256-GCM. One master password unlocks every host, key, and snippet. Sync it to a private GitHub repo or to a folder in your Documents that OneDrive, iCloud Drive, Dropbox or Syncthing already carries - either way only the ciphertext leaves the machine, and a new computer needs your master password and nothing else.</p>
         </div>
         <div class="feat">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>

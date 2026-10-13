@@ -4,7 +4,13 @@ All notable changes to Kino SSH Manager are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.9.4] - 2026-10-13
+
+The MCP server grew up. An assistant can ask a whole group of hosts at once and
+get one answer back, change them only one careful stage at a time with the
+previous version of every file kept, and move whole files without ever reading
+them into a conversation. The vault can also sync through a folder now, with no
+account anywhere.
 
 ### Added
 - **Fleet tools for MCP.** `fleet_exec` runs one command across many hosts at

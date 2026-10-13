@@ -15,6 +15,48 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.9.4",
+    headline: "An assistant can now work a whole fleet - one careful stage at a time.",
+    items: [
+      {
+        title: "Ask every host at once",
+        detail:
+          "One command across a group, with a summary back rather than fifty replies: the " +
+          "hosts that agreed are stated together, and anything that failed or was refused " +
+          "gets its own line. check_drift compares a file across the fleet and names the " +
+          "machines that differ.",
+      },
+      {
+        title: "Changes roll out, they do not land all at once",
+        detail:
+          "A fleet-wide change starts on one host, runs its health check, and stops there " +
+          "until you let it continue. A failed first host stops everything. Production is " +
+          "left out unless you type the word in the MCP panel to allow it.",
+      },
+      {
+        title: "Every write can be undone",
+        detail:
+          "Before anything is written to a host, the previous version is kept there - five " +
+          "per file. restore_file puts one back, mode and all. If the file did not exist " +
+          "before, undoing it removes it.",
+      },
+      {
+        title: "Whole files, without reading them",
+        detail:
+          "sftp_download and sftp_upload move logs, dumps and archives over SFTP. The " +
+          "assistant gets a path, a size and a checksum - never the contents - so a large " +
+          "file costs nothing in the conversation. Off until you pick a folder for it.",
+      },
+      {
+        title: "Sync without an account",
+        detail:
+          "The vault can sync through Documents/ssh-manager, carried by whatever already " +
+          "syncs your Documents. A second machine needs your master password and nothing " +
+          "else.",
+      },
+    ],
+  },
+  {
     version: "0.9.3",
     headline: "You can see what an assistant did, limit it, approve it, and stop it.",
     items: [
