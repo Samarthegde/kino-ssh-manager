@@ -7,47 +7,6 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 ## [Unreleased]
 
 ### Added
-- **Sync through a folder.** Kino can write the encrypted vault to
-  `Documents/ssh-manager`, and whatever already carries your Documents -
-  OneDrive, iCloud Drive, Dropbox, Syncthing - takes it to your other
-  machines. No account, no token, nothing to register, and it works with
-  services Kino will never have a backend for.
-
-  The folder is always the same one, so a new machine needs your master
-  password and nothing else: no remembering which folder the other device
-  used, and no way to point two devices at different folders and wonder why
-  nothing arrives. Conflicts are caught by comparing the file's hash with the
-  one last seen, which covers the case this is for - two machines, edits days
-  apart - but not two machines writing in the same moment; the panel says so.
-- **File transfers over SFTP, without the file entering the conversation.**
-  `sftp_download` copies a file from a host into a folder on your machine and
-  `sftp_upload` sends one back, both streamed, so size stops being the limit
-  that `sftp_write`'s base64-in-a-command-line imposed. The assistant is given
-  the path, the size and a SHA-256 - never the contents - so a 200 MB dump
-  costs nothing in context and shows up in no transcript.
-
-  Transfers are **off until you name a folder** in the MCP panel, and nothing
-  outside it can be read or written: it is the only part of MCP that touches
-  your own machine rather than a host you exposed. Uploads keep the previous
-  version on the host, so `restore_file` undoes them.
-- **Every write an assistant makes can be undone.** Before `sftp_write` or a
-  fleet write replaces a file, the previous version is kept on the host -
-  five per path, `0600`, in the SSH user's own home rather than `/tmp`.
-  `restore_file` puts one back with its mode, or lists what is kept. A file
-  that did not exist before the write leaves a marker, so undoing it deletes
-  the file. The copy and the write are one script, so a dropped connection
-  cannot leave a file replaced with nothing to restore.
-- **`fleet_write` and `fleet_snippet_run`**, both as rollouts.
-- **Staged rollouts for fleet-wide changes.** `rollout_start` changes one host
-  first, runs its health check, and stops there; `rollout_continue` asks for
-  the next batch. A failed canary stops everything, as does crossing the
-  failure share, the stop switch, or the hourly budget. Nothing can skip a
-  stage. Production hosts are left out unless you type the word in the MCP
-  panel to allow them, and even then they go last and are never the canary.
-  Whatever changed before a rollout stopped stays changed, and the report says
-  exactly which hosts. Health checks are snippets chosen per group or
-  environment; with none set, the report says the command's exit code was the
-  only judge.
 - **Fleet tools for MCP.** `fleet_exec` runs one command across many hosts at
   once and answers with a summary rather than one reply per host: the hosts
   that agreed are reported together, and anything that failed, timed out or
@@ -60,6 +19,53 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
   refused on others, and the refusals appear in the answer rather than going
   missing. Eight hosts at a time by default, each with its own deadline, and a
   call spends one change per host against the hourly budget.
+
+- **Staged rollouts for fleet-wide changes.** `rollout_start` changes one host
+  first, runs its health check, and stops there; `rollout_continue` asks for
+  the next batch. A failed canary stops everything, as does crossing the
+  failure share, the stop switch, or the hourly budget. Nothing can skip a
+  stage. Production hosts are left out unless you type the word in the MCP
+  panel to allow them, and even then they go last and are never the canary.
+  Whatever changed before a rollout stopped stays changed, and the report says
+  exactly which hosts. Health checks are snippets chosen per group or
+  environment; with none set, the report says the command's exit code was the
+  only judge.
+
+  `fleet_write` and `fleet_snippet_run` are rollouts too, so writing a file
+  or running a snippet across the fleet goes through the same canary.
+
+- **Every write an assistant makes can be undone.** Before `sftp_write` or a
+  fleet write replaces a file, the previous version is kept on the host -
+  five per path, `0600`, in the SSH user's own home rather than `/tmp`.
+  `restore_file` puts one back with its mode, or lists what is kept. A file
+  that did not exist before the write leaves a marker, so undoing it deletes
+  the file. The copy and the write are one script, so a dropped connection
+  cannot leave a file replaced with nothing to restore.
+
+- **File transfers over SFTP, without the file entering the conversation.**
+  `sftp_download` copies a file from a host into a folder on your machine and
+  `sftp_upload` sends one back, both streamed, so size stops being the limit
+  that `sftp_write`'s base64-in-a-command-line imposed. The assistant is given
+  the path, the size and a SHA-256 - never the contents - so a 200 MB dump
+  costs nothing in context and shows up in no transcript.
+
+  Transfers are **off until you name a folder** in the MCP panel, and nothing
+  outside it can be read or written: it is the only part of MCP that touches
+  your own machine rather than a host you exposed. Uploads keep the previous
+  version on the host, so `restore_file` undoes them.
+
+- **Sync through a folder.** Kino can write the encrypted vault to
+  `Documents/ssh-manager`, and whatever already carries your Documents -
+  OneDrive, iCloud Drive, Dropbox, Syncthing - takes it to your other
+  machines. No account, no token, nothing to register, and it works with
+  services Kino will never have a backend for.
+
+  The folder is always the same one, so a new machine needs your master
+  password and nothing else: no remembering which folder the other device
+  used, and no way to point two devices at different folders and wonder why
+  nothing arrives. Conflicts are caught by comparing the file's hash with the
+  one last seen, which covers the case this is for - two machines, edits days
+  apart - but not two machines writing in the same moment; the panel says so.
 
 ## [0.9.3] - 2026-09-28
 

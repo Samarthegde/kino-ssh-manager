@@ -42,7 +42,11 @@ attestation. [How to check them](SECURITY.md#verifying-what-you-downloaded).
   command there has to be confirmed against the hostname.
 - **AI, if you want it.** An opt-in copilot with your own key, and an
   [MCP server](docs/mcp.md) that exposes chosen hosts to an assistant -
-  read-only until you say otherwise, and every call recorded.
+  read-only until you say otherwise, every call recorded, and one switch that
+  stops the lot. It can ask a whole group of hosts at once, and change them
+  only as a rollout: one host first, a health check, then batches, with the
+  previous version of every file it writes kept on the host. Production is out
+  unless you put it in.
 - **Reach hosts with no open port.** Optional agent mode dials out through a
   relay, so a box behind NAT or CGNAT needs no inbound SSH.
 
