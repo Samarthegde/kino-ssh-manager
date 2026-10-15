@@ -1,6 +1,7 @@
 <div align="center">
 
 # Kino SSH Manager
+### A Projectionist. Kino runs the booth. You decide what plays
 
 **An SSH client that keeps your hosts, keys and passwords in one encrypted vault on your own machine.**
 
