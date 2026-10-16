@@ -114,9 +114,6 @@ pub async fn download(
     dest: &Path,
     max_bytes: u64,
 ) -> Result<Transferred, String> {
-    use sha2::{Digest, Sha256};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
     let sftp = connect(host).await?;
     let size = sftp
         .metadata(remote)
@@ -142,6 +139,59 @@ pub async fn download(
         .await
         .map_err(|e| format!("Could not write {}: {e}", part.display()))?;
 
+    // Every way out of the streaming below has to take the .part with it. The
+    // one that matters is a full disk 8 GB into a 10 GB download: the failure
+    // itself is fine, a dead half-file holding the space afterwards is not.
+    let moved = stream_in(&mut remote_file, &mut out, max_bytes).await;
+    drop(out);
+    let (bytes, digest) = commit(&part, dest, moved)?;
+
+    Ok(Transferred {
+        bytes,
+        sha256: digest,
+        local_path: dest.display().to_string(),
+    })
+}
+
+/// Put the finished download in place, or clear up after a failed one.
+///
+/// Every way out of streaming has to take the `.part` with it. The one that
+/// matters is a full disk eight gigabytes into a ten gigabyte download: the
+/// failure itself is fine, a dead half-file holding the space afterwards is
+/// not. Separate from the streaming so that rule can be tested without a host
+/// on the other end.
+fn commit(
+    part: &Path,
+    dest: &Path,
+    streamed: Result<(u64, String), String>,
+) -> Result<(u64, String), String> {
+    let done = match streamed {
+        Ok(done) => done,
+        Err(e) => {
+            let _ = std::fs::remove_file(part);
+            return Err(e);
+        }
+    };
+    std::fs::rename(part, dest).map_err(|e| {
+        let _ = std::fs::remove_file(part);
+        format!("Could not finish {}: {e}", dest.display())
+    })?;
+    Ok(done)
+}
+
+/// Read the remote file into the local one, hashing as it goes.
+///
+/// Separate from its caller so every failure in here lands in one place, and
+/// the caller can do the one thing that must happen on all of them: remove
+/// the partial file.
+async fn stream_in(
+    remote_file: &mut russh_sftp::client::fs::File,
+    out: &mut tokio::fs::File,
+    max_bytes: u64,
+) -> Result<(u64, String), String> {
+    use sha2::{Digest, Sha256};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 65536];
     let mut bytes: u64 = 0;
@@ -157,26 +207,15 @@ pub async fn download(
         // Checked while streaming, not only up front: a file being appended
         // to can outgrow what its metadata promised.
         if bytes > max_bytes {
-            drop(out);
-            let _ = tokio::fs::remove_file(&part).await;
             return Err(too_big(bytes, max_bytes));
         }
         hasher.update(&buf[..n]);
         out.write_all(&buf[..n])
             .await
-            .map_err(|e| format!("Could not write {}: {e}", part.display()))?;
+            .map_err(|e| format!("Could not write the download: {e}"))?;
     }
     out.flush().await.map_err(|e| e.to_string())?;
-    drop(out);
-    tokio::fs::rename(&part, dest)
-        .await
-        .map_err(|e| format!("Could not finish {}: {e}", dest.display()))?;
-
-    Ok(Transferred {
-        bytes,
-        sha256: format!("{:x}", hasher.finalize()),
-        local_path: dest.display().to_string(),
-    })
+    Ok((bytes, format!("{:x}", hasher.finalize())))
 }
 
 /// Stream a file from the folder onto the host.
@@ -341,6 +380,47 @@ mod tests {
             "app.log",
             "a blank name is no name"
         );
+    }
+
+    #[test]
+    fn a_failed_download_leaves_nothing_behind() {
+        // Disk full, eight gigabytes into ten. The failure is fine; a dead
+        // half-file holding the space afterwards is not.
+        let dir = tempfile::tempdir().unwrap();
+        let part = dir.path().join("big.iso.part");
+        let dest = dir.path().join("big.iso");
+        std::fs::write(&part, b"half of it").unwrap();
+
+        let err = commit(&part, &dest, Err("No space left on device".into())).unwrap_err();
+        assert!(err.contains("No space left"));
+        assert!(!part.exists(), "the .part is gone");
+        assert!(!dest.exists(), "and nothing was put in its place");
+    }
+
+    #[test]
+    fn a_finished_download_is_renamed_into_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let part = dir.path().join("big.iso.part");
+        let dest = dir.path().join("big.iso");
+        std::fs::write(&part, b"all of it").unwrap();
+
+        let (bytes, hash) = commit(&part, &dest, Ok((9, "abc".into()))).unwrap();
+        assert_eq!((bytes, hash.as_str()), (9, "abc"));
+        assert!(!part.exists(), "nothing watching the folder sees a .part");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"all of it");
+    }
+
+    #[test]
+    fn a_rename_that_fails_does_not_leave_the_part_either() {
+        // dest is a directory, so the rename cannot succeed.
+        let dir = tempfile::tempdir().unwrap();
+        let part = dir.path().join("big.iso.part");
+        let dest = dir.path().join("big.iso");
+        std::fs::write(&part, b"x").unwrap();
+        std::fs::create_dir(&dest).unwrap();
+
+        assert!(commit(&part, &dest, Ok((1, "abc".into()))).is_err());
+        assert!(!part.exists());
     }
 
     #[test]

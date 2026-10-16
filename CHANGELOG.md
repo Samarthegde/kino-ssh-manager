@@ -4,6 +4,15 @@ All notable changes to Kino SSH Manager are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **A failed download no longer leaves half a file behind.** Only the
+  over-the-limit case cleaned up after itself; a download that failed for any
+  other reason - a full disk being the one that matters, eight gigabytes into
+  ten - left its `.part` sitting in the transfers folder holding the space,
+  with nothing that would ever remove it.
+
 ## [0.9.4] - 2026-10-13
 
 The MCP server grew up. An assistant can ask a whole group of hosts at once and
