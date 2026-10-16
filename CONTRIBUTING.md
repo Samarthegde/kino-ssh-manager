@@ -42,6 +42,7 @@ cargo fmt --manifest-path src-tauri/Cargo.toml
 ## Guidelines
 
 - **Match the surrounding style.** The codebase favors small, focused modules and `Result<_, String>` at the command boundary.
+- **Match the voice too.** Anything a person reads - a button, a hint, an error, an MCP tool's description - follows [how Kino talks](docs/voice.md). Short version: say what happened and what didn't, name the next move, admit the limit, and never exclaim.
 - **Crypto/auth/vault changes get extra scrutiny.** If you touch `vault.rs`, the sync code, or authentication, explain the reasoning in the PR and add tests where practical.
 - **Never log or transmit secrets.** Passwords, private keys, and tokens must stay in the encrypted vault and in memory only while unlocked.
 - **Keep the IPC surface tight.** New Tauri commands should validate that the vault is unlocked where relevant.

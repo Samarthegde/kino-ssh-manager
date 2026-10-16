@@ -88,7 +88,8 @@ else - on Linux, `XDG_DATA_HOME=/tmp/kino-demo npm run tauri dev`.
 Issues and pull requests are welcome, and some issues are
 [tagged for newcomers](https://github.com/Samarthegde/kino-ssh-manager/labels/good%20first%20issue).
 See [CONTRIBUTING.md](CONTRIBUTING.md). Anything touching the vault, crypto or
-authentication gets extra scrutiny.
+authentication gets extra scrutiny, and anything a person reads follows
+[how Kino talks](docs/voice.md).
 
 Built with [Tauri 2](https://tauri.app/) - Rust (`russh`, `aes-gcm`, `argon2`)
 and React with xterm.js.
