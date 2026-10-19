@@ -95,6 +95,54 @@ pub fn updater_key_id(app: tauri::AppHandle) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// What this binary is, past its version number (KR-04-F5).
+///
+/// The version alone cannot answer the question a user has when an advisory
+/// lands: *is this the build that has the fix.* Two releases can carry the
+/// same version if one was re-cut, and a build from a working tree carries a
+/// version that was never released at all. The commit says which code, and
+/// the date says how old the binary is.
+#[derive(Serialize)]
+pub struct BuildInfo {
+    /// From Cargo, so it is the same number the updater compares.
+    pub version: String,
+    /// Short commit hash, or `unknown` for a build with no git and no CI.
+    pub commit: String,
+    /// `YYYY-MM-DD`, UTC, or `unknown`.
+    pub built: String,
+    /// This version's bill of materials, as published with the release.
+    pub sbom: String,
+    /// Where fixed vulnerabilities are written up.
+    pub advisories: String,
+}
+
+/// The name the release workflow gives the SBOM it attaches. Kept next to the
+/// link that points at it - a rename in one place without the other is a dead
+/// link in About, and the test below is what notices.
+fn sbom_asset(version: &str) -> String {
+    format!("kino-ssh-manager-{version}.cdx.json")
+}
+
+#[tauri::command]
+pub fn build_info() -> BuildInfo {
+    let version = env!("CARGO_PKG_VERSION").to_string();
+    BuildInfo {
+        sbom: format!(
+            "https://github.com/{REPO}/releases/download/v{version}/{}",
+            sbom_asset(&version)
+        ),
+        advisories: format!("https://github.com/{REPO}/security/advisories"),
+        // `option_env!` rather than `env!`: the build script sets both, and a
+        // missing one should degrade to "unknown" rather than fail to compile
+        // for someone building without it.
+        commit: option_env!("KINO_COMMIT").unwrap_or("unknown").to_string(),
+        built: option_env!("KINO_BUILD_DATE")
+            .unwrap_or("unknown")
+            .to_string(),
+        version,
+    }
+}
+
 /// Async so it runs off the main thread. Tauri runs a non-`async` command *on*
 /// the main thread, and this runs at startup - so as a plain `fn` a slow or
 /// absent network held the window frozen while the app was still opening.
@@ -177,6 +225,46 @@ mod tests {
             "waited {took:?} - the request is not bounded"
         );
         println!("gave up after {took:?}");
+    }
+
+    #[test]
+    fn build_identity_is_filled_in() {
+        let info = super::build_info();
+        assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
+        assert!(
+            !info.commit.is_empty(),
+            "commit should at least say unknown"
+        );
+        assert!(
+            !info.built.is_empty(),
+            "build date should at least say unknown"
+        );
+        // A build in this repo has git, so it should be a real short hash
+        // rather than the fallback.
+        assert_ne!(info.commit, "unknown", "built in a working tree with git");
+        assert!(
+            info.built.len() == 10 && info.built.starts_with("20"),
+            "build date should be YYYY-MM-DD, got {}",
+            info.built
+        );
+    }
+
+    /// The SBOM link in About points at a release asset whose name is decided
+    /// by a shell line in the release workflow. Nothing but this test connects
+    /// the two, and a rename on one side is a 404 the user finds first.
+    #[test]
+    fn the_sbom_link_matches_what_the_release_workflow_uploads() {
+        let workflow = include_str!("../../.github/workflows/release.yml");
+        let in_workflow = "kino-ssh-manager-${version}.cdx.json";
+        assert!(
+            workflow.contains(in_workflow),
+            "release.yml no longer builds the SBOM name as {in_workflow} - \
+             update sbom_asset() to match"
+        );
+        assert_eq!(
+            super::sbom_asset("1.2.3"),
+            "kino-ssh-manager-1.2.3.cdx.json"
+        );
     }
 
     #[test]

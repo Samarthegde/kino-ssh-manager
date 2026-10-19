@@ -125,6 +125,18 @@ export interface UpdateInfo {
   url: string;
 }
 
+/** What this binary is, past its version number (KR-04-F5). */
+export interface BuildInfo {
+  version: string;
+  /** Short commit hash, or "unknown" where there was no git and no CI. */
+  commit: string;
+  /** YYYY-MM-DD, UTC, or "unknown". */
+  built: string;
+  /** This version's bill of materials, as published with the release. */
+  sbom: string;
+  advisories: string;
+}
+
 export interface DiskInfo {
   mount: string;
   used_kb: number;
@@ -864,6 +876,9 @@ interface VaultStore {
   /** The minisign key id the updater verifies against, read from the running
    *  config so it cannot drift from the key that actually gates an install. */
   updaterKeyId: () => Promise<string | null>;
+  /** Version, commit and build date, plus where this release's SBOM and
+   *  advisories live. Baked in at compile time - no network. */
+  buildInfo: () => Promise<BuildInfo>;
   /** Where kino-mcp is, and whether a bare `kino-mcp` on PATH is this
    *  version's copy. Local only - no network. */
   checkMcpBinary: () => Promise<McpBinaryStatus>;
@@ -1681,6 +1696,7 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
   },
 
   updaterKeyId: () => invoke<string | null>("updater_key_id"),
+  buildInfo: () => invoke<BuildInfo>("build_info"),
   checkMcpBinary: () => invoke<McpBinaryStatus>("check_mcp_binary"),
   installMcpBinary: () => invoke<McpBinaryStatus>("install_mcp_binary"),
   checkForUpdate: async () => {

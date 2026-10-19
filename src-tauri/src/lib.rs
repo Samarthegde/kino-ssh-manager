@@ -2313,6 +2313,7 @@ pub fn run() {
             ai::ai_cancel,
             update::check_for_update,
             update::updater_key_id,
+            update::build_info,
             mcp_approval_respond,
             mcp_set_approval_timeout,
             mcp_halted,

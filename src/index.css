@@ -2959,6 +2959,27 @@ textarea.mono {
   border-radius: 999px;
   padding: 2px 10px;
 }
+/* Commit and build date, under the version pill. Quiet: it is there to be
+   read when something has gone wrong, not to compete with the version. */
+.about-build {
+  margin-top: 6px;
+  font-size: 10.5px;
+  color: var(--subtle);
+}
+.about-links {
+  justify-content: center;
+  margin-top: 10px;
+}
+.about-links a {
+  color: var(--subtext);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  cursor: pointer;
+}
+.about-links a:hover {
+  color: var(--text);
+  border-bottom-color: var(--rule);
+}
 .about-desc {
   font-size: 12px;
   line-height: 1.6;
@@ -7454,6 +7475,17 @@ textarea.mono,
   font-size: 9.5px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
+  justify-content: flex-start;
+}
+
+.about-build {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  color: color-mix(in srgb, var(--ink-paper) 45%, transparent);
+}
+
+.about-links {
   justify-content: flex-start;
 }
 

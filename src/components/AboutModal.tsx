@@ -3,7 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { useVaultStore } from "../store";
+import { useVaultStore, type BuildInfo } from "../store";
 
 const REPO_URL = "https://github.com/Samarthegde/kino-ssh-manager";
 
@@ -15,8 +15,10 @@ interface Props {
 type InstallPhase = "idle" | "working" | "downloading" | "verified" | "installed" | "failed";
 
 export function AboutModal({ onClose }: Props) {
-  const { updateInfo, checkForUpdate, updaterKeyId } = useVaultStore();
+  const { updateInfo, checkForUpdate, updaterKeyId, buildInfo } = useVaultStore();
   const [version, setVersion] = useState("");
+  /** Commit and build date, and where this release's SBOM and advisories are. */
+  const [build, setBuild] = useState<BuildInfo | null>(null);
   const [renderer, setRenderer] = useState("");
   const [checking, setChecking] = useState(false);
   /** Set once a package has been downloaded and its signature checked. */
@@ -33,9 +35,10 @@ export function AboutModal({ onClose }: Props) {
 
   useEffect(() => {
     getVersion().then(setVersion).catch(() => setVersion(""));
+    buildInfo().then(setBuild).catch(() => setBuild(null));
     // Written by Terminal on mount; empty until a terminal has been opened.
     setRenderer(localStorage.getItem("ssh-mgr:renderer") ?? "");
-  }, []);
+  }, [buildInfo]);
 
   async function recheck() {
     setChecking(true);
@@ -137,6 +140,16 @@ export function AboutModal({ onClose }: Props) {
           <h3 className="about-name">Kino SSH Manager</h3>
 
           <p className="about-version mono">v{version || "…"}</p>
+          {build && (
+            /* Which code, and how old. A version alone cannot answer "is this
+               the build with the fix" - a release can be re-cut, and a build
+               from a working tree carries a version nobody published. */
+            <p className="about-build mono">
+              {build.commit === "unknown" ? "commit unknown" : build.commit}
+              <span className="about-dot"> · </span>
+              {build.built === "unknown" ? "build date unknown" : `built ${build.built}`}
+            </p>
+          )}
           <p className="about-desc">
             A secure, cross-platform SSH credential manager and terminal - with an
             encrypted vault sync, SFTP, port forwarding, live metrics, and Docker
@@ -259,6 +272,32 @@ export function AboutModal({ onClose }: Props) {
             </svg>
             View on GitHub
           </button>
+
+          {build && (
+            <div className="about-meta about-links">
+              <a
+                href={build.sbom}
+                onClick={(e) => {
+                  e.preventDefault();
+                  openUrl(build.sbom).catch(() => {});
+                }}
+                title="CycloneDX document listing every dependency in this release"
+              >
+                Bill of materials
+              </a>
+              <span className="about-dot">·</span>
+              <a
+                href={build.advisories}
+                onClick={(e) => {
+                  e.preventDefault();
+                  openUrl(build.advisories).catch(() => {});
+                }}
+                title="Published advisories, and what each release fixed"
+              >
+                Security advisories
+              </a>
+            </div>
+          )}
         </div>
       </div>
     </div>
