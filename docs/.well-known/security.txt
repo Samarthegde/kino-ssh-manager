@@ -1,0 +1,13 @@
+# Kino SSH Manager - security contact (RFC 9116)
+#
+# Served from the project site, which is a path on github.io rather than an
+# apex domain, so this is not at the root a scanner looks for. The canonical
+# location below is where it actually is; when Kino has its own domain the
+# same file moves to that root unchanged.
+
+Contact: mailto:samarth@nanokernel.net
+Contact: https://github.com/Samarthegde/kino-ssh-manager/security/advisories/new
+Expires: 2027-10-18T23:59:59.000Z
+Policy: https://github.com/Samarthegde/kino-ssh-manager/blob/main/SECURITY.md
+Preferred-Languages: en
+Canonical: https://samarthegde.github.io/kino-ssh-manager/.well-known/security.txt

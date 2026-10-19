@@ -64,8 +64,12 @@ proves the new key works on its own connection before removing the old one. The
 transport audit and the key sweep both run with the vault locked and never
 decrypt a credential.
 
-[SECURITY.md](SECURITY.md) has the threat model, what is *not* protected, and
-how to report a vulnerability.
+[docs/threat-model.md](docs/threat-model.md) is the design: what is worth
+taking, who is on the other side, and the nine boundaries - each with a
+paragraph on what is still true after the mitigation.
+[SECURITY.md](SECURITY.md) is the process: how to report something, what the
+response targets are, which versions get fixes, and where each release's
+software bill of materials lives.
 
 ## Build it yourself
 

@@ -6,6 +6,28 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 
 ## [Unreleased]
 
+### Added
+- **Every release now carries a bill of materials.** One CycloneDX document,
+  `kino-ssh-manager-<version>.cdx.json`, covering both dependency trees -
+  every Rust crate and every frontend package that ships - generated in CI
+  from the commit that built the installers, validated against the spec before it is
+  published, and listed in the signed `SHA256SUMS` with everything else. When
+  an advisory names a library, that file answers whether this build contains
+  it without anyone having to guess from a lockfile.
+- **About says which commit it is.** Version, short commit hash and build date,
+  with links to that release's bill of materials and to the advisory feed. A
+  version number alone cannot answer "is this the build with the fix".
+- **A security policy with numbers in it.** `SECURITY.md` now states the
+  acknowledgement target, fix targets by severity, the 90-day disclosure
+  default, who requests a CVE, which versions get fixes and for how long, and
+  a contact route that does not depend on GitHub being reachable.
+- **A threat model.** [docs/threat-model.md](docs/threat-model.md) enumerates
+  the assets, the adversaries and the nine trust boundaries, each with what is
+  still true once the mitigation is in place - including the ones that are
+  uncomfortable to write down.
+- **`.well-known/security.txt`** on the project site, per RFC 9116, with CI
+  failing a month before it expires.
+
 ### Fixed
 - **A failed download no longer leaves half a file behind.** Only the
   over-the-limit case cleaned up after itself; a download that failed for any
