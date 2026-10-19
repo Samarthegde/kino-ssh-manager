@@ -86,3 +86,89 @@ jobs:
       # the platform-specific code actually lives.
       - name: Check
         run: cargo check --manifest-path src-tauri/Cargo.toml --all-targets
+
+  # The release attaches an SBOM, and the release is the worst place to find
+  # out that a tool upgrade changed its output or a dependency broke the
+  # generators. Same commands as the release job, same pinned versions, with
+  # the document validated rather than published.
+  sbom:
+    name: SBOM (generate + validate)
+    runs-on: ubuntu-22.04
+    env:
+      CARGO_CYCLONEDX_VERSION: "0.5.9"
+      CYCLONEDX_NPM_VERSION: "6.0.1"
+      SPEC_VERSION: "1.5"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo-cyclonedx
+        id: cached-cyclonedx
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-cyclonedx
+          key: cargo-cyclonedx-${{ env.CARGO_CYCLONEDX_VERSION }}-ubuntu-22.04
+
+      - name: Install cargo-cyclonedx
+        if: steps.cached-cyclonedx.outputs.cache-hit != 'true'
+        run: cargo install cargo-cyclonedx --locked --version "$CARGO_CYCLONEDX_VERSION"
+
+      - run: npm ci
+
+      - name: Generate and validate
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          name="kino-ssh-manager-${version}.cdx.json"
+          cargo cyclonedx --manifest-path src-tauri/Cargo.toml \
+            --format json --spec-version "$SPEC_VERSION"
+          npx --yes "@cyclonedx/cyclonedx-npm@${CYCLONEDX_NPM_VERSION}" --omit dev \
+            --spec-version "$SPEC_VERSION" --output-format JSON \
+            --output-file frontend.cdx.json
+          node scripts/merge-sbom.mjs \
+            --name kino-ssh-manager --version "$version" \
+            --commit "$GITHUB_SHA" \
+            --timestamp "$(git log -1 --format=%cI)" \
+            --strip "$PWD" \
+            --out "$name" \
+            src-tauri/ssh-manager.cdx.json frontend.cdx.json
+          npm install --no-save --no-package-lock @cyclonedx/cyclonedx-library@8.5.0
+          node scripts/validate-sbom.mjs "$name" "$SPEC_VERSION"
+          echo "SBOM_NAME=$name" >> "$GITHUB_ENV"
+
+      # Worth keeping for a pull request that changes dependencies: the diff
+      # between two of these says what came in with it.
+      - name: Keep it as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: ${{ env.SBOM_NAME }}
+          retention-days: 14
+
+  # A security contact that expired is worse than none: a scanner reads the
+  # Expires field and stops trusting the rest of the file (RFC 9116 §2.5.5).
+  # Fails a month early, so there is time to do something about it.
+  policy:
+    name: Security contact is current
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check security.txt
+        run: |
+          set -euo pipefail
+          file=docs/.well-known/security.txt
+          expires=$(grep -i '^Expires:' "$file" | head -1 | cut -d' ' -f2-)
+          [ -n "$expires" ] || { echo "::error::$file has no Expires field"; exit 1; }
+          left=$(( ( $(date -u -d "$expires" +%s) - $(date -u +%s) ) / 86400 ))
+          echo "$file expires $expires - $left days left"
+          if [ "$left" -lt 30 ]; then
+            echo "::error::$file expires in $left days; update Expires and the Policy link"
+            exit 1
+          fi

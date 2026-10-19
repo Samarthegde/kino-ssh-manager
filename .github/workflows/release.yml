@@ -279,12 +279,115 @@ jobs:
               core.info(`Uploaded ${asset} (${data.length} bytes)`);
             }
 
+  # The bill of materials, from the same commit that built the installers
+  # (KR-04-F1). Two generators because there are two dependency trees; one
+  # document because an advisory about a library is one question, not two.
+  sbom:
+    name: Software bill of materials
+    needs: create-release
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      # Pinned: an SBOM is evidence, and evidence produced by whatever version
+      # of a tool happened to be newest that morning is weaker evidence.
+      CARGO_CYCLONEDX_VERSION: "0.5.9"
+      CYCLONEDX_NPM_VERSION: "6.0.1"
+      SPEC_VERSION: "1.5"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # cargo install compiles it, which is two minutes we only want to spend
+      # when the pinned version changes.
+      - name: Cache cargo-cyclonedx
+        id: cached-cyclonedx
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-cyclonedx
+          key: cargo-cyclonedx-${{ env.CARGO_CYCLONEDX_VERSION }}-ubuntu-22.04
+
+      - name: Install cargo-cyclonedx
+        if: steps.cached-cyclonedx.outputs.cache-hit != 'true'
+        run: cargo install cargo-cyclonedx --locked --version "$CARGO_CYCLONEDX_VERSION"
+
+      # cyclonedx-npm reads the installed tree, not just the lockfile.
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Generate it
+        id: sbom
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          name="kino-ssh-manager-${version}.cdx.json"
+          # Writes src-tauri/ssh-manager.cdx.json, named after the crate.
+          cargo cyclonedx --manifest-path src-tauri/Cargo.toml             --format json --spec-version "$SPEC_VERSION"
+          # --omit dev: vite and the type checker are not in the installers.
+          npx --yes "@cyclonedx/cyclonedx-npm@${CYCLONEDX_NPM_VERSION}" --omit dev             --spec-version "$SPEC_VERSION" --output-format JSON             --output-file frontend.cdx.json
+          # The commit date, not the clock: two runs of the same tag must
+          # produce the same bytes, or the SBOM's line in SHA256SUMS moves
+          # for no reason anyone can explain.
+          node scripts/merge-sbom.mjs             --name kino-ssh-manager --version "$version"             --commit "$GITHUB_SHA"             --timestamp "$(git log -1 --format=%cI)"             --strip "$PWD"             --out "$name"             src-tauri/ssh-manager.cdx.json frontend.cdx.json
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      # KR-04-A1 as a gate rather than a hope: a scanner's rejection should
+      # happen here, not in somebody's pipeline a week after the release.
+      - name: Validate it against the spec
+        run: |
+          set -euo pipefail
+          npm install --no-save --no-package-lock @cyclonedx/cyclonedx-library@8.5.0
+          node scripts/validate-sbom.mjs "${{ steps.sbom.outputs.name }}" "$SPEC_VERSION"
+
+      - name: Attest what this workflow built
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ steps.sbom.outputs.name }}
+
+      # Uploaded before the checksum job runs, so the SBOM is covered by the
+      # signed SHA256SUMS like every other asset.
+      - name: Attach it to the release
+        uses: actions/github-script@v7
+        env:
+          ASSET: ${{ steps.sbom.outputs.name }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        with:
+          script: |
+            const fs = require('fs');
+            const name = process.env.ASSET;
+            const release_id = Number(process.env.RELEASE_ID);
+            const { owner, repo } = context.repo;
+            const existing = await github.rest.repos.listReleaseAssets({
+              owner, repo, release_id, per_page: 100,
+            });
+            for (const a of existing.data.filter((a) => a.name === name)) {
+              await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: a.id });
+            }
+            const data = fs.readFileSync(name);
+            await github.rest.repos.uploadReleaseAsset({
+              owner, repo, release_id, name, data,
+              headers: {
+                'content-type': 'application/json',
+                'content-length': data.length,
+              },
+            });
+            core.info(`Uploaded ${name} (${data.length} bytes)`);
+
   # One list of everything the release contains, signed once. Per-asset
   # signatures prove each file; this proves the *set* - that no extra asset was
   # slipped in beside them, which per-asset signatures cannot say.
   checksums:
     name: Checksum and sign the release
-    needs: [create-release, build]
+    needs: [create-release, build, sbom]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
