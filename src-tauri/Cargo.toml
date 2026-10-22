@@ -55,6 +55,13 @@ regex = "1"
 # Already in the tree via ssh-key; a direct dep costs no extra build.
 sha2 = "0.10"
 
+# One running copy, and a second launch that raises the first one instead of
+# starting beside it. Desktop only: there is no second launch on mobile.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+# ~2.4 rather than 2: the 2.5 line requires tauri 2.12, and bumping the whole
+# framework is not something to do by accident inside a single-instance change.
+tauri-plugin-single-instance = "~2.4"
+
 [dev-dependencies]
 tempfile = "3"
 # `start_paused` in tokio::test: an approval timeout is 120s, and a test that

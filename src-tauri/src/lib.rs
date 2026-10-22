@@ -2084,7 +2084,41 @@ pub fn run() {
         approvals: mcp_approval::broker::Broker::new(),
     };
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+
+    // One running copy. Kino lives in the tray, so a window that has been
+    // closed is a *running* app with no visible window - and clicking the
+    // launcher entry then started a second copy beside it, with its own tray
+    // icon, its own idle-lock timer, and its own writes to the same vault
+    // directory. A second launch now hands over to this callback and exits,
+    // and what the user sees is their window coming back.
+    //
+    // Registered before every other plugin, which is what the plugin's own
+    // documentation asks for: it has to claim the lock before anything else
+    // in the builder starts doing work. Nothing is done with `argv` because
+    // Kino takes no command-line arguments; a file to open would be handled
+    // here.
+    #[cfg(desktop)]
+    let single_instance =
+        tauri_plugin_single_instance::Builder::new().callback(|app, _argv, _cwd| {
+            // The callback arrives on the plugin's own thread - D-Bus on Linux, a
+            // socket or a mutex watcher elsewhere - so the window work is posted
+            // to the main thread instead of done here.
+            let handle = app.clone();
+            let _ = app.run_on_main_thread(move || restore_main_window(&handle));
+        });
+
+    // Linux, and only while developing: a `tauri dev` build carries the same
+    // identifier as an installed release, so without a name of its own a dev
+    // launch hands over to the Kino already in the tray and exits - leaving a
+    // vite server running and no window, which is a confusing ten minutes.
+    #[cfg(all(desktop, debug_assertions))]
+    let single_instance = single_instance.dbus_id("com.kino.ssh-manager.dev");
+
+    #[cfg(desktop)]
+    let builder = builder.plugin(single_instance.build());
+
+    builder
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())

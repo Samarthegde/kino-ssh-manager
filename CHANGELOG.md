@@ -29,6 +29,12 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
   failing a month before it expires.
 
 ### Fixed
+- **Only one Kino runs at a time.** Kino lives in the tray, so a closed window
+  is a running app with nothing on screen - and clicking the launcher entry
+  started a second copy beside it, with its own tray icon, its own idle-lock
+  timer and its own writes to the same vault directory. A second launch now
+  hands over to the copy already running, which brings its window back, and
+  exits.
 - **A failed download no longer leaves half a file behind.** Only the
   over-the-limit case cleaned up after itself; a download that failed for any
   other reason - a full disk being the one that matters, eight gigabytes into
