@@ -104,6 +104,17 @@ connection - shells, port forwards, SFTP, MCP calls.
 out of band. TOFU detects a change; it cannot detect an attacker who was there
 from the beginning.
 
+Keyboard-interactive authentication adds a second thing to say: the prompt text
+is written by the server, so on a compromised host it is written by an
+attacker. "Enter your Kino master password" is a prompt a hostile server can
+send. Kino shows that text verbatim - eliding it would hide what is being
+asked - but the window labels it as the host's words, says that Kino never asks
+for the vault password there, and keeps nothing that is typed. A stored
+password is only ever sent in answer to a prompt that asks for a password and
+mentions no second factor; a prompt asking for a code is always passed to you.
+What remains is a person who could still type a secret into a field a hostile
+server labelled convincingly.
+
 ### 4. The app to a sync backend - GitHub, or a folder
 
 Only sealed blobs leave the machine. The backend never sees the master

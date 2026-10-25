@@ -6,7 +6,7 @@ import { forEachTerminal } from "../terminalRegistry";
 import { DEFAULT_KEYBINDINGS, KeyActionId } from "../keymap";
 import { THEMES } from "../themes";
 
-export type DefaultAuth = "Password" | "SshKey" | "Agent";
+export type DefaultAuth = "Password" | "SshKey" | "Agent" | "KeyboardInteractive";
 
 export type ProxyType = "socks5" | "http";
 
@@ -123,6 +123,27 @@ export interface UpdateInfo {
   latest: string;
   available: boolean;
   url: string;
+}
+
+/** One prompt from a server mid-authentication: a code, or a password the
+ *  vault does not hold. The text is the server's own, shown verbatim. */
+export interface KbiPrompt {
+  text: string;
+  /** False for a secret - the field hides what is typed. */
+  echo: boolean;
+}
+
+/** One round of keyboard-interactive prompts waiting on an answer. */
+export interface KbiChallenge {
+  id: string;
+  host_id: string;
+  host_name: string;
+  /** What the server called this round. Often empty. */
+  name: string;
+  /** The server's longer explanation, if it sent one. Often empty. */
+  instruction: string;
+  prompts: KbiPrompt[];
+  timeout_secs: number;
 }
 
 /** What this binary is, past its version number (KR-04-F5). */
@@ -879,6 +900,11 @@ interface VaultStore {
   /** Version, commit and build date, plus where this release's SBOM and
    *  advisories live. Baked in at compile time - no network. */
   buildInfo: () => Promise<BuildInfo>;
+  /** Answer a server's keyboard-interactive prompt. False when it had already
+   *  gone - timed out, cancelled, or the vault locked under it. */
+  answerKbi: (id: string, answers: string[]) => Promise<boolean>;
+  /** Dismiss one, which drops the connection waiting on it. */
+  cancelKbi: (id: string) => Promise<boolean>;
   /** Where kino-mcp is, and whether a bare `kino-mcp` on PATH is this
    *  version's copy. Local only - no network. */
   checkMcpBinary: () => Promise<McpBinaryStatus>;
@@ -1697,6 +1723,8 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
 
   updaterKeyId: () => invoke<string | null>("updater_key_id"),
   buildInfo: () => invoke<BuildInfo>("build_info"),
+  answerKbi: (id, answers) => invoke<boolean>("kbi_answer", { id, answers }),
+  cancelKbi: (id) => invoke<boolean>("kbi_cancel", { id }),
   checkMcpBinary: () => invoke<McpBinaryStatus>("check_mcp_binary"),
   installMcpBinary: () => invoke<McpBinaryStatus>("install_mcp_binary"),
   checkForUpdate: async () => {

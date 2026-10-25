@@ -12,6 +12,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 
+use crate::kbi;
 use crate::vault::Host;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -123,7 +124,7 @@ fn bridge_agent_ws(
     Ok(NetStream::Duplex(client_stream))
 }
 
-pub async fn connect_to_host(host: &Host) -> Result<NetStream, String> {
+pub async fn connect_to_host(host: &Host, asker: &kbi::Asker) -> Result<NetStream, String> {
     if host.connection_mode.as_deref() == Some("agent") {
         let agent_id = host
             .agent_id
@@ -224,7 +225,7 @@ pub async fn connect_to_host(host: &Host) -> Result<NetStream, String> {
         // Tunnel to the target through a bastion: open an SSH session to the
         // jump host, then a direct-tcpip channel from it out to host:port. Any
         // proxy configured on the *target* is bypassed - the bastion is the path.
-        let jump_handle = establish_jump(jump).await?;
+        let jump_handle = establish_jump(jump, asker).await?;
         let channel = jump_handle
             .channel_open_direct_tcpip(host.hostname.clone(), host.port as u32, "127.0.0.1", 0)
             .await
@@ -248,7 +249,10 @@ pub async fn connect_to_host(host: &Host) -> Result<NetStream, String> {
 /// live handle. The bastion's own `jump`, proxy, and agent settings are honored,
 /// so bastions can chain. The returned handle must stay alive for as long as the
 /// tunneled session runs - `NetStream::Jump` holds it for exactly that long.
-async fn establish_jump(host: &Host) -> Result<Arc<client::Handle<ClientHandler>>, String> {
+async fn establish_jump(
+    host: &Host,
+    asker: &kbi::Asker,
+) -> Result<Arc<client::Handle<ClientHandler>>, String> {
     let config = Arc::new(client::Config {
         keepalive_interval: Some(Duration::from_secs(15)),
         keepalive_max: 3,
@@ -259,7 +263,7 @@ async fn establish_jump(host: &Host) -> Result<Arc<client::Handle<ClientHandler>
         remote_routes: Arc::new(Mutex::new(HashMap::new())),
     };
     // Boxed because connect_to_host recurses back here for multi-hop chains.
-    let stream = Box::pin(connect_to_host(host)).await?;
+    let stream = Box::pin(connect_to_host(host, asker)).await?;
     let mut handle = tokio::time::timeout(
         Duration::from_secs(15),
         client::connect_stream(config, stream, handler),
@@ -267,7 +271,7 @@ async fn establish_jump(host: &Host) -> Result<Arc<client::Handle<ClientHandler>
     .await
     .map_err(|_| format!("Connection to jump host \"{}\" timed out", host.name))?
     .map_err(|e| format!("Jump host \"{}\" connection failed: {e}", host.name))?;
-    authenticate(&mut handle, host).await?;
+    authenticate(&mut handle, host, asker).await?;
     Ok(Arc::new(handle))
 }
 
@@ -645,18 +649,33 @@ where
 async fn authenticate(
     handle: &mut client::Handle<ClientHandler>,
     host: &Host,
+    asker: &kbi::Asker,
 ) -> Result<(), String> {
+    // Kept rather than collapsed to a bool: when the server refuses, its own
+    // list of remaining methods is what tells us whether this host actually
+    // wants an interactive prompt - see `kbi::refused_message`.
+    let mut offers_prompt = false;
+    let mut note_methods = |result: &client::AuthResult| {
+        if let client::AuthResult::Failure {
+            remaining_methods, ..
+        } = result
+        {
+            offers_prompt = remaining_methods.contains(&russh::MethodKind::KeyboardInteractive);
+        }
+        result.success()
+    };
+
     let authenticated: bool = match host.default_auth.as_str() {
         "Password" => {
             let pw = host
                 .password
                 .as_deref()
                 .ok_or("No password stored for this host")?;
-            handle
+            let result = handle
                 .authenticate_password(&host.username, pw)
                 .await
-                .map_err(|e| format!("Auth error: {}", e))?
-                .success()
+                .map_err(|e| format!("Auth error: {}", e))?;
+            note_methods(&result)
         }
         "SshKey" => {
             let key_str = host
@@ -666,17 +685,23 @@ async fn authenticate(
             let key_pair = russh::keys::decode_secret_key(key_str, host.passphrase.as_deref())
                 .map_err(|e| format!("Invalid private key: {}", e))?;
             let key = PrivateKeyWithHashAlg::new(Arc::new(key_pair), Some(HashAlg::Sha256));
-            handle
+            let result = handle
                 .authenticate_publickey(&host.username, key)
                 .await
-                .map_err(|e| format!("Auth error: {}", e))?
-                .success()
+                .map_err(|e| format!("Auth error: {}", e))?;
+            note_methods(&result)
         }
         "Agent" => agent_authenticate(handle, &host.username).await?,
+        // The conversation, not the single exchange: see `kbi`.
+        "KeyboardInteractive" => kbi::authenticate(handle, host, asker).await?,
         other => return Err(format!("Unknown auth method: {}", other)),
     };
     if !authenticated {
-        return Err("Authentication failed".to_string());
+        return Err(kbi::refused_message(
+            &host.name,
+            &host.default_auth,
+            offers_prompt,
+        ));
     }
     Ok(())
 }
@@ -715,7 +740,10 @@ pub async fn exec_once(host: &Host, command: &str) -> Result<String, String> {
 /// exactly the same route a one-off command does - same timeouts, same host
 /// key check, same auth. Two ways in would eventually disagree about one of
 /// those, and the one that matters is the host key check.
-pub async fn connect_authenticated(host: &Host) -> Result<client::Handle<ClientHandler>, String> {
+pub async fn connect_authenticated(
+    host: &Host,
+    asker: &kbi::Asker,
+) -> Result<client::Handle<ClientHandler>, String> {
     let config = Arc::new(client::Config {
         keepalive_interval: Some(Duration::from_secs(15)),
         keepalive_max: 3,
@@ -726,7 +754,7 @@ pub async fn connect_authenticated(host: &Host) -> Result<client::Handle<ClientH
         remote_routes: Arc::new(Mutex::new(HashMap::new())),
     };
 
-    let stream = connect_to_host(host).await?;
+    let stream = connect_to_host(host, asker).await?;
     let mut handle = tokio::time::timeout(
         Duration::from_secs(15),
         client::connect_stream(config, stream, handler),
@@ -735,12 +763,14 @@ pub async fn connect_authenticated(host: &Host) -> Result<client::Handle<ClientH
     .map_err(|_| "Connection timed out".to_string())?
     .map_err(|e| format!("Connection failed: {}", e))?;
 
-    authenticate(&mut handle, host).await?;
+    authenticate(&mut handle, host, asker).await?;
     Ok(handle)
 }
 
 pub async fn exec_once_full(host: &Host, command: &str) -> Result<OnceOutput, String> {
-    let handle = connect_authenticated(host).await?;
+    // Nobody to ask: this is a probe, a fleet call or a dashboard refresh,
+    // and a 2FA host refuses with a message that says to open a terminal.
+    let handle = connect_authenticated(host, &kbi::Asker::nobody("a one-off command")).await?;
 
     let mut channel = handle
         .channel_open_session()
@@ -784,6 +814,7 @@ pub async fn connect(
     session_id: String,
     host: Host,
     on_connect: Vec<String>,
+    asker: kbi::Asker,
 ) -> Result<(), String> {
     let config = Arc::new(client::Config {
         // Send keepalives so dropped connections surface promptly instead of
@@ -799,7 +830,7 @@ pub async fn connect(
         remote_routes: Arc::clone(&remote_routes),
     };
 
-    let stream = connect_to_host(&host).await?;
+    let stream = connect_to_host(&host, &asker).await?;
 
     let mut handle = tokio::time::timeout(
         Duration::from_secs(15),
@@ -809,7 +840,7 @@ pub async fn connect(
     .map_err(|_| "Connection timed out".to_string())?
     .map_err(|e| format!("Connection failed: {}", e))?;
 
-    authenticate(&mut handle, &host).await?;
+    authenticate(&mut handle, &host, &asker).await?;
 
     let channel = handle
         .channel_open_session()

@@ -7,6 +7,24 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 ## [Unreleased]
 
 ### Added
+- **Hosts that ask for a verification code can be used.** Keyboard-interactive
+  authentication, which is how PAM-driven 2FA presents itself - Duo, Google
+  Authenticator, an OTP prompt, or just a PAM password question on a host with
+  `PasswordAuthentication no`. Kino shows what the server asked, verbatim and
+  labelled as the server's words, and sends the answer. A password already in
+  the vault answers a password prompt so nobody retypes it; a prompt that
+  mentions a code, a token or a second factor is never answered from storage,
+  because sending the account password where the code goes would hand it to
+  the server as if it were the code. Nothing typed into the prompt is kept.
+  Background work - health checks, the patch dashboard, an assistant's tools -
+  has nobody to ask, so it refuses such a host by name and says to open a
+  terminal to it instead, rather than hanging on a prompt that will not appear.
+  A bastion can ask for its own code on the way through.
+- **A refused password now says whether the server even wanted one.** When a
+  host rejects the stored password and its own reply lists keyboard-interactive
+  as what it will take, the message says so and names the setting to change,
+  instead of "Authentication failed" sending you to check a password that was
+  never the problem.
 - **Every release now carries a bill of materials.** One CycloneDX document,
   `kino-ssh-manager-<version>.cdx.json`, covering both dependency trees -
   every Rust crate and every frontend package that ships - generated in CI

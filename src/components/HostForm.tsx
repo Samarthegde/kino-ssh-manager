@@ -568,11 +568,20 @@ export function HostForm({ host, onClose }: Props) {
                     >
                       SSH Agent
                     </button>
+                    <button
+                      type="button"
+                      className={defaultAuth === "KeyboardInteractive" ? "active" : ""}
+                      onClick={() => setDefaultAuth("KeyboardInteractive")}
+                    >
+                      2FA prompt
+                    </button>
                   </div>
                   <p className="hint">
                     {defaultAuth === "Agent"
                       ? "Authenticates via your running SSH agent (OpenSSH agent, or Pageant on Windows). No secret is stored in the vault."
-                      : "Any of these can be stored - this sets which is used by default when connecting."}
+                      : defaultAuth === "KeyboardInteractive"
+                        ? "For hosts that ask questions: a verification code, a Duo push, a PAM password prompt. Kino shows what the server asks and sends your answer. A stored password answers a password prompt; a code is always asked for. Background work - health checks, the patch dashboard, assistants - cannot answer these, so it skips such hosts and says so."
+                        : "Any of these can be stored - this sets which is used by default when connecting."}
                   </p>
                 </div>
 

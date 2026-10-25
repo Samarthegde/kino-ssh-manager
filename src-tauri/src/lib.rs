@@ -12,6 +12,7 @@ mod forwarding;
 mod health;
 mod history;
 mod host_keys;
+pub mod kbi;
 mod key_sweep;
 mod keygen;
 mod local_session;
@@ -67,6 +68,9 @@ pub struct AppState {
     /// Approval prompts waiting on an answer (KR-01-F5). Present on every
     /// platform; only the socket that feeds it is Unix-only.
     pub approvals: Arc<mcp_approval::broker::Broker>,
+    /// Keyboard-interactive prompts waiting on an answer - a verification
+    /// code, or a password the vault does not hold.
+    pub kbi: Arc<kbi::Broker>,
 }
 
 // ── Vault commands ────────────────────────────────────────────────────────────
@@ -123,6 +127,9 @@ fn lock_vault(state: State<'_, AppState>) {
     // A prompt on screen is unanswerable now - the command could not run even
     // if approved - so it is refused rather than left to time out (KR-01-F7).
     state.approvals.deny_all("vault_locked");
+    // Same for a connection waiting on a code: the credentials behind it are
+    // about to be wiped, so there is nothing for an answer to complete.
+    state.kbi.cancel_all("vault_locked");
     // Wipe the derived key from memory rather than just dropping it.
     if let Some(mut key) = state.vault_key.lock().unwrap().take() {
         use zeroize::Zeroize;
@@ -1151,12 +1158,27 @@ async fn ssh_connect(
             .map(|s| s.commands.clone())
             .collect()
     };
+    // This is the one connection path with a person in front of it, so it is
+    // the only one that may ask for a verification code. Everything else -
+    // probes, fleet calls, an assistant's tools - refuses and says so.
+    let asker = kbi::Asker::Person(kbi::Person {
+        show: {
+            use tauri::Emitter;
+            let handle = app_handle.clone();
+            Box::new(move |challenge| {
+                let _ = handle.emit("kbi-challenge", challenge);
+            })
+        },
+        broker: state.kbi.clone(),
+        timeout: std::time::Duration::from_secs(kbi::TIMEOUT_SECS),
+    });
     ssh_session::connect(
         app_handle,
         state.sessions.clone(),
         session_id.clone(),
         host,
         on_connect,
+        asker,
     )
     .await?;
     Ok(session_id)
@@ -1785,6 +1807,23 @@ fn mcp_set_approval_timeout(state: State<'_, AppState>, seconds: u32) -> Result<
     sync_mcp_vault(&state)
 }
 
+/// Answer a keyboard-interactive prompt - a code, or a password the vault
+/// does not hold.
+///
+/// False when the prompt had already gone: the connection timed out, was
+/// cancelled, or the vault locked under it. The window says so rather than
+/// leaving a dialog that looks live.
+#[tauri::command]
+fn kbi_answer(state: State<'_, AppState>, id: String, answers: Vec<String>) -> bool {
+    state.kbi.answer(&id, answers)
+}
+
+/// Dismiss one - the connection is dropped, which is the safe direction.
+#[tauri::command]
+fn kbi_cancel(state: State<'_, AppState>, id: String) -> bool {
+    state.kbi.cancel(&id, "cancelled")
+}
+
 /// Answer an approval prompt (KR-01-F6).
 ///
 /// `false` means the request had already gone - it expired, or the assistant
@@ -2082,6 +2121,7 @@ pub fn run() {
         docker_log_streams: Arc::new(Mutex::new(HashMap::new())),
         ai_cancels: Arc::new(Mutex::new(HashMap::new())),
         approvals: mcp_approval::broker::Broker::new(),
+        kbi: kbi::Broker::new(),
     };
 
     let builder = tauri::Builder::default();
@@ -2348,6 +2388,8 @@ pub fn run() {
             update::check_for_update,
             update::updater_key_id,
             update::build_info,
+            kbi_answer,
+            kbi_cancel,
             mcp_approval_respond,
             mcp_set_approval_timeout,
             mcp_halted,
@@ -2533,6 +2575,7 @@ mod lock_tests {
             docker_log_streams: Arc::new(Mutex::new(HashMap::new())),
             ai_cancels: Arc::new(Mutex::new(HashMap::new())),
             approvals: mcp_approval::broker::Broker::new(),
+            kbi: kbi::Broker::new(),
         }
     }
 

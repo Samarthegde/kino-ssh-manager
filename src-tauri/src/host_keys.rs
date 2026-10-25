@@ -90,7 +90,12 @@ async fn fetch_fingerprint(host: &Host) -> Result<String, String> {
         fingerprint: Arc::clone(&fp_store),
     };
 
-    let stream = match crate::ssh_session::connect_to_host(host).await {
+    let stream = match crate::ssh_session::connect_to_host(
+        host,
+        &crate::kbi::Asker::nobody("a host key check"),
+    )
+    .await
+    {
         Ok(s) => s,
         Err(e) => return Err(e),
     };

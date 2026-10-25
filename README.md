@@ -38,6 +38,10 @@ attestation. [How to check them](SECURITY.md#verifying-what-you-downloaded).
   plain English, and recorded sessions you can replay.
 - **Tunnels and bastions.** Local, remote and dynamic forwards, each drawn as a
   diagram so `-L` and `-R` can't be confused, and jump hosts that chain.
+- **The authentication your servers actually use.** Password, key, SSH agent
+  (including Pageant), and the interactive prompts PAM-driven 2FA sends - a
+  verification code, a Duo push. A stored password answers a password prompt;
+  a code is always asked for, and never kept.
 - **Fleet answers, on your own machine.** What cryptography each host would
   actually negotiate, which private keys are lying around in `~/.ssh`, what
   updates are waiting, and which stored keys are weak, shared or old.

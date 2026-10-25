@@ -90,7 +90,11 @@ pub fn name_for(remote_path: &str, asked: Option<&str>) -> String {
 
 /// Open SFTP on a host, the way `exec_once_full` opens a shell.
 async fn connect(host: &Host) -> Result<russh_sftp::client::SftpSession, String> {
-    let handle = crate::ssh_session::connect_authenticated(host).await?;
+    let handle = crate::ssh_session::connect_authenticated(
+        host,
+        &crate::kbi::Asker::nobody("an assistant's file transfer"),
+    )
+    .await?;
     let channel = handle
         .channel_open_session()
         .await

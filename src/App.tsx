@@ -19,6 +19,7 @@ import { Unlock } from "./components/Unlock";
 import { ContextMenu, MenuItem } from "./components/ContextMenu";
 import { CommandPalette } from "./components/CommandPalette";
 import { ApprovalModal } from "./components/ApprovalModal";
+import { KbiModal } from "./components/KbiModal";
 import { ToolsMenu } from "./components/ToolsMenu";
 import "./index.css";
 
@@ -494,6 +495,7 @@ function App() {
           that only exists while some panel is open is a prompt nobody sees.
           It renders nothing until kino-mcp asks. */}
       <ApprovalModal />
+      <KbiModal />
 
       {toast && <div className="app-toast">{toast}</div>}
 

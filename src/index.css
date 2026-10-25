@@ -3550,6 +3550,26 @@ textarea.mono {
 /* Deny sits apart from the two approvals, so the dangerous pair is never
  * where the harmless button was a moment ago. */
 .approval-foot { display: flex; justify-content: space-between; gap: 12px; }
+
+/* A server's keyboard-interactive prompt. Narrower than the approval modal:
+   it holds a couple of short fields, not a command that must not be elided. */
+.kbi-modal { max-width: 460px; }
+.kbi-name {
+  font-size: 12px;
+  color: var(--subtext);
+  margin: 0 0 6px;
+}
+.kbi-instruction {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--subtext);
+  background: var(--overlay);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 0 0 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .approval-approve { display: flex; gap: 8px; }
 
 /* Per-host limits, under the rule editor they belong to. */

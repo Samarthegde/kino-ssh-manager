@@ -126,6 +126,10 @@ this snippet with a copy button.
 
 ## Worth knowing
 
+- **A host that asks for a code is out of reach.** Keyboard-interactive
+  authentication needs a person, and a tool call has none. Such a host refuses
+  by name, saying to open a terminal to it in Kino - rather than holding the
+  call open for a prompt nobody will see.
 - **A newly exposed host is read-only.** It will read files and listings, refuse
   to write, and run a command only if one of your rules names it. Two other
   modes exist per host: **guarded**, where anything unnamed needs a person to
