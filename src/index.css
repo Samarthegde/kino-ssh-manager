@@ -3551,6 +3551,48 @@ textarea.mono {
  * where the harmless button was a moment ago. */
 .approval-foot { display: flex; justify-content: space-between; gap: 12px; }
 
+/* The one showing of a recovery key: the key itself gets the room, the
+   warnings get the space under it. */
+.recovery-modal { max-width: 520px; }
+.recovery-body { padding: 4px 16px 8px; }
+.recovery-key {
+  margin: 12px 0;
+  padding: 12px;
+  font-size: 13px;
+  line-height: 1.9;
+  letter-spacing: 0.06em;
+  text-align: center;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--overlay);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  user-select: all;
+}
+.recovery-actions { display: flex; gap: 8px; justify-content: center; }
+.recovery-notes {
+  margin: 14px 0 10px;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--subtext);
+}
+.recovery-notes li { margin-bottom: 6px; }
+.recovery-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--subtext);
+}
+/* Typed off paper, so it needs room to wrap. */
+.recovery-input {
+  resize: vertical;
+  min-height: 64px;
+  line-height: 1.6;
+  letter-spacing: 0.04em;
+}
+
 /* A server's keyboard-interactive prompt. Narrower than the approval modal:
    it holds a couple of short fields, not a command that must not be elided. */
 .kbi-modal { max-width: 460px; }

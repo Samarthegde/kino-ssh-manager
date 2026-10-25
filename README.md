@@ -61,7 +61,8 @@ The full tour, with pictures, is on [the website](https://samarthegde.github.io/
 
 ## Security
 
-The vault is AES-256-GCM with an Argon2-derived key. History, notes, snippets
+The vault is AES-256-GCM with an Argon2-derived key. A printed recovery key,
+if you make one, is the only way back in without the master password. History, notes, snippets
 and harvested shell history sit in sibling encrypted files under that same key.
 Host keys are pinned on first use and refused on any mismatch. Key rotation
 proves the new key works on its own connection before removing the old one. The

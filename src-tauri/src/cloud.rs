@@ -52,6 +52,16 @@ fn config_path() -> std::path::PathBuf {
     vault_path().parent().unwrap().join("cloud.enc")
 }
 
+/// Write the config under a given key - what a master-password change or a
+/// recovery needs, since neither has the vault's own save path to hand.
+pub fn save_config_with(
+    config: &CloudConfig,
+    key: &[u8; 32],
+    salt: &[u8; 16],
+) -> Result<(), String> {
+    save_encrypted(&config_path(), config, key, salt)
+}
+
 pub fn load_config(key: &[u8; 32]) -> Option<CloudConfig> {
     let path = config_path();
     if !path.exists() {

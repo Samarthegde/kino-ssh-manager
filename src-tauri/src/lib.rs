@@ -33,6 +33,7 @@ mod notes;
 mod patches;
 mod processes;
 mod recorder;
+mod recovery;
 mod redact;
 mod sftp_session;
 mod shell_history;
@@ -186,6 +187,21 @@ fn change_master_password_in(
         return Err("Current password is incorrect".to_string());
     }
 
+    rekey_in(state, new_password)
+}
+
+/// Re-encrypt every store under a key derived from `new_password`.
+///
+/// Split out from the password change because recovery needs exactly this and
+/// cannot supply a current password to be checked: the point of a recovery key
+/// is that nobody knows the password any more.
+fn rekey_in(state: &AppState, new_password: String) -> Result<(), String> {
+    use zeroize::Zeroize;
+    let old_key = {
+        let kg = state.vault_key.lock().unwrap();
+        *kg.as_ref().ok_or("Vault is locked")?
+    };
+
     // Fresh salt + key, then re-encrypt every store under it.
     use aes_gcm::aead::OsRng;
     use rand_core::RngCore;
@@ -206,6 +222,10 @@ fn change_master_password_in(
         .then(|| mcp_config::load_config(&old_key).ok())
         .flatten();
     let ai_settings = ai::load_config(&old_key);
+    // Agent-mode settings, which were missing from this list for the same
+    // reason the two above were: a password change left cloud.enc encrypted
+    // under a key that no longer existed.
+    let cloud_settings = cloud::load_config(&old_key);
 
     vault::save_vault(&state.hosts.lock().unwrap(), &new_key, &new_salt)?;
     history::save_history(&state.history.lock().unwrap(), &new_key, &new_salt)?;
@@ -221,6 +241,13 @@ fn change_master_password_in(
     if let Some(cfg) = ai_settings {
         ai::save_config(&cfg, &new_key, &new_salt)?;
     }
+    if let Some(cfg) = cloud_settings {
+        cloud::save_config_with(&cfg, &new_key, &new_salt)?;
+    }
+
+    // The old key is what the recovery kit holds, and it opens nothing now.
+    // Removed rather than left to fail later with a key that looks right.
+    recovery::forget_at(&recovery::path())?;
 
     // Swap into state, wiping the old key.
     if let Some(mut k) = state.vault_key.lock().unwrap().replace(new_key) {
@@ -228,6 +255,125 @@ fn change_master_password_in(
     }
     *state.vault_salt.lock().unwrap() = Some(new_salt);
     Ok(())
+}
+
+// ── Recovery kit ──────────────────────────────────────────────────────────────
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Whether there is a kit, when it was made, and whether it still opens this
+/// vault. Readable with the vault locked, so the unlock screen can offer
+/// recovery only when there is something to recover with.
+#[tauri::command]
+fn recovery_status(state: State<'_, AppState>) -> recovery::Status {
+    recovery_status_in(&state)
+}
+
+fn recovery_status_in(state: &AppState) -> recovery::Status {
+    let salt = *state.vault_salt.lock().unwrap();
+    recovery::status_at(&recovery::path(), salt.as_ref())
+}
+
+/// Make a kit for the key in use and hand back the printed key - once.
+///
+/// The secret is generated here, wrapped on disk, and returned to the window
+/// to be written down. Kino keeps no copy: asking again makes a new kit and
+/// retires the old one.
+#[tauri::command]
+fn create_recovery_kit(state: State<'_, AppState>) -> Result<String, String> {
+    create_recovery_kit_in(&state)
+}
+
+fn create_recovery_kit_in(state: &AppState) -> Result<String, String> {
+    use zeroize::Zeroize;
+    let (key, salt) = {
+        let kg = state.vault_key.lock().unwrap();
+        let sg = state.vault_salt.lock().unwrap();
+        (
+            *kg.as_ref().ok_or("Vault is locked")?,
+            *sg.as_ref().ok_or("Vault is locked")?,
+        )
+    };
+    let mut secret = recovery::generate();
+    let printed = recovery::format_key(&secret);
+    let written = recovery::write_at(&recovery::path(), &secret, &key, &salt, now_ms());
+    secret.zeroize();
+    written?;
+    Ok(printed)
+}
+
+/// Open the vault with a recovery key, setting a new master password in the
+/// same step.
+///
+/// One command, not two. A vault opened this way has no password anybody
+/// knows, and leaving it unlocked in that state would be a session that could
+/// never be locked again - so the new password is part of the same call, and
+/// the kit that was just used is retired by the re-key.
+#[tauri::command]
+fn recover_vault(
+    state: State<'_, AppState>,
+    recovery_key: String,
+    new_password: String,
+) -> Result<Vec<Host>, String> {
+    recover_vault_in(&state, recovery_key, new_password)
+}
+
+fn recover_vault_in(
+    state: &AppState,
+    recovery_key: String,
+    new_password: String,
+) -> Result<Vec<Host>, String> {
+    use zeroize::Zeroize;
+    if new_password.is_empty() {
+        return Err("New password cannot be empty".to_string());
+    }
+    if !vault::vault_exists() {
+        return Err("There is no vault on this machine to recover.".to_string());
+    }
+
+    let (mut key, kit_salt) = recovery::unwrap_at(&recovery::path(), &recovery_key)?;
+    // Told apart deliberately: the key was right, but the vault moved on.
+    if vault::salt_on_disk()? != kit_salt {
+        key.zeroize();
+        return Err(
+            "That recovery key is right, but the kit was made before the master \
+                    password was last changed, so it no longer opens this vault. Nothing \
+                    was changed."
+                .to_string(),
+        );
+    }
+
+    let hosts: Vec<Host> = vault::load_encrypted(&vault::vault_path(), &key).map_err(|_| {
+        key.zeroize();
+        "The recovery kit opened, but the vault did not. The vault file may be damaged - \
+         restore it from a sync or a backup before trying again."
+            .to_string()
+    })?;
+    let history = history::load_history(&key).unwrap_or_default();
+    let snippets = snippets::load_snippets(&key).unwrap_or_default();
+    let notes = notes::load_notes(&key).unwrap_or_default();
+    let shell_hist = shell_history::load(&key).unwrap_or_default();
+
+    *state.vault_key.lock().unwrap() = Some(key);
+    *state.vault_salt.lock().unwrap() = Some(kit_salt);
+    *state.hosts.lock().unwrap() = hosts.clone();
+    *state.history.lock().unwrap() = history;
+    *state.snippets.lock().unwrap() = snippets;
+    *state.notes.lock().unwrap() = notes;
+    *state.shell_history.lock().unwrap() = shell_hist;
+
+    // Everything is re-encrypted under the new password, which also removes
+    // the kit just used.
+    rekey_in(state, new_password)?;
+    if let Some(k) = state.vault_key.lock().unwrap().as_ref() {
+        cloud::activate(k);
+    }
+    Ok(hosts)
 }
 
 #[tauri::command]
@@ -2388,6 +2534,9 @@ pub fn run() {
             update::check_for_update,
             update::updater_key_id,
             update::build_info,
+            recovery_status,
+            create_recovery_kit,
+            recover_vault,
             kbi_answer,
             kbi_cancel,
             mcp_approval_respond,
@@ -2704,6 +2853,174 @@ mod lock_tests {
         );
         let ai_back = ai::load_config(&new_key).expect("the AI key was lost");
         assert_eq!(ai_back.api_keys["openrouter"], "sk-or-kept");
+    }
+
+    /// The whole point: the password is gone, the printed key is not.
+    #[test]
+    fn a_recovery_key_opens_the_vault_and_sets_a_new_password() {
+        let _serial = DATA_DIR.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let state = unlocked_state(dir.path());
+        let key = state.vault_key.lock().unwrap().unwrap();
+        let salt = state.vault_salt.lock().unwrap().unwrap();
+
+        // A vault with something in it, written under the password nobody is
+        // going to remember.
+        let mut host = vault::bare_host();
+        host.name = "web-prod".into();
+        *state.hosts.lock().unwrap() = vec![host];
+        vault::save_vault(&state.hosts.lock().unwrap(), &key, &salt).unwrap();
+
+        let printed = create_recovery_kit_in(&state).unwrap();
+        assert_eq!(recovery_status_in(&state).for_this_vault, Some(true));
+
+        // Walk away and come back to a locked app that has lost the password.
+        let fresh = unlocked_state(dir.path());
+        *fresh.vault_key.lock().unwrap() = None;
+        *fresh.vault_salt.lock().unwrap() = None;
+        *fresh.hosts.lock().unwrap() = vec![];
+
+        let hosts = recover_vault_in(&fresh, printed.clone(), "a-brand-new-password".into())
+            .expect("the recovery key should have opened the vault");
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].name, "web-prod");
+
+        // The new password is the one that works now, and the old one does not.
+        let (reopened, _, _) = vault::load_vault("a-brand-new-password").unwrap();
+        assert_eq!(reopened[0].name, "web-prod");
+        assert!(
+            vault::load_vault("test").is_err(),
+            "the old password still opens it"
+        );
+
+        // And the kit that was just used is spent.
+        assert!(
+            !recovery_status_in(&fresh).exists,
+            "the used kit is still on disk"
+        );
+    }
+
+    /// Changing the password retires the kit, because the key it holds opens
+    /// nothing afterwards. Leaving the file would be a printed key that looks
+    /// valid and is not.
+    #[test]
+    fn changing_the_password_retires_the_kit() {
+        let _serial = DATA_DIR.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let state = unlocked_state(dir.path());
+        let key = state.vault_key.lock().unwrap().unwrap();
+        let salt = state.vault_salt.lock().unwrap().unwrap();
+        vault::save_vault(&[], &key, &salt).unwrap();
+
+        create_recovery_kit_in(&state).unwrap();
+        assert!(recovery_status_in(&state).exists);
+
+        change_master_password_in(&state, "test".into(), "second-password".into()).unwrap();
+        assert!(
+            !recovery_status_in(&state).exists,
+            "a kit for the old key was left behind"
+        );
+    }
+
+    /// A kit restored from a backup after a password change: the key is right
+    /// and the kit is the wrong vintage. Those are different sentences.
+    #[test]
+    fn a_kit_from_before_a_password_change_says_so_rather_than_blaming_the_key() {
+        let _serial = DATA_DIR.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let state = unlocked_state(dir.path());
+        let key = state.vault_key.lock().unwrap().unwrap();
+        let salt = state.vault_salt.lock().unwrap().unwrap();
+        vault::save_vault(&[], &key, &salt).unwrap();
+
+        let printed = create_recovery_kit_in(&state).unwrap();
+        let kept = std::fs::read(recovery::path()).unwrap();
+
+        change_master_password_in(&state, "test".into(), "second-password".into()).unwrap();
+        // Someone puts the old file back - from a backup, or a copied folder.
+        std::fs::write(recovery::path(), kept).unwrap();
+
+        let err = recover_vault_in(&state, printed, "third-password".into()).unwrap_err();
+        assert!(err.contains("is right"), "{err}");
+        assert!(err.contains("before the master"), "{err}");
+        assert!(err.contains("Nothing was changed"), "{err}");
+        // The vault is still the one the current password opens.
+        assert!(vault::load_vault("second-password").is_ok());
+    }
+
+    /// The kit is fine and the vault is not. Saying "wrong recovery key"
+    /// there would send someone hunting for a better copy of the paper.
+    #[test]
+    fn a_damaged_vault_is_not_blamed_on_the_recovery_key() {
+        let _serial = DATA_DIR.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let state = unlocked_state(dir.path());
+        let key = state.vault_key.lock().unwrap().unwrap();
+        let salt = state.vault_salt.lock().unwrap().unwrap();
+        vault::save_vault(&[], &key, &salt).unwrap();
+        let printed = create_recovery_kit_in(&state).unwrap();
+
+        // Corrupt the ciphertext but leave the envelope - and the salt - so
+        // the kit still matches the vault it was made for.
+        let path = vault::vault_path();
+        let mut file: vault::EncryptedFile =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        {
+            use base64::Engine;
+            file.ciphertext = base64::engine::general_purpose::STANDARD.encode("not a vault");
+        }
+        std::fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
+
+        let err = recover_vault_in(&state, printed, "third-password".into()).unwrap_err();
+        assert!(err.contains("kit opened, but the vault did not"), "{err}");
+        assert!(err.contains("damaged - restore it"), "{err}");
+    }
+
+    #[test]
+    fn a_wrong_recovery_key_changes_nothing() {
+        let _serial = DATA_DIR.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let state = unlocked_state(dir.path());
+        let key = state.vault_key.lock().unwrap().unwrap();
+        let salt = state.vault_salt.lock().unwrap().unwrap();
+        vault::save_vault(&[], &key, &salt).unwrap();
+        create_recovery_kit_in(&state).unwrap();
+
+        let someone_elses = recovery::format_key(&recovery::generate());
+        let err = recover_vault_in(&state, someone_elses, "third-password".into()).unwrap_err();
+        assert!(err.contains("does not open this kit"), "{err}");
+        // Still the original password, and the kit is still usable.
+        assert!(vault::load_vault("test").is_ok());
+        assert!(recovery_status_in(&state).exists);
+    }
+
+    /// Agent-mode settings were being orphaned by a re-key, the same way the
+    /// MCP and copilot configs were before them.
+    #[test]
+    fn a_password_change_keeps_the_agent_mode_settings() {
+        let _serial = DATA_DIR.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let state = unlocked_state(dir.path());
+        let key = state.vault_key.lock().unwrap().unwrap();
+        let salt = state.vault_salt.lock().unwrap().unwrap();
+        vault::save_vault(&[], &key, &salt).unwrap();
+
+        cloud::save_config_with(
+            &cloud::CloudConfig {
+                control_url: "https://kino.example".into(),
+                account_key: "ak-kept".into(),
+            },
+            &key,
+            &salt,
+        )
+        .unwrap();
+
+        change_master_password_in(&state, "test".into(), "second-password".into()).unwrap();
+
+        let new_key = state.vault_key.lock().unwrap().unwrap();
+        let back = cloud::load_config(&new_key).expect("the agent-mode settings were lost");
+        assert_eq!(back.control_url, "https://kino.example");
+        assert_eq!(back.account_key, "ak-kept");
     }
 
     #[test]

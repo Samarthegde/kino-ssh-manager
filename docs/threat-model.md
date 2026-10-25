@@ -31,6 +31,7 @@ In rough order of how badly you would want it back.
 | Which hosts an assistant may reach, and how | `mcp_vault.enc`, `mcp_config.enc` | Separate key, from the same password |
 | What an assistant did | `audit.enc` | Sealed per line, append-only |
 | Spending so far this hour | `mcp_budget.enc` | Sealed |
+| The recovery key | On paper, wherever you put it | `recovery.enc` holds the vault key under it, Argon2 + AES-256-GCM |
 | Accepted host fingerprints | `known_hosts.json` | **Plaintext, by design** - see below |
 | Session recordings | `~/Videos/Kino Recordings/*.cast` | **Plaintext** - they are evidence, meant to be read |
 | Pre-change backups of remote files | `~/.kino/backups/`, mode 0700/0600 | Plaintext |
@@ -79,6 +80,14 @@ interrupted save leaves the previous vault intact rather than a truncated one.
 **Still true after the mitigation:** file sizes and modification times leak
 roughly how many hosts you have and when you last changed them. A weak master
 password is a weak vault, and Argon2 only buys time.
+
+A recovery kit, if you made one, is a second way in of exactly equal power:
+`recovery.enc` holds the vault's key wrapped under 256 random bits that exist
+only on the paper you wrote them on. That trades one risk for another on
+purpose - a forgotten password stops meaning the fleet is gone, and a printed
+key left in a drawer means the drawer is now worth as much as the vault. Kino
+keeps no copy of it, cannot show it twice, and does not sync the file; what it
+cannot do is tell you where you put the paper.
 
 ### 2. You to the app - unlock and idle lock
 

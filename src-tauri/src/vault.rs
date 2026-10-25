@@ -132,9 +132,15 @@ pub fn vault_exists() -> bool {
 }
 
 pub fn derive_key(password: &str, salt: &[u8]) -> Result<[u8; 32], String> {
+    derive_key_bytes(password.as_bytes(), salt)
+}
+
+/// The same derivation over bytes that are not text - a recovery secret is
+/// 256 random bits, not a password somebody typed.
+pub fn derive_key_bytes(input: &[u8], salt: &[u8]) -> Result<[u8; 32], String> {
     let mut key = [0u8; 32];
     Argon2::default()
-        .hash_password_into(password.as_bytes(), salt, &mut key)
+        .hash_password_into(input, salt, &mut key)
         .map_err(|e| e.to_string())?;
     Ok(key)
 }
@@ -206,6 +212,19 @@ pub fn load_encrypted<T: serde::de::DeserializeOwned>(
     let data: T = serde_json::from_slice(&plaintext).map_err(|e| format!("Corrupt data: {}", e))?;
     plaintext.zeroize();
     Ok(data)
+}
+
+/// The salt in the vault's envelope - plaintext, and the thing that changes
+/// when the master password does.
+pub fn salt_on_disk() -> Result<[u8; 16], String> {
+    let bytes = std::fs::read(vault_path()).map_err(|e| format!("Cannot read vault: {}", e))?;
+    let enc_file: EncryptedFile =
+        serde_json::from_slice(&bytes).map_err(|e| format!("Corrupt vault: {}", e))?;
+    STANDARD
+        .decode(&enc_file.salt)
+        .map_err(|e| e.to_string())?
+        .try_into()
+        .map_err(|_| "Invalid salt length in vault".to_string())
 }
 
 pub fn save_vault(hosts: &[Host], key: &[u8; 32], salt: &[u8; 16]) -> Result<(), String> {

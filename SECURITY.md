@@ -133,6 +133,31 @@ That answers the question an advisory about a library actually raises: does
 - On lock (manual or idle auto-lock), the derived key is wiped from memory with
   `zeroize`.
 
+## The recovery kit
+
+One printed key, made while the vault is unlocked, that opens it when the
+master password is gone. Settings - Vault & Sync - Recovery key.
+
+- The key is **256 random bits**, shown **once**, and stored nowhere by Kino.
+  What goes on disk is `recovery.enc`: the vault's own AES key, encrypted under
+  a key derived from the recovery key with Argon2. Without the printed key that
+  file is as opaque as the vault beside it.
+- It is a **second credential of equal power**. Anyone with it opens every host
+  in the vault without knowing your password. Keep it the way you would keep a
+  spare key to the building - not beside the vault, and not in it.
+- Using it **sets a new master password in the same step**, because a vault
+  opened by recovery has no password anybody knows. The kit is spent at that
+  point and Kino offers a fresh one.
+- **Changing the master password retires it.** The kit holds the key the old
+  password derived, which opens nothing afterwards, so the file is deleted and
+  the settings panel asks for a new one. (The honest fix is a key-slot layout,
+  where a password change re-wraps a random master key instead of re-encrypting
+  everything; that is a vault format change and has not been made.)
+- It is **not synced**. The kit stays on the machine it was made on; the
+  printed key is what crosses machines.
+- No kit can be made after the password is lost. That is the whole point of
+  making one early.
+
 ## Vault sync
 
 - Sync is **opt-in**. When enabled, only the **already-encrypted** blobs leave
@@ -156,8 +181,8 @@ That answers the question an advisory about a library actually raises: does
   and decrypted secrets exist in process memory. Malware running as your user,
   or with debugger access to the process, can read them.
 - **A weak master password.** Argon2 slows brute force but cannot rescue a
-  trivially guessable password. Use a strong, unique one - there is no recovery
-  if you forget it.
+  trivially guessable password. Use a strong, unique one. Forgetting it means
+  the vault is gone unless you made a recovery kit first - see below.
 - **The remote hosts you connect to.** Once you connect, the remote server can
   see whatever you type/transfer.
 

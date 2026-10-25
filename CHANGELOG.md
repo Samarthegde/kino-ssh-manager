@@ -7,6 +7,19 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 ## [Unreleased]
 
 ### Added
+- **A recovery kit, so a forgotten master password is no longer the end of the
+  vault.** Settings - Vault & Sync - Recovery key makes one: 256 random bits,
+  shown once, stored nowhere by Kino. What lands on disk is the vault's own key
+  encrypted under it, which is useless without the printed key. The unlock
+  screen offers recovery only when a kit exists, and using it sets a new master
+  password in the same step - a vault opened by recovery has no password
+  anybody knows, so leaving it open without one would be a session that could
+  never be locked again. The key is spent afterwards, and Kino offers a fresh
+  one. Changing the master password also retires the kit, because the key it
+  holds opens nothing once the vault is re-encrypted; the settings panel says
+  so rather than leaving a printed key that looks valid. The printed form is
+  Crockford base32, so 0 and O, 1 and I and l are the same character to it, and
+  capitals, dashes and line breaks do not matter.
 - **Hosts that ask for a verification code can be used.** Keyboard-interactive
   authentication, which is how PAM-driven 2FA presents itself - Duo, Google
   Authenticator, an OTP prompt, or just a PAM password question on a host with
@@ -47,6 +60,10 @@ on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
   failing a month before it expires.
 
 ### Fixed
+- **A password change no longer loses the agent-mode settings.** `cloud.enc`
+  was missing from the list of stores a re-key rewrites - the same bug that was
+  fixed for the MCP policies and the copilot's API key, with the same
+  consequence: the file stayed encrypted under a key that no longer existed.
 - **Only one Kino runs at a time.** Kino lives in the tray, so a closed window
   is a running app with nothing on screen - and clicking the launcher entry
   started a second copy beside it, with its own tray icon, its own idle-lock

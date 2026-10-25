@@ -14,7 +14,14 @@ export function Unlock() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [isNew, setIsNew] = useState<boolean | null>(null);
-  const [mode, setMode] = useState<"vault" | "restore">("vault");
+  const [mode, setMode] = useState<"vault" | "restore" | "recover">("vault");
+
+  // Recovery fields. The key is a textarea because people paste it with the
+  // line breaks of whatever they wrote it on.
+  const [recoveryKey, setRecoveryKey] = useState("");
+  const [recoveryNewPw, setRecoveryNewPw] = useState("");
+  const [recoveryConfirm, setRecoveryConfirm] = useState("");
+  const [kitExists, setKitExists] = useState(false);
 
   // Restore-from-cloud fields
   const [restoreFrom, setRestoreFrom] = useState("github");
@@ -27,7 +34,15 @@ export function Unlock() {
   const [version, setVersion] = useState("");
   const [whatsNew, setWhatsNew] = useState<ReleaseNote | null>(null);
 
-  const { unlock, checkVaultExists, syncRestore, updateInfo, syncFolderPath } = useVaultStore();
+  const {
+    unlock,
+    checkVaultExists,
+    syncRestore,
+    updateInfo,
+    syncFolderPath,
+    recoveryStatus,
+    recoverVault,
+  } = useVaultStore();
 
   useState(() => {
     checkVaultExists().then((exists) => setIsNew(!exists));
@@ -36,7 +51,12 @@ export function Unlock() {
   useEffect(() => {
     getVersion().then(setVersion).catch(() => setVersion(""));
     syncFolderPath().then(setFolder).catch(() => {});
-  }, [syncFolderPath]);
+    // Offered only when there is something to recover with: a link that leads
+    // to "there is no kit on this machine" is a link that should not be there.
+    recoveryStatus()
+      .then((s) => setKitExists(s.exists))
+      .catch(() => setKitExists(false));
+  }, [syncFolderPath, recoveryStatus]);
 
   // Both answers are needed before the notes can be judged: which version this
   // is, and whether a vault already exists - a fresh install is not an upgrade
@@ -58,6 +78,24 @@ export function Unlock() {
     setError("");
     try {
       await unlock(password);
+    } catch (err: any) {
+      setError(err?.message || String(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleRecover(e: React.FormEvent) {
+    e.preventDefault();
+    if (!recoveryKey.trim() || !recoveryNewPw) return;
+    if (recoveryNewPw !== recoveryConfirm) {
+      setError("The new passwords don't match.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      await recoverVault(recoveryKey.trim(), recoveryNewPw);
     } catch (err: any) {
       setError(err?.message || String(err));
     } finally {
@@ -109,7 +147,56 @@ export function Unlock() {
           </button>
         )}
 
-        {mode === "vault" ? (
+        {mode === "recover" ? (
+          <>
+            <p className="unlock-subtitle">
+              Type the recovery key you wrote down. It opens this vault once, and sets the new
+              master password you choose here.
+            </p>
+            <form onSubmit={handleRecover}>
+              <textarea
+                className="unlock-input recovery-input mono"
+                placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX"
+                value={recoveryKey}
+                onChange={(e) => setRecoveryKey(e.target.value)}
+                rows={3}
+                spellCheck={false}
+                autoFocus
+              />
+              <input
+                type="password"
+                className="unlock-input"
+                placeholder="New master password"
+                value={recoveryNewPw}
+                onChange={(e) => setRecoveryNewPw(e.target.value)}
+                autoComplete="new-password"
+              />
+              <input
+                type="password"
+                className="unlock-input"
+                placeholder="Confirm new master password"
+                value={recoveryConfirm}
+                onChange={(e) => setRecoveryConfirm(e.target.value)}
+                autoComplete="new-password"
+              />
+              <p className="unlock-hint">
+                Capitals, dashes and spaces don't matter. The key is spent afterwards - make a
+                new one from Settings once you are in.
+              </p>
+              {error && <p className="unlock-error">{error}</p>}
+              <button type="submit" className="btn btn-primary unlock-btn" disabled={loading}>
+                {loading ? "Opening…" : "Recover vault"}
+              </button>
+            </form>
+            <button
+              type="button"
+              className="unlock-link"
+              onClick={() => { setMode("vault"); setError(""); }}
+            >
+              ← Back
+            </button>
+          </>
+        ) : mode === "vault" ? (
           <>
             <p className="unlock-subtitle">
               {isNew === null
@@ -159,7 +246,8 @@ export function Unlock() {
               )}
               {isNew && (
                 <p className="unlock-hint">
-                  There's no recovery if you forget this - store it safely.
+                  Store it safely. Nothing here can recover it - you can make a recovery key
+                  afterwards, in Settings, and that is the only way back in.
                 </p>
               )}
               {error && <p className="unlock-error">{error}</p>}
@@ -174,6 +262,15 @@ export function Unlock() {
                 onClick={() => { setMode("restore"); setError(""); }}
               >
                 Restore from cloud sync -
+              </button>
+            )}
+            {!isNew && kitExists && (
+              <button
+                type="button"
+                className="unlock-link"
+                onClick={() => { setMode("recover"); setError(""); }}
+              >
+                Forgotten it? Use your recovery key -
               </button>
             )}
           </>

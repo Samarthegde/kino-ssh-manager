@@ -10,11 +10,13 @@ import {
   UI_SCALE_STEP,
   terminalFontStack,
   useVaultStore,
+  type RecoveryStatus,
 } from "../store";
 import { HistoryModal } from "./HistoryModal";
 import { SyncModal } from "./SyncModal";
 import { SnippetsModal } from "./SnippetsModal";
 import { ChangePasswordModal } from "./ChangePasswordModal";
+import { RecoveryKitModal } from "./RecoveryKitModal";
 import { AboutModal } from "./AboutModal";
 import { RecordingsModal } from "./RecordingsModal";
 import { AiSettingsModal } from "./AiSettingsModal";
@@ -134,6 +136,16 @@ const ICONS: Record<Section, ReactNode> = {
   ),
 };
 
+/** "3 March 2026" from the millisecond stamp the backend keeps. */
+function madeOn(ms: number | null): string {
+  if (!ms) return "";
+  return new Date(ms).toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+}
+
 const SECTIONS: { id: Section; label: string }[] = [
   { id: "general", label: "General" },
   { id: "connectivity", label: "Agent & Cloud" },
@@ -184,6 +196,7 @@ export function SettingsMenu({ onLock }: Props) {
     exportSshConfig,
     cloudGetConfig,
     cloudSetConfig,
+    recoveryStatus,
   } = useVaultStore();
 
   // Terminal colours of the active theme - the preview and the colour picker's
@@ -199,6 +212,8 @@ export function SettingsMenu({ onLock }: Props) {
   const [showSync, setShowSync] = useState(false);
   const [showSnippets, setShowSnippets] = useState(false);
   const [showChangePw, setShowChangePw] = useState(false);
+  const [showRecoveryKit, setShowRecoveryKit] = useState(false);
+  const [recovery, setRecovery] = useState<RecoveryStatus | null>(null);
   const [showAbout, setShowAbout] = useState(false);
   const [showAi, setShowAi] = useState(false);
   const [showKeys, setShowKeys] = useState(false);
@@ -223,6 +238,14 @@ export function SettingsMenu({ onLock }: Props) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, anyModalOpen]);
+
+  // Whether there is a recovery key, and whether it is still the right one.
+  // Read when the panel opens rather than kept in the store: it changes on
+  // disk, not in the app.
+  useEffect(() => {
+    if (!open) return;
+    recoveryStatus().then(setRecovery).catch(() => setRecovery(null));
+  }, [open, recoveryStatus]);
 
   useEffect(() => {
     if (!open) return;
@@ -670,9 +693,21 @@ export function SettingsMenu({ onLock }: Props) {
                   <Group title="Vault" desc="Your credentials never leave this machine unencrypted.">
                     <ActionItem
                       label="Master password"
-                      desc="Re-encrypts the vault with a new key."
+                      desc="Re-encrypts the vault with a new key. Any recovery key you have stops working."
                       buttonLabel="Change…"
                       onClick={() => setShowChangePw(true)}
+                    />
+                    <ActionItem
+                      label="Recovery key"
+                      desc={
+                        !recovery || !recovery.exists
+                          ? "A 256-bit key, shown once, that opens the vault if you forget the master password. Without one, a forgotten password means the vault is gone."
+                          : recovery.for_this_vault === false
+                            ? "The key you have was made for an earlier master password, so it opens nothing. Make another."
+                            : `Made ${madeOn(recovery.created_ms)}. Shown once - if you no longer have it, make another and the old one stops working.`
+                      }
+                      buttonLabel={recovery?.exists ? "Replace…" : "Create…"}
+                      onClick={() => setShowRecoveryKit(true)}
                     />
                     <ActionItem
                       label="Notes"
@@ -776,7 +811,24 @@ export function SettingsMenu({ onLock }: Props) {
       {showRecordings && <RecordingsModal onClose={() => setShowRecordings(false)} />}
       {showSync && <SyncModal onClose={() => setShowSync(false)} />}
       {showSnippets && <SnippetsModal onClose={() => setShowSnippets(false)} />}
-      {showChangePw && <ChangePasswordModal onClose={() => setShowChangePw(false)} />}
+      {showChangePw && (
+        <ChangePasswordModal
+          onClose={() => {
+            setShowChangePw(false);
+            // The change retired any kit; show what is true now.
+            recoveryStatus().then(setRecovery).catch(() => {});
+          }}
+        />
+      )}
+      {showRecoveryKit && (
+        <RecoveryKitModal
+          replacing={!!recovery?.exists}
+          onClose={() => {
+            setShowRecoveryKit(false);
+            recoveryStatus().then(setRecovery).catch(() => {});
+          }}
+        />
+      )}
       {showAi && <AiSettingsModal onClose={() => setShowAi(false)} />}
       {showKeys && <KeybindingsModal onClose={() => setShowKeys(false)} />}
       {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}

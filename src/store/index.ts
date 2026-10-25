@@ -125,6 +125,17 @@ export interface UpdateInfo {
   url: string;
 }
 
+/** Whether there is a recovery kit on this machine, and whether it still
+ *  opens the vault as it is now. */
+export interface RecoveryStatus {
+  exists: boolean;
+  created_ms: number | null;
+  /** True when the kit matches the current master password. False when the
+   *  password was changed after it was made, so it opens nothing. Null when
+   *  there is no kit, or the vault is locked. */
+  for_this_vault: boolean | null;
+}
+
 /** One prompt from a server mid-authentication: a code, or a password the
  *  vault does not hold. The text is the server's own, shown verbatim. */
 export interface KbiPrompt {
@@ -900,6 +911,15 @@ interface VaultStore {
   /** Version, commit and build date, plus where this release's SBOM and
    *  advisories live. Baked in at compile time - no network. */
   buildInfo: () => Promise<BuildInfo>;
+  /** Whether a recovery kit exists, when it was made, and whether it is for
+   *  the password in use. Readable with the vault locked. */
+  recoveryStatus: () => Promise<RecoveryStatus>;
+  /** Make a kit for the key in use and return the printed key - the only
+   *  copy, shown once and stored nowhere. */
+  createRecoveryKit: () => Promise<string>;
+  /** Open the vault with a recovery key, setting a new master password in the
+   *  same step. The kit is spent afterwards. */
+  recoverVault: (recoveryKey: string, newPassword: string) => Promise<void>;
   /** Answer a server's keyboard-interactive prompt. False when it had already
    *  gone - timed out, cancelled, or the vault locked under it. */
   answerKbi: (id: string, answers: string[]) => Promise<boolean>;
@@ -1723,6 +1743,15 @@ export const useVaultStore = create<VaultStore>((set, get) => ({
 
   updaterKeyId: () => invoke<string | null>("updater_key_id"),
   buildInfo: () => invoke<BuildInfo>("build_info"),
+  recoveryStatus: () => invoke<RecoveryStatus>("recovery_status"),
+  createRecoveryKit: () => invoke<string>("create_recovery_kit"),
+  recoverVault: async (recoveryKey, newPassword) => {
+    const hosts = await invoke<Host[]>("recover_vault", { recoveryKey, newPassword });
+    // Same landing as a normal unlock: the app open, with the vault's
+    // contents in hand.
+    const snippets = await invoke<Snippet[]>("get_snippets").catch(() => []);
+    set({ unlocked: true, hosts, snippets });
+  },
   answerKbi: (id, answers) => invoke<boolean>("kbi_answer", { id, answers }),
   cancelKbi: (id) => invoke<boolean>("kbi_cancel", { id }),
   checkMcpBinary: () => invoke<McpBinaryStatus>("check_mcp_binary"),
