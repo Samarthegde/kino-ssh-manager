@@ -31,6 +31,9 @@ attestation. [How to check them](SECURITY.md#verifying-what-you-downloaded).
   every host, key and snippet. Nothing leaves the machine unless you turn on
   sync - and then only the encrypted blob, either to a private GitHub repo or
   to `Documents/ssh-manager`, carried by whatever already syncs your Documents.
+- **A way back in.** A recovery key - 256 bits, printed once, stored nowhere by
+  Kino - opens the vault if the master password is gone, and sets a new one as
+  it does. Make it before you need it; one cannot be made afterwards.
 - **A real terminal per host.** Split panes, broadcast input, search with match
   counts, 200,000 lines of scrollback, and output coloured by the active theme.
 - **The whole session in one window.** SFTP browser with a built-in editor,

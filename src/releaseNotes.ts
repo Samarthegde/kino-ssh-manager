@@ -15,6 +15,48 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.9.5",
+    headline: "Two doors that were shut: hosts that ask for a code, and a forgotten password.",
+    items: [
+      {
+        title: "A recovery key, in case you forget",
+        detail:
+          "Settings - Vault & Sync - Recovery key prints one: 256 random bits, shown once, " +
+          "kept nowhere by Kino. It opens the vault without the master password and sets a " +
+          "new one as it does. Treat it like a key to every host in there, because it is.",
+      },
+      {
+        title: "Hosts that ask for a verification code",
+        detail:
+          "Duo, an authenticator app, an OTP prompt, or a PAM password question - Kino now " +
+          "answers the questions a server asks, showing them verbatim and labelled as the " +
+          "server's words. A stored password answers a password prompt; a code is always " +
+          "asked for, and never kept.",
+      },
+      {
+        title: "A refusal that says what the server wanted",
+        detail:
+          "When a host rejects the stored password and says it will take an interactive " +
+          "login instead, the message names the setting to change rather than sending you " +
+          "to check a password that was never the problem.",
+      },
+      {
+        title: "About says which build this is",
+        detail:
+          "Version, commit and build date, with links to that release's bill of materials " +
+          "and to the advisory feed. Every release now carries a CycloneDX SBOM covering " +
+          "both dependency trees, so an advisory about a library has a file to check.",
+      },
+      {
+        title: "One Kino at a time",
+        detail:
+          "Clicking Kino in the applications menu while it sat in the tray used to start a " +
+          "second copy, with its own tray icon and its own writes to the vault. It now " +
+          "brings back the window you already had.",
+      },
+    ],
+  },
+  {
     version: "0.9.4",
     headline: "An assistant can now work a whole fleet - one careful stage at a time.",
     items: [

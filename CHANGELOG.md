@@ -4,7 +4,13 @@ All notable changes to Kino SSH Manager are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.9.5] - 2026-10-29
+
+Two doors that were shut are open: a host that asks for a verification code
+can be connected to, and a forgotten master password no longer means the vault
+is gone. Alongside them, the paperwork a security product ought to have - an
+SBOM with every release, a threat model, and a disclosure policy with numbers
+in it instead of "promptly".
 
 ### Added
 - **A recovery kit, so a forgotten master password is no longer the end of the
